@@ -120,7 +120,11 @@ fn run(cli: Cli) -> Result<(), AppError> {
         if !cli.no_preflight {
             let estimate = bounded_size_estimate(&cli, &lists, json_out);
             let available = available_space(path);
-            preflight::check_capacity(estimate, available, cli.max_file_size)?;
+            preflight::check_capacity(
+                estimate,
+                available,
+                effective_output_limit(&cli),
+            )?;
         }
     }
 
@@ -199,6 +203,8 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
     };
 
     let mut index: u128 = cli.offset;
+    let output_limit = effective_output_limit(cli);
+    let mut written: u64 = 0;
     for indices in combinations(lists, opts) {
         let items: Vec<&str> = indices
             .iter()
@@ -206,6 +212,24 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
             .map(|(list_i, &item_i)| lists[list_i][item_i].as_str())
             .collect();
         let record = format_record(&items, index, &cli.sep, &cli.rec_sep, format, cli.lean_output);
+        let record_bytes = u64::try_from(record.len()).map_err(|_| {
+            AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output record is too large to write")
+        })?;
+        if let Some(limit) = output_limit {
+            let next = written.checked_add(record_bytes).ok_or_else(|| {
+                AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+            })?;
+            if next > limit {
+                return Err(AppError::runtime(
+                    "OUTPUT_LIMIT_EXCEEDED",
+                    "output exceeds the configured byte limit",
+                )
+                .with("written_bytes", written)
+                .with("record_bytes", record_bytes)
+                .with("limit_bytes", limit));
+            }
+            written = next;
+        }
         writer.write_all(record.as_bytes()).map_err(write_err)?;
         index = index.saturating_add(1);
     }
@@ -215,6 +239,14 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
         file.commit()?;
     }
     Ok(())
+}
+
+fn effective_output_limit(cli: &Cli) -> Option<u64> {
+    let configured = Some(cli.max_output_bytes);
+    match (&cli.output, cli.max_file_size) {
+        (Some(_), Some(file_limit)) => configured.map(|limit| limit.min(file_limit)),
+        _ => configured,
+    }
 }
 
 fn write_err(e: std::io::Error) -> AppError {

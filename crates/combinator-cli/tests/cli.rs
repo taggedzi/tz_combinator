@@ -193,3 +193,14 @@ fn preflight_size_check_respects_limit() {
     assert!(ltd_ok, "limited write should pass pre-flight");
     assert_eq!(ltd_lines, 20);
 }
+
+#[test]
+fn runtime_output_limit_stops_streaming() {
+    let out = bin()
+        .args(["--list", "a,b", "--max-output-bytes", "3"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("OUTPUT_LIMIT_EXCEEDED"));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a\n");
+}

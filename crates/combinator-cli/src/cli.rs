@@ -2,6 +2,8 @@
 
 use clap::{Parser, ValueEnum};
 
+pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_073_741_824;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutFormat {
     Text,
@@ -73,6 +75,10 @@ pub struct Cli {
     /// Optional filesystem max file size (bytes) for pre-flight.
     #[arg(long = "max-file-size")]
     pub max_file_size: Option<u64>,
+
+    /// Maximum output bytes for any invocation, including stdout.
+    #[arg(long = "max-output-bytes", default_value_t = DEFAULT_MAX_OUTPUT_BYTES)]
+    pub max_output_bytes: u64,
 
     /// Skip pre-flight validation for file output.
     #[arg(long = "no-preflight")]
