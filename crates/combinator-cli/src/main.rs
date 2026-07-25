@@ -11,7 +11,10 @@ use clap::Parser;
 use combinator_core::{combination_count, combinations, Count, ProductOptions};
 use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 
-use cli::{Cli, OutFormat};
+use cli::{
+    Cli, OutFormat, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEM_BYTES,
+    HARD_MAX_ITEMS_PER_LIST, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
+};
 use error::{render, render_warning, AppError};
 use input::InputLimits;
 use output::{format_record, Format};
@@ -48,6 +51,7 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), AppError> {
+    validate_resource_limits(&cli)?;
     input::validate_delims(&cli.sep, &cli.rec_sep, &cli.list_delim)?;
 
     if cli.reverse && cli.reverse_fields {
@@ -168,6 +172,41 @@ fn run(cli: Cli) -> Result<(), AppError> {
     }
 
     stream(&cli, &lists, json_out)
+}
+
+fn validate_resource_limits(cli: &Cli) -> Result<(), AppError> {
+    let checks = [
+        ("max-output-bytes", cli.max_output_bytes as u128, HARD_MAX_OUTPUT_BYTES as u128),
+        ("max-input-bytes", cli.max_input_bytes as u128, HARD_MAX_INPUT_BYTES as u128),
+        ("max-item-bytes", cli.max_item_bytes as u128, HARD_MAX_ITEM_BYTES as u128),
+        ("max-items-per-list", cli.max_items_per_list as u128, HARD_MAX_ITEMS_PER_LIST as u128),
+        ("max-lists", cli.max_lists as u128, HARD_MAX_LISTS as u128),
+        ("max-total-items", cli.max_total_items as u128, HARD_MAX_TOTAL_ITEMS as u128),
+        ("max-combinations", cli.max_combinations, HARD_MAX_COMBINATIONS),
+    ];
+    for (flag, requested, hard) in checks {
+        if requested > hard {
+            return Err(AppError::usage(
+                "RESOURCE_LIMIT_TOO_HIGH",
+                format!("{flag} exceeds the hard security ceiling"),
+            )
+            .with("flag", flag)
+            .with("requested", requested)
+            .with("hard_limit", hard));
+        }
+    }
+    if let Some(file_limit) = cli.max_file_size {
+        if file_limit > HARD_MAX_OUTPUT_BYTES {
+            return Err(AppError::usage(
+                "RESOURCE_LIMIT_TOO_HIGH",
+                "max-file-size exceeds the hard security ceiling",
+            )
+            .with("flag", "max-file-size")
+            .with("requested", file_limit)
+            .with("hard_limit", HARD_MAX_OUTPUT_BYTES));
+        }
+    }
+    Ok(())
 }
 
 /// Estimates output size accounting for --offset/--limit, so a bounded write is
