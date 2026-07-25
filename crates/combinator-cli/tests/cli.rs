@@ -743,3 +743,62 @@ fn closed_stdout_is_a_clean_cancellation() {
         "closed stdout should not be a write error"
     );
 }
+
+#[test]
+fn transforms_are_applied_per_list_in_argument_order() {
+    let out = bin()
+        .args([
+            "--list",
+            " B ,a,b,a,other ",
+            "--transform",
+            "trim",
+            "--transform",
+            "lower",
+            "--transform",
+            "filter=?",
+            "--transform",
+            "deduplicate",
+            "--transform",
+            "sort",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\n");
+}
+
+#[test]
+fn malformed_transform_is_rejected_before_output() {
+    let out = bin()
+        .args(["--list", "a,b", "--transform", "filter=[a]"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("TRANSFORM_INVALID"));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn explain_reports_transforms_and_normalized_sizes() {
+    let out = bin()
+        .args([
+            "--list",
+            " b ,a,a ",
+            "--transform",
+            "trim",
+            "--transform",
+            "deduplicate",
+            "--explain",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let summary: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        summary["transforms"],
+        serde_json::json!(["trim", "deduplicate"])
+    );
+    assert_eq!(summary["input"]["items_per_list"], serde_json::json!([2]));
+}

@@ -93,6 +93,13 @@ pub struct CommonArgs {
     #[arg(long = "list-delim", default_value = ",")]
     pub list_delim: String,
 
+    /// Per-list normalization transform. Applied left-to-right. Repeatable.
+    /// Supported forms: trim, skip-empty, deduplicate, reject-duplicates,
+    /// sort, lower, upper, filter=GLOB, replace=FROM=>TO, prefix=VALUE,
+    /// suffix=VALUE.
+    #[arg(long = "transform")]
+    pub transforms: Vec<String>,
+
     /// Emit combinations in reverse of the default order.
     #[arg(long)]
     pub reverse: bool,

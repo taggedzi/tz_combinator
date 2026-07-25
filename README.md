@@ -96,6 +96,7 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--sep <SEP>` | `""` (empty) | Field separator joining the items within one combination. |
 | `--rec-sep <SEP>` | `"\n"` | Record separator between combinations. Text format only. |
 | `--list-delim <DELIM>` | `","` | Delimiter used to split each inline `--list` value. Must be non-empty. |
+| `--transform <EXPR>` | none | Apply a bounded per-list normalization transform; repeatable and applied left-to-right. |
 | `--reverse` | off | Emit combinations in reverse of the default order. Mutually exclusive with `--reverse-fields`. |
 | `--reverse-fields` | off | Vary the **leftmost** list fastest instead of the rightmost. Mutually exclusive with `--reverse`. |
 | `--offset <N>` | `0` | Skip this many leading combinations before emitting. |
@@ -209,6 +210,17 @@ each input list. Without names, only positional placeholders are available.
 With names, full JSONL output adds the ordered `named` object while retaining
 the existing `fields` array. `--lean-output` still emits only the rendered
 value.
+
+### Normalization transforms (F7)
+
+Transforms run independently on every input list after parsing and before
+counting or generation. They are applied in the order supplied. Supported
+expressions are `trim`, `skip-empty`, `deduplicate`, `reject-duplicates`,
+`sort`, `lower`, `upper`, `filter=<glob>`, `replace=<from>=><to>`,
+`prefix=<value>`, and `suffix=<value>`. Glob filters support only `*` (any
+sequence) and `?` (one Unicode scalar); other characters are literals. Sorting
+uses deterministic Unicode scalar ordering. Transformed values remain subject
+to the item and total-item resource limits.
 
 A template replaces `--sep`; combining a template with a non-empty `--sep` is
 rejected as `TEMPLATE_SEPARATOR_CONFLICT`. Template syntax and field errors
@@ -387,6 +399,9 @@ as a runtime error with exit **1**.
 | `TEMPLATE_TOO_LARGE` | 2 | The template exceeds its 1 MiB security ceiling or configured input limit. |
 | `TEMPLATE_FILE_UNREADABLE` | 2 | The template file could not be read or is not valid UTF-8. |
 | `FORMAT_UNSUPPORTED` | 2 | `--format json` was used without `--explain` or `--dry-run`. |
+| `TRANSFORM_INVALID` | 2 | A `--transform` expression is malformed or uses unsupported syntax. |
+| `TRANSFORM_LIMIT` | 2 | The invocation contains too many transformation expressions. |
+| `DUPLICATE_ITEM` | 1 | `reject-duplicates` found a duplicate within an input list. |
 | `MODE_CONFLICT` | 2 | Mutually exclusive generation-summary modes were combined. |
 | `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |

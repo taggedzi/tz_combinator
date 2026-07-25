@@ -1,6 +1,7 @@
 mod cli;
 mod error;
 mod input;
+mod normalize;
 mod output;
 mod output_file;
 mod preflight;
@@ -24,6 +25,7 @@ use cli::{
 };
 use error::{render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
+use normalize::MAX_TRANSFORMS;
 use output::{format_record_with, Format};
 use output_file::OutputFile;
 
@@ -164,6 +166,14 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
             "--count-only cannot be combined with --explain or --dry-run",
         ));
     }
+    if common.transforms.len() > MAX_TRANSFORMS {
+        return Err(AppError::usage(
+            "TRANSFORM_LIMIT",
+            "the number of transforms exceeds the security limit",
+        )
+        .with("observed", common.transforms.len())
+        .with("limit", MAX_TRANSFORMS));
+    }
     input::validate_delims(&sep, &common.rec_sep, &common.list_delim)?;
     let template = load_template(&common, &sep)?;
 
@@ -279,6 +289,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         .with("observed", total_items)
         .with("limit", common.max_total_items));
     }
+
+    normalize::normalize_lists(
+        &mut lists,
+        &common.transforms,
+        common.max_item_bytes,
+        common.max_total_items,
+    )?;
 
     let empty_template = Template::parse("").expect("empty template is valid");
     let template_for_validation = template.as_ref().unwrap_or(&empty_template);
@@ -432,6 +449,7 @@ fn explain(
         let summary = serde_json::json!({
             "schema_version": 1,
             "operation": operation,
+            "transforms": &common.transforms,
             "input": {
                 "lists": lists.len(),
                 "items_per_list": lists.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -460,6 +478,7 @@ fn explain(
     } else {
         println!("schema_version=1");
         println!("operation={operation}");
+        println!("transforms={}", common.transforms.join(","));
         println!("input_lists={}", lists.len());
         println!(
             "items_per_list={}",

@@ -341,6 +341,12 @@ interacting flags, for example a validated config file or repeated
 - Sorting and deduplication have bounded memory.
 - Transformation results are deterministic across supported platforms.
 
+The initial CLI surface uses repeatable `--transform` expressions. Each
+expression is applied left-to-right to every list before operation counting:
+`trim`, `skip-empty`, `deduplicate`, `reject-duplicates`, `sort`, `lower`,
+`upper`, `filter=<glob>`, `replace=<from>=><to>`, `prefix=<value>`, and
+`suffix=<value>`. Glob matching is bounded and supports only `*` and `?`.
+
 ## F8 — Keyed relational joins
 
 ### User-facing feature
