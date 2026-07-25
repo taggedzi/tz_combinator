@@ -51,7 +51,7 @@ impl Write for OutputWriter<'_> {
 fn main() {
     let cli = Cli::parse();
     let (common, sep, op) = resolve(cli);
-    let json_errors = matches!(common.format, OutFormat::Jsonl);
+    let json_errors = matches!(common.format, OutFormat::Jsonl | OutFormat::Json);
     if let Err(e) = run(common, sep, op) {
         eprintln!("{}", render(&e, json_errors));
         std::process::exit(e.exit);
@@ -102,6 +102,18 @@ fn concat_operation(args: ConcatArgs) -> (CommonArgs, String, Operation) {
 
 fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     validate_resource_limits(&common)?;
+    if matches!(common.format, OutFormat::Json) && !(common.explain || common.dry_run) {
+        return Err(AppError::usage(
+            "FORMAT_UNSUPPORTED",
+            "--format json is only valid with --explain or --dry-run",
+        ));
+    }
+    if common.count_only && (common.explain || common.dry_run) {
+        return Err(AppError::usage(
+            "MODE_CONFLICT",
+            "--count-only cannot be combined with --explain or --dry-run",
+        ));
+    }
     input::validate_delims(&sep, &common.rec_sep, &common.list_delim)?;
     let template = load_template(&common, &sep)?;
 
@@ -248,6 +260,18 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         _ => {}
     }
 
+    if common.explain || common.dry_run {
+        let estimate = bounded_size_estimate(
+            &common,
+            &sep,
+            &op,
+            &lists,
+            matches!(common.format, OutFormat::Jsonl),
+            template.as_ref(),
+        );
+        return explain(&common, &op, &lists, total_for_limits, estimate);
+    }
+
     // Pre-flight for file output.
     if let Some(path) = &common.output {
         preflight::check_output_path(path, common.overwrite)?;
@@ -260,6 +284,112 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     }
 
     stream(&common, &sep, &op, &lists, json_out, template.as_ref())
+}
+
+fn explain(
+    common: &CommonArgs,
+    op: &Operation,
+    lists: &[Vec<String>],
+    count: Count,
+    estimate: SizeEstimate,
+) -> Result<(), AppError> {
+    let exact_count = match count {
+        Count::Exact(value) => Some(value),
+        Count::Overflow => None,
+    };
+    let records_to_emit = exact_count.map(|total| {
+        let remaining = total.saturating_sub(common.offset);
+        common.limit.map_or(remaining, |limit| remaining.min(limit))
+    });
+    let estimated_bytes = match estimate {
+        SizeEstimate::Bytes(value) => Some(value),
+        SizeEstimate::Overflow => None,
+    };
+    let operation = operation_name(op);
+    let format = match common.format {
+        OutFormat::Text => "text",
+        OutFormat::Jsonl => "jsonl",
+        OutFormat::Json => "json",
+    };
+    let destination = if common.output.is_some() {
+        "file"
+    } else {
+        "stdout"
+    };
+
+    if matches!(common.format, OutFormat::Json) {
+        let summary = serde_json::json!({
+            "schema_version": 1,
+            "operation": operation,
+            "input": {
+                "lists": lists.len(),
+                "items_per_list": lists.iter().map(Vec::len).collect::<Vec<_>>(),
+                "total_items": lists.iter().map(Vec::len).try_fold(0usize, |a, b| a.checked_add(b)).unwrap_or(usize::MAX),
+            },
+            "combination_count": exact_count,
+            "combination_count_overflow": exact_count.is_none(),
+            "offset": common.offset,
+            "limit": common.limit,
+            "records_to_emit": records_to_emit,
+            "estimated_output_bytes": estimated_bytes,
+            "estimated_output_overflow": estimated_bytes.is_none(),
+            "output": destination,
+            "format": format,
+            "limits": {
+                "max_output_bytes": common.max_output_bytes,
+                "max_combinations": common.max_combinations,
+                "max_input_bytes": common.max_input_bytes,
+                "max_item_bytes": common.max_item_bytes,
+                "max_items_per_list": common.max_items_per_list,
+                "max_lists": common.max_lists,
+                "max_total_items": common.max_total_items,
+            }
+        });
+        println!("{summary}");
+    } else {
+        println!("schema_version=1");
+        println!("operation={operation}");
+        println!("input_lists={}", lists.len());
+        println!(
+            "items_per_list={}",
+            lists
+                .iter()
+                .map(Vec::len)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        println!(
+            "combination_count={}",
+            exact_count.map_or_else(|| "overflow".to_string(), |n| n.to_string())
+        );
+        println!("offset={}", common.offset);
+        println!(
+            "limit={}",
+            common
+                .limit
+                .map_or_else(|| "unlimited".to_string(), |n| n.to_string())
+        );
+        println!(
+            "records_to_emit={}",
+            records_to_emit.map_or_else(|| "unknown".to_string(), |n| n.to_string())
+        );
+        println!(
+            "estimated_output_bytes={}",
+            estimated_bytes.map_or_else(|| "overflow".to_string(), |n| n.to_string())
+        );
+        println!("output={destination}");
+        println!("format={format}");
+    }
+    Ok(())
+}
+
+fn operation_name(op: &Operation) -> &'static str {
+    match op {
+        Operation::Product(_) => "product",
+        Operation::Zip(_) => "zip",
+        Operation::Concat(_) => "concat",
+    }
 }
 
 fn load_template(common: &CommonArgs, sep: &str) -> Result<Option<Template>, AppError> {

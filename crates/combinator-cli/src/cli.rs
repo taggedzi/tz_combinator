@@ -18,6 +18,7 @@ pub const HARD_MAX_COMBINATIONS: u128 = DEFAULT_MAX_COMBINATIONS;
 pub enum OutFormat {
     Text,
     Jsonl,
+    Json,
 }
 
 /// CLI-facing mirror of `combinator_core::UnequalPolicy` (clap's `ValueEnum`
@@ -87,6 +88,14 @@ pub struct CommonArgs {
     /// Print only the total count, generating nothing.
     #[arg(long = "count-only")]
     pub count_only: bool,
+
+    /// Print a validated execution summary without generating records.
+    #[arg(long)]
+    pub explain: bool,
+
+    /// Validate the request and limits without generating records.
+    #[arg(long)]
+    pub dry_run: bool,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutFormat::Text)]

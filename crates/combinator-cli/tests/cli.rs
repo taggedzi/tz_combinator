@@ -493,3 +493,58 @@ fn resource_limits_cannot_be_raised_above_hard_ceiling() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("RESOURCE_LIMIT_TOO_HIGH"));
 }
+
+#[test]
+fn explain_json_reports_bounded_plan_without_generating_records() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_combinator"))
+        .args([
+            "--list",
+            "a,b",
+            "--list",
+            "c,d,e",
+            "--offset",
+            "1",
+            "--limit",
+            "2",
+            "--sep",
+            "-",
+            "--explain",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run combinator");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["operation"], "product");
+    assert_eq!(summary["combination_count"], 6);
+    assert_eq!(summary["records_to_emit"], 2);
+    assert_eq!(summary["output"], "stdout");
+    assert_eq!(summary["format"], "json");
+}
+
+#[test]
+fn dry_run_does_not_create_output_file() {
+    let path = std::env::temp_dir().join(format!("combinator_dry_run_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_combinator"))
+        .args(["--list", "a,b", "--dry-run", "-o", path.to_str().unwrap()])
+        .output()
+        .expect("run combinator");
+    assert!(output.status.success());
+    assert!(!path.exists());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("combination_count=2"));
+}
+
+#[test]
+fn json_format_requires_explain_or_dry_run() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_combinator"))
+        .args(["--list", "a", "--format", "json"])
+        .output()
+        .expect("run combinator");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("FORMAT_UNSUPPORTED"));
+}
