@@ -3,6 +3,9 @@
 use clap::{Parser, ValueEnum};
 
 pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_073_741_824;
+pub const DEFAULT_MAX_LISTS: usize = 128;
+pub const DEFAULT_MAX_TOTAL_ITEMS: usize = 5_000_000;
+pub const DEFAULT_MAX_COMBINATIONS: u128 = 10_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutFormat {
@@ -79,6 +82,30 @@ pub struct Cli {
     /// Maximum output bytes for any invocation, including stdout.
     #[arg(long = "max-output-bytes", default_value_t = DEFAULT_MAX_OUTPUT_BYTES)]
     pub max_output_bytes: u64,
+
+    /// Maximum bytes read from each file, stdin stream, or inline list.
+    #[arg(long = "max-input-bytes", default_value_t = 64 * 1024 * 1024)]
+    pub max_input_bytes: usize,
+
+    /// Maximum UTF-8 bytes in one list item.
+    #[arg(long = "max-item-bytes", default_value_t = 1024 * 1024)]
+    pub max_item_bytes: usize,
+
+    /// Maximum items accepted from one list.
+    #[arg(long = "max-items-per-list", default_value_t = 1_000_000)]
+    pub max_items_per_list: usize,
+
+    /// Maximum number of lists accepted.
+    #[arg(long = "max-lists", default_value_t = DEFAULT_MAX_LISTS)]
+    pub max_lists: usize,
+
+    /// Maximum total items across all lists.
+    #[arg(long = "max-total-items", default_value_t = DEFAULT_MAX_TOTAL_ITEMS)]
+    pub max_total_items: usize,
+
+    /// Maximum combinations generated unless --count-only is used.
+    #[arg(long = "max-combinations", default_value_t = DEFAULT_MAX_COMBINATIONS)]
+    pub max_combinations: u128,
 
     /// Skip pre-flight validation for file output.
     #[arg(long = "no-preflight")]

@@ -13,6 +13,7 @@ use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, Siz
 
 use cli::{Cli, OutFormat};
 use error::{render, render_warning, AppError};
+use input::InputLimits;
 use output::{format_record, Format};
 use output_file::OutputFile;
 
@@ -59,6 +60,16 @@ fn run(cli: Cli) -> Result<(), AppError> {
     // Input is either --list or --file, never both. Order within the chosen
     // source is argument order (clap preserves it). `--file -` reads stdin.
     let mut lists: Vec<Vec<String>> = Vec::new();
+    if cli.list.len().max(cli.file.len()) > cli.max_lists {
+        return Err(AppError::runtime("TOO_MANY_LISTS", "input exceeds the maximum list count")
+            .with("observed", cli.list.len().max(cli.file.len()))
+            .with("limit", cli.max_lists));
+    }
+    let input_limits = InputLimits {
+        max_input_bytes: cli.max_input_bytes,
+        max_item_bytes: cli.max_item_bytes,
+        max_items_per_list: cli.max_items_per_list,
+    };
     match (cli.list.is_empty(), cli.file.is_empty()) {
         (false, false) => {
             return Err(AppError::usage(
@@ -71,14 +82,23 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
         (false, true) => {
             for value in &cli.list {
-                lists.push(input::split_inline(value, &cli.list_delim));
+                lists.push(input::split_inline_bounded(value, &cli.list_delim, input_limits)?);
             }
         }
         (true, false) => {
             for path in &cli.file {
-                lists.push(input::read_file_list(path)?);
+                lists.push(input::read_file_list_bounded(path, input_limits)?);
             }
         }
+    }
+
+    let total_items: usize = lists.iter().map(Vec::len).try_fold(0usize, |acc, n| acc.checked_add(n)).ok_or_else(|| {
+        AppError::runtime("TOO_MANY_ITEMS", "total item count overflowed")
+    })?;
+    if total_items > cli.max_total_items {
+        return Err(AppError::runtime("TOO_MANY_ITEMS", "input exceeds the maximum total item count")
+            .with("observed", total_items)
+            .with("limit", cli.max_total_items));
     }
 
     let json_out = matches!(cli.format, OutFormat::Jsonl);
@@ -112,6 +132,25 @@ fn run(cli: Cli) -> Result<(), AppError> {
                 ));
             }
         }
+    }
+
+    let lens: Vec<usize> = lists.iter().map(|l| l.len()).collect();
+    match combination_count(&lens) {
+        Count::Exact(total) if cli.limit.unwrap_or(total) > cli.max_combinations => {
+            return Err(AppError::runtime(
+                "COMBINATION_LIMIT_EXCEEDED",
+                "requested combinations exceed the configured generation limit",
+            )
+            .with("limit", cli.max_combinations));
+        }
+        Count::Overflow if cli.limit.is_none() || cli.limit.unwrap_or(0) > cli.max_combinations => {
+            return Err(AppError::runtime(
+                "COMBINATION_LIMIT_EXCEEDED",
+                "the product is too large without an explicit safe limit",
+            )
+            .with("limit", cli.max_combinations));
+        }
+        _ => {}
     }
 
     // Pre-flight for file output.
