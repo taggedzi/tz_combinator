@@ -3,8 +3,10 @@
 /// Options controlling iteration order and windowing.
 #[derive(Debug, Clone, Default)]
 pub struct ProductOptions {
-    /// When true, the leftmost list varies fastest (default: rightmost fastest).
+    /// Traverse the complete default product order from last to first.
     pub reverse: bool,
+    /// When true, the leftmost list varies fastest (default: rightmost fastest).
+    pub reverse_fields: bool,
     /// Number of leading combinations to skip.
     pub offset: u128,
     /// Maximum number of combinations to emit.
@@ -20,6 +22,7 @@ pub struct Product {
     remaining: Option<u128>,
     exhausted: bool,
     started: bool,
+    descending: bool,
 }
 
 /// Builds a lazy product iterator over `lists` honoring `opts`.
@@ -27,22 +30,42 @@ pub fn combinations(lists: &[Vec<String>], opts: ProductOptions) -> Product {
     let lens: Vec<usize> = lists.iter().map(|l| l.len()).collect();
     let k = lens.len();
 
-    let lsd_order: Vec<usize> = if opts.reverse {
+    let lsd_order: Vec<usize> = if opts.reverse_fields {
         (0..k).collect()
     } else {
         (0..k).rev().collect()
     };
 
     let mut exhausted = k == 0 || lens.contains(&0);
-    let mut digits = vec![0usize; k];
+    let mut digits = if opts.reverse {
+        lens.iter().map(|&len| len.saturating_sub(1)).collect()
+    } else {
+        vec![0usize; k]
+    };
 
     if !exhausted {
-        // Resolve offset by mixed-radix decomposition (no iteration).
         let mut off = opts.offset;
-        for &pos in &lsd_order {
-            let len = lens[pos] as u128;
-            digits[pos] = (off % len) as usize;
-            off /= len;
+        if opts.reverse {
+            // Subtract the offset from the final tuple by mixed-radix
+            // decomposition, without iterating through skipped records.
+            for &pos in &lsd_order {
+                let len = lens[pos] as u128;
+                let delta = off % len;
+                off /= len;
+                if digits[pos] as u128 >= delta {
+                    digits[pos] -= delta as usize;
+                } else {
+                    digits[pos] = (len - delta + digits[pos] as u128) as usize;
+                    off = off.saturating_add(1);
+                }
+            }
+        } else {
+            // Resolve offset by mixed-radix decomposition (no iteration).
+            for &pos in &lsd_order {
+                let len = lens[pos] as u128;
+                digits[pos] = (off % len) as usize;
+                off /= len;
+            }
         }
         if off > 0 {
             exhausted = true; // offset past the end of the product
@@ -56,6 +79,7 @@ pub fn combinations(lists: &[Vec<String>], opts: ProductOptions) -> Product {
         remaining: opts.limit,
         exhausted,
         started: false,
+        descending: opts.reverse,
     }
 }
 
@@ -70,15 +94,24 @@ impl Iterator for Product {
         if !self.started {
             self.started = true;
         } else {
-            // Odometer increment, least-significant position first.
+            // Odometer step, least-significant position first.
             let mut carry = true;
             for &pos in &self.lsd_order {
-                self.digits[pos] += 1;
-                if self.digits[pos] < self.lens[pos] {
-                    carry = false;
-                    break;
+                if self.descending {
+                    if self.digits[pos] > 0 {
+                        self.digits[pos] -= 1;
+                        carry = false;
+                        break;
+                    }
+                    self.digits[pos] = self.lens[pos] - 1;
+                } else {
+                    self.digits[pos] += 1;
+                    if self.digits[pos] < self.lens[pos] {
+                        carry = false;
+                        break;
+                    }
+                    self.digits[pos] = 0;
                 }
-                self.digits[pos] = 0;
             }
             if carry {
                 self.exhausted = true;
@@ -118,11 +151,26 @@ mod tests {
 
     #[test]
     fn reverse_order_leftmost_fastest() {
-        let opts = ProductOptions { reverse: true, ..Default::default() };
+        let opts = ProductOptions { reverse_fields: true, ..Default::default() };
         assert_eq!(
             collect(opts),
             vec![vec![0, 0], vec![1, 0], vec![0, 1], vec![1, 1]]
         );
+    }
+
+    #[test]
+    fn reverse_order_reverses_complete_product() {
+        let opts = ProductOptions { reverse: true, ..Default::default() };
+        assert_eq!(
+            collect(opts),
+            vec![vec![1, 1], vec![1, 0], vec![0, 1], vec![0, 0]]
+        );
+    }
+
+    #[test]
+    fn reverse_offset_and_limit_paginate_from_end() {
+        let opts = ProductOptions { reverse: true, offset: 1, limit: Some(2), ..Default::default() };
+        assert_eq!(collect(opts), vec![vec![1, 0], vec![0, 1]]);
     }
 
     #[test]

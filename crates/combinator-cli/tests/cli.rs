@@ -20,6 +20,42 @@ fn basic_product_to_stdout() {
 }
 
 #[test]
+fn reverse_reverses_complete_product() {
+    let out = bin()
+        .args(["--list", "red,blue", "--list", "car,bike", "--sep", "-", "--reverse"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "blue-bike\nblue-car\nred-bike\nred-car\n"
+    );
+}
+
+#[test]
+fn reverse_fields_preserves_previous_order() {
+    let out = bin()
+        .args(["--list", "red,blue", "--list", "car,bike", "--sep", "-", "--reverse-fields"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "red-car\nblue-car\nred-bike\nblue-bike\n"
+    );
+}
+
+#[test]
+fn reverse_modes_conflict() {
+    let out = bin()
+        .args(["--list", "a,b", "--list", "c,d", "--reverse", "--reverse-fields"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("REVERSE_CONFLICT"));
+}
+
+#[test]
 fn count_only_prints_total() {
     let out = bin()
         .args(["--list", "a,b", "--list", "c,d,e", "--count-only"])

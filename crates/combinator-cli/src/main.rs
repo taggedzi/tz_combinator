@@ -26,6 +26,13 @@ fn main() {
 fn run(cli: Cli) -> Result<(), AppError> {
     input::validate_delims(&cli.sep, &cli.rec_sep, &cli.list_delim)?;
 
+    if cli.reverse && cli.reverse_fields {
+        return Err(AppError::usage(
+            "REVERSE_CONFLICT",
+            "use either --reverse or --reverse-fields, not both",
+        ));
+    }
+
     // Input is either --list or --file, never both. Order within the chosen
     // source is argument order (clap preserves it). `--file -` reads stdin.
     let mut lists: Vec<Vec<String>> = Vec::new();
@@ -150,7 +157,12 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
 }
 
 fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppError> {
-    let opts = ProductOptions { reverse: cli.reverse, offset: cli.offset, limit: cli.limit };
+    let opts = ProductOptions {
+        reverse: cli.reverse,
+        reverse_fields: cli.reverse_fields,
+        offset: cli.offset,
+        limit: cli.limit,
+    };
     let format = if json_out { Format::Jsonl } else { Format::Text };
 
     let mut writer: BufWriter<Box<dyn Write>> = if let Some(path) = &cli.output {

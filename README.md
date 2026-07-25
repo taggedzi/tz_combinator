@@ -41,8 +41,9 @@ blue-bike
 ```
 
 Two lists (`red,blue` and `car,bike`) produce 2×2 = 4 combinations. The
-**rightmost** list varies fastest by default (pass `--reverse` to flip that —
-see below).
+**rightmost** list varies fastest by default. Use `--reverse-fields` to make
+the **leftmost** list vary fastest, or `--reverse` to emit the complete output
+sequence backwards.
 
 ## Input: `--list` vs `--file`
 
@@ -78,7 +79,8 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--sep <SEP>` | `""` (empty) | Field separator joining the items within one combination. |
 | `--rec-sep <SEP>` | `"\n"` | Record separator between combinations. Text format only. |
 | `--list-delim <DELIM>` | `","` | Delimiter used to split each inline `--list` value. Must be non-empty. |
-| `--reverse` | off | Vary the **leftmost** list fastest instead of the rightmost. |
+| `--reverse` | off | Emit combinations in reverse of the default order. Mutually exclusive with `--reverse-fields`. |
+| `--reverse-fields` | off | Vary the **leftmost** list fastest instead of the rightmost. Mutually exclusive with `--reverse`. |
 | `--offset <N>` | `0` | Skip this many leading combinations before emitting. |
 | `--limit <N>` | unlimited | Emit at most this many combinations. |
 | `--count-only` | off | Print only the total combination count and exit; generates nothing. |
@@ -135,18 +137,30 @@ $ combinator --list "red,blue" --list "car,bike" --sep "-" --format jsonl --lean
 "blue-bike"
 ```
 
-## `--reverse`, `--offset`, `--limit`, `--count-only`
+## `--reverse`, `--reverse-fields`, `--offset`, `--limit`, `--count-only`
 
 By default the rightmost list varies fastest (standard odometer order).
-`--reverse` flips that so the leftmost list varies fastest:
+`--reverse-fields` changes that so the leftmost list varies fastest:
 
 ```
-$ combinator --list "red,blue" --list "car,bike" --sep "-" --reverse
+$ combinator --list "red,blue" --list "car,bike" --sep "-" --reverse-fields
 red-car
 blue-car
 red-bike
 blue-bike
 ```
+
+`--reverse` emits the ordinary product sequence from last to first:
+
+```
+$ combinator --list "red,blue" --list "car,bike" --sep "-" --reverse
+blue-bike
+blue-car
+red-bike
+red-car
+```
+
+`--reverse` and `--reverse-fields` are mutually exclusive.
 
 `--offset` and `--limit` page through the product without materializing
 skipped combinations; the JSONL `i` field reflects the true index, not a
