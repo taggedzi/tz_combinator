@@ -47,8 +47,13 @@ pub fn estimate_text_size(input: &SizeInput) -> SizeEstimate {
         None => return SizeEstimate::Overflow,
     };
 
-    let per_record_sep =
-        (input.field_sep_bytes as u128) * k.saturating_sub(1) + input.rec_sep_bytes as u128;
+    let per_record_sep = match (input.field_sep_bytes as u128)
+        .checked_mul(k.saturating_sub(1))
+        .and_then(|v| v.checked_add(input.rec_sep_bytes as u128))
+    {
+        Some(v) => v,
+        None => return SizeEstimate::Overflow,
+    };
     let sep_bytes = match total.checked_mul(per_record_sep) {
         Some(v) => v,
         None => return SizeEstimate::Overflow,
@@ -80,7 +85,13 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
         Some(v) => v,
         None => return SizeEstimate::Overflow,
     };
-    let field_sep_in_value = (input.field_sep_bytes as u128) * k.saturating_sub(1);
+    let field_sep_in_value = match (input.field_sep_bytes as u128)
+        .checked_mul(k.saturating_sub(1))
+        .and_then(|v| v.checked_mul(total))
+    {
+        Some(v) => v,
+        None => return SizeEstimate::Overflow,
+    };
 
     // Index digits: bound by the decimal width of the largest index.
     let index_digits = decimal_width(total.saturating_sub(1)) as u128;
@@ -98,7 +109,11 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
         None => return SizeEstimate::Overflow,
     };
     if !lean {
-        let quote_bytes = match total.checked_mul(2 * k) {
+        let two_k = match k.checked_mul(2) {
+            Some(v) => v,
+            None => return SizeEstimate::Overflow,
+        };
+        let quote_bytes = match total.checked_mul(two_k) {
             Some(v) => v,
             None => return SizeEstimate::Overflow,
         };
@@ -173,6 +188,19 @@ mod tests {
         let text = match estimate_text_size(&input) { SizeEstimate::Bytes(b) => b, _ => panic!() };
         let json = match estimate_jsonl_size(&input, false) { SizeEstimate::Bytes(b) => b, _ => panic!() };
         assert!(json >= text, "jsonl {json} should be >= text {text}");
+    }
+
+    #[test]
+    fn jsonl_upper_bound_holds_with_large_field_sep() {
+        // lens [2,5] -> 10 combos; a big field separator must still keep jsonl >= text.
+        let lists = vec![
+            vec!["a".to_string(), "b".to_string()],
+            (1..=5).map(|n| n.to_string()).collect::<Vec<_>>(),
+        ];
+        let input = SizeInput { lists: &lists, field_sep_bytes: 1000, rec_sep_bytes: 1 };
+        let text = match estimate_text_size(&input) { SizeEstimate::Bytes(b) => b, _ => panic!() };
+        let json = match estimate_jsonl_size(&input, false) { SizeEstimate::Bytes(b) => b, _ => panic!() };
+        assert!(json >= text, "jsonl {json} must be >= text {text}");
     }
 
     #[test]
