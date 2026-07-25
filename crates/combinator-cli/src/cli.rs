@@ -20,6 +20,25 @@ pub enum OutFormat {
     Jsonl,
 }
 
+/// CLI-facing mirror of `combinator_core::UnequalPolicy` (clap's `ValueEnum`
+/// derive cannot target a foreign type).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UnequalPolicyArg {
+    Error,
+    Truncate,
+    Cycle,
+}
+
+impl From<UnequalPolicyArg> for combinator_core::UnequalPolicy {
+    fn from(value: UnequalPolicyArg) -> Self {
+        match value {
+            UnequalPolicyArg::Error => combinator_core::UnequalPolicy::Error,
+            UnequalPolicyArg::Truncate => combinator_core::UnequalPolicy::Truncate,
+            UnequalPolicyArg::Cycle => combinator_core::UnequalPolicy::Cycle,
+        }
+    }
+}
+
 /// Flags shared by every operation mode.
 #[derive(Debug, Args)]
 pub struct CommonArgs {
@@ -125,10 +144,27 @@ pub struct ProductArgs {
     pub reverse_fields: bool,
 }
 
+/// Positional pairing of the input lists.
+#[derive(Debug, Args)]
+pub struct ZipArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+
+    /// Field separator joining items within a combination.
+    #[arg(long, default_value = "")]
+    pub sep: String,
+
+    /// Policy when input lists have unequal lengths.
+    #[arg(long = "on-unequal", value_enum, default_value_t = UnequalPolicyArg::Error)]
+    pub on_unequal: UnequalPolicyArg,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Mode {
     /// Ordered Cartesian product (the default when no subcommand is given).
     Product(ProductArgs),
+    /// Positional pairing of the input lists.
+    Zip(ZipArgs),
 }
 
 /// Streams combinations of text lists: product (default), zip, concat.
@@ -197,7 +233,26 @@ mod tests {
                 assert_eq!(args.common.list, vec!["a,b"]);
                 assert_eq!(args.sep, "-");
             }
-            None => panic!("expected explicit product subcommand to parse"),
+            other => panic!("expected explicit product subcommand, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn zip_subcommand_parses_with_default_policy() {
+        let cli = Cli::parse_from(["combinator", "zip", "--list", "a,b", "--list", "c,d"]);
+        match cli.command {
+            Some(Mode::Zip(args)) => {
+                assert_eq!(args.on_unequal, UnequalPolicyArg::Error);
+                assert_eq!(args.common.list, vec!["a,b", "c,d"]);
+            }
+            other => panic!("expected zip subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zip_rejects_reverse_fields_flag() {
+        let result =
+            Cli::try_parse_from(["combinator", "zip", "--list", "a,b", "--reverse-fields"]);
+        assert!(result.is_err());
     }
 }
