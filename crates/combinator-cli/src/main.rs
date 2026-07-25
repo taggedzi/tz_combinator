@@ -16,7 +16,7 @@ use cli::{
     HARD_MAX_ITEMS_PER_LIST, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{render, render_warning, AppError};
-use input::InputLimits;
+use input::{InputBudget, InputLimits};
 use output::{format_record, Format};
 use output_file::OutputFile;
 
@@ -74,6 +74,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
         max_item_bytes: cli.max_item_bytes,
         max_items_per_list: cli.max_items_per_list,
     };
+    let mut input_budget = InputBudget::new(cli.max_input_bytes, cli.max_total_items);
     match (cli.list.is_empty(), cli.file.is_empty()) {
         (false, false) => {
             return Err(AppError::usage(
@@ -86,12 +87,12 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
         (false, true) => {
             for value in &cli.list {
-                lists.push(input::split_inline_bounded(value, &cli.list_delim, input_limits)?);
+                lists.push(input::split_inline_bounded(value, &cli.list_delim, input_limits, &mut input_budget)?);
             }
         }
         (true, false) => {
             for path in &cli.file {
-                lists.push(input::read_file_list_bounded(path, input_limits)?);
+                lists.push(input::read_file_list_bounded(path, input_limits, &mut input_budget)?);
             }
         }
     }
