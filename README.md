@@ -76,6 +76,9 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 |---|---|---|
 | `--list <VALUE>` | — | Inline list, split by `--list-delim`. Repeatable. Mutually exclusive with `--file`. |
 | `--file <PATH>` | — | List from a file, one item per line (`-` = stdin). Repeatable. Mutually exclusive with `--list`. |
+| `--template <TEMPLATE>` | none | Render each value with a bounded positional or named template. Mutually exclusive with `--template-file`. |
+| `--template-file <PATH>` | none | Read the UTF-8 output template from a bounded file. Mutually exclusive with `--template`. |
+| `--name <NAME>` | none | Name one input field; repeat once per input list, in list order. |
 | `--sep <SEP>` | `""` (empty) | Field separator joining the items within one combination. |
 | `--rec-sep <SEP>` | `"\n"` | Record separator between combinations. Text format only. |
 | `--list-delim <DELIM>` | `","` | Delimiter used to split each inline `--list` value. Must be non-empty. |
@@ -147,6 +150,47 @@ under the others: `--reverse-fields` only exists under `product`,
 `concat`. `--reverse`, `--offset`, `--limit`, `--count-only`, and every
 output/format/resource-limit flag in the table above apply to all three
 modes.
+
+## Templates and named fields
+
+Use `--template` when the output value needs a fixed structure rather than a
+simple separator:
+
+```
+$ combinator product --list "server1,server2" --list "80,443" \
+    --template "https://{0}:{1}"
+https://server1:80
+https://server1:443
+https://server2:80
+https://server2:443
+```
+
+Templates contain literal text and positional placeholders such as `{0}` or
+`{1}`. Double braces produce literal braces: `{{` emits `{` and `}}` emits
+`}`. Templates do not evaluate expressions, invoke commands, read the
+environment, or access files. `--template-file` reads the same syntax from a
+bounded UTF-8 file.
+
+Field names are optional and follow input-list order:
+
+```
+$ combinator product --name host --name port \
+    --list server1 --list 443 --template "{host}:{port}" \
+    --format jsonl
+{"i":0,"value":"server1:443","fields":["server1","443"],"named":{"host":"server1","port":"443"}}
+```
+
+Names must be unique identifiers and exactly one name must be supplied for
+each input list. Without names, only positional placeholders are available.
+With names, full JSONL output adds the ordered `named` object while retaining
+the existing `fields` array. `--lean-output` still emits only the rendered
+value.
+
+A template replaces `--sep`; combining a template with a non-empty `--sep` is
+rejected as `TEMPLATE_SEPARATOR_CONFLICT`. Template syntax and field errors
+are usage errors, and are validated before output-file creation. Templates are
+supported by `product`, `zip`, and `concat`; a concat record has one field, so
+only `{0}` or its assigned name is valid there.
 
 ## Output formats
 
@@ -284,6 +328,15 @@ zero combinations).
 |---|---|---|
 | `NO_LISTS` | 2 | Neither `--list` nor `--file` was given. |
 | `SOURCE_CONFLICT` | 2 | Both `--list` and `--file` were given; only one source is allowed. |
+| `TEMPLATE_CONFLICT` | 2 | Both `--template` and `--template-file` were given. |
+| `TEMPLATE_SEPARATOR_CONFLICT` | 2 | A template was combined with a non-empty `--sep`. |
+| `TEMPLATE_INVALID` | 2 | Template syntax or a template reference is invalid. |
+| `TEMPLATE_UNKNOWN_FIELD` | 2 | A template references an unknown field. |
+| `TEMPLATE_NAMES_MISMATCH` | 2 | The number of `--name` values does not match the input-list count. |
+| `TEMPLATE_DUPLICATE_NAME` | 2 | A field name was supplied more than once. |
+| `TEMPLATE_INVALID_NAME` | 2 | A field name is not a valid identifier. |
+| `TEMPLATE_TOO_LARGE` | 2 | The template exceeds its 1 MiB security ceiling or configured input limit. |
+| `TEMPLATE_FILE_UNREADABLE` | 2 | The template file could not be read or is not valid UTF-8. |
 | `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
 | `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |

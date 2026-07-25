@@ -20,6 +20,225 @@ fn basic_product_to_stdout() {
 }
 
 #[test]
+fn bare_product_matches_explicit_product_subcommand() {
+    let args = ["--list", "a,b", "--list", "x,y", "--sep", "-"];
+    let bare = bin().args(args).output().unwrap();
+    let explicit = bin()
+        .args(["product", "--list", "a,b", "--list", "x,y", "--sep", "-"])
+        .output()
+        .unwrap();
+
+    assert_eq!(bare.status, explicit.status);
+    assert_eq!(bare.stdout, explicit.stdout);
+    assert_eq!(bare.stderr, explicit.stderr);
+}
+
+#[test]
+fn product_template_renders_positional_fields() {
+    let out = bin()
+        .args([
+            "product",
+            "--list",
+            "server1,server2",
+            "--list",
+            "80,443",
+            "--template",
+            "https://{0}:{1}",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "https://server1:80\nhttps://server1:443\nhttps://server2:80\nhttps://server2:443\n"
+    );
+}
+
+#[test]
+fn named_template_adds_json_metadata() {
+    let out = bin()
+        .args([
+            "product",
+            "--name",
+            "host",
+            "--name",
+            "port",
+            "--list",
+            "server1",
+            "--list",
+            "443",
+            "--template",
+            "{host}:{port}",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "{\"i\":0,\"value\":\"server1:443\",\"fields\":[\"server1\",\"443\"],\"named\":{\"host\":\"server1\",\"port\":\"443\"}}\n"
+    );
+}
+
+#[test]
+fn template_file_renders_and_lean_jsonl_stays_lean() {
+    let path = std::env::temp_dir().join(format!("combinator_template_{}.txt", std::process::id()));
+    std::fs::write(&path, "{0}@{1}").unwrap();
+    let out = bin()
+        .args([
+            "--list",
+            "host",
+            "--list",
+            "port",
+            "--template-file",
+            path.to_str().unwrap(),
+            "--format",
+            "jsonl",
+            "--lean-output",
+        ])
+        .output()
+        .unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "\"host@port\"\n");
+}
+
+#[test]
+fn template_validation_errors_are_stable_and_prevent_output_creation() {
+    let output = std::env::temp_dir().join(format!(
+        "combinator_template_invalid_{}.txt",
+        std::process::id()
+    ));
+    let out = bin()
+        .args([
+            "--list",
+            "a",
+            "--template",
+            "{missing}",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("TEMPLATE_UNKNOWN_FIELD"));
+    assert!(!output.exists());
+}
+
+#[test]
+fn template_and_separator_conflict_is_a_usage_error() {
+    let out = bin()
+        .args(["--list", "a", "--template", "{0}", "--sep", "-"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("TEMPLATE_SEPARATOR_CONFLICT"));
+}
+
+#[test]
+fn template_source_conflict_is_a_usage_error() {
+    let path = std::env::temp_dir().join(format!(
+        "combinator_template_conflict_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&path, "{0}").unwrap();
+    let out = bin()
+        .args([
+            "--list",
+            "a",
+            "--template",
+            "{0}",
+            "--template-file",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("TEMPLATE_CONFLICT"));
+}
+
+#[test]
+fn template_names_must_be_unique_and_match_list_count() {
+    let duplicate = bin()
+        .args([
+            "--name",
+            "host",
+            "--name",
+            "host",
+            "--list",
+            "a",
+            "--list",
+            "b",
+            "--template",
+            "{host}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(duplicate.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("TEMPLATE_DUPLICATE_NAME"));
+
+    let mismatch = bin()
+        .args([
+            "--name",
+            "host",
+            "--list",
+            "a",
+            "--list",
+            "b",
+            "--template",
+            "{host}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(mismatch.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("TEMPLATE_NAMES_MISMATCH"));
+}
+
+#[test]
+fn template_expansion_is_subject_to_output_limit() {
+    let out = bin()
+        .args([
+            "--list",
+            "x",
+            "--template",
+            "long-{0}",
+            "--max-output-bytes",
+            "4",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("OUTPUT_LIMIT_EXCEEDED"));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn template_preflight_accounts_for_literal_expansion() {
+    let output = std::env::temp_dir().join(format!(
+        "combinator_template_preflight_{}.txt",
+        std::process::id()
+    ));
+    let out = bin()
+        .args([
+            "--list",
+            "x",
+            "--template",
+            "long-{0}",
+            "--output",
+            output.to_str().unwrap(),
+            "--max-file-size",
+            "4",
+        ])
+        .output()
+        .unwrap();
+    std::fs::remove_file(&output).ok();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("FILE_SIZE_LIMIT"));
+}
+
+#[test]
 fn reverse_reverses_complete_product() {
     let out = bin()
         .args([

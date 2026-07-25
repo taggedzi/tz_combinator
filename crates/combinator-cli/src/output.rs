@@ -1,5 +1,7 @@
 //! Per-record output formatting for text and JSON Lines.
 
+use combinator_core::{Template, TemplateError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Text,
@@ -8,6 +10,7 @@ pub enum Format {
 
 /// Formats one combination into the exact bytes to emit (including the record
 /// terminator).
+#[allow(dead_code)]
 pub fn format_record(
     items: &[&str],
     index: u128,
@@ -16,13 +19,32 @@ pub fn format_record(
     format: Format,
     lean: bool,
 ) -> String {
-    let value = items.join(field_sep);
+    format_record_with(items, index, field_sep, rec_sep, format, lean, None, &[])
+        .expect("legacy formatting has no fallible template references")
+}
+
+/// Formats one record with an optional compiled template and field names.
+#[allow(clippy::too_many_arguments)]
+pub fn format_record_with(
+    items: &[&str],
+    index: u128,
+    field_sep: &str,
+    rec_sep: &str,
+    format: Format,
+    lean: bool,
+    template: Option<&Template>,
+    names: &[String],
+) -> Result<String, TemplateError> {
+    let value = match template {
+        Some(template) => template.render(items, names)?,
+        None => items.join(field_sep),
+    };
     match format {
-        Format::Text => format!("{value}{rec_sep}"),
+        Format::Text => Ok(format!("{value}{rec_sep}")),
         Format::Jsonl if lean => {
             let mut s = serde_json::to_string(&value).expect("string is always serializable");
             s.push('\n');
-            s
+            Ok(s)
         }
         Format::Jsonl => {
             // Build with explicit key order (i, value, fields). serde_json's
@@ -39,7 +61,26 @@ pub fn format_record(
             let value_json = serde_json::to_string(&value).expect("string is always serializable");
             let fields_json =
                 serde_json::to_string(items).expect("string slice is always serializable");
-            format!("{{\"i\":{i_json},\"value\":{value_json},\"fields\":{fields_json}}}\n")
+            let named_json = if names.is_empty() {
+                String::new()
+            } else {
+                let entries = names
+                    .iter()
+                    .zip(items.iter())
+                    .map(|(name, value)| {
+                        let name_json =
+                            serde_json::to_string(name).expect("string is always serializable");
+                        let value_json =
+                            serde_json::to_string(value).expect("string is always serializable");
+                        format!("{name_json}:{value_json}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(",\"named\":{{{entries}}}")
+            };
+            Ok(format!(
+                "{{\"i\":{i_json},\"value\":{value_json},\"fields\":{fields_json}{named_json}}}\n"
+            ))
         }
     }
 }
@@ -95,5 +136,43 @@ mod tests {
         // Valid JSON string with escaped quote.
         let v: serde_json::Value = serde_json::from_str(line.trim_end()).unwrap();
         assert_eq!(v, "a\"b");
+    }
+
+    #[test]
+    fn template_renders_text() {
+        let template = Template::parse("{1}@{0}").unwrap();
+        let line = format_record_with(
+            &["host", "port"],
+            0,
+            "-",
+            "\n",
+            Format::Text,
+            false,
+            Some(&template),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(line, "port@host\n");
+    }
+
+    #[test]
+    fn named_jsonl_metadata_is_additive() {
+        let template = Template::parse("{host}:{port}").unwrap();
+        let names = vec!["host".to_string(), "port".to_string()];
+        let line = format_record_with(
+            &["server", "443"],
+            0,
+            "-",
+            "\n",
+            Format::Jsonl,
+            false,
+            Some(&template),
+            &names,
+        )
+        .unwrap();
+        assert_eq!(
+            line,
+            "{\"i\":0,\"value\":\"server:443\",\"fields\":[\"server\",\"443\"],\"named\":{\"host\":\"server\",\"port\":\"443\"}}\n"
+        );
     }
 }

@@ -67,6 +67,102 @@ fn zip_cycle_wraps_shorter_list() {
 }
 
 #[test]
+fn zip_reverse_walks_from_the_end() {
+    let out = bin()
+        .args([
+            "zip",
+            "--list",
+            "a,b",
+            "--list",
+            "x,y",
+            "--sep",
+            "-",
+            "--reverse",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "b-y\na-x\n");
+}
+
+#[test]
+fn zip_runtime_output_limit_is_enforced() {
+    let out = bin()
+        .args([
+            "zip",
+            "--list",
+            "a,b",
+            "--list",
+            "x,y",
+            "--sep",
+            "-",
+            "--max-output-bytes",
+            "5",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("OUTPUT_LIMIT_EXCEEDED"));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a-x\n");
+}
+
+#[test]
+fn zip_reads_files_and_writes_output_file() {
+    let dir = std::env::temp_dir();
+    let stem = format!("combinator_zip_files_{}", std::process::id());
+    let left = dir.join(format!("{stem}_left.txt"));
+    let right = dir.join(format!("{stem}_right.txt"));
+    let output = dir.join(format!("{stem}_output.txt"));
+    std::fs::write(&left, "a\nb\n").unwrap();
+    std::fs::write(&right, "x\ny\n").unwrap();
+
+    let out = bin()
+        .args([
+            "zip",
+            "--file",
+            left.to_str().unwrap(),
+            "--file",
+            right.to_str().unwrap(),
+            "--sep",
+            "-",
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    let contents = std::fs::read_to_string(&output).unwrap_or_default();
+    std::fs::remove_file(&left).ok();
+    std::fs::remove_file(&right).ok();
+    std::fs::remove_file(&output).ok();
+
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+    assert_eq!(contents, "a-x\nb-y\n");
+}
+
+#[test]
+fn zip_template_renders_selected_fields() {
+    let out = bin()
+        .args([
+            "zip",
+            "--list",
+            "host1,host2",
+            "--list",
+            "80,443",
+            "--template",
+            "{0}:{1}",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "host1:80\nhost2:443\n"
+    );
+}
+
+#[test]
 fn zip_rejects_reverse_fields() {
     let out = bin()
         .args(["zip", "--list", "a,b", "--list", "x,y", "--reverse-fields"])
