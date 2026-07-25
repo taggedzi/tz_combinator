@@ -64,11 +64,11 @@ Windows note for later phases: process spawn is heavier on Windows than Linux, s
 
 ### 4.2 Inputs — sources
 
-Lists are consumed in **argument order** (= field order in each combination). Sources are mixable:
+Input comes from **one source type only** — either inline lists or file lists, never both in the same invocation. This keeps list order (= field order in each combination) unambiguous: lists are consumed in **argument order** within the chosen source. Mixing `--list` and `--file` is a `SOURCE_CONFLICT` usage error; a caller who needs both should convert one form to the other and pass a single homogeneous set.
 
 - **Inline, repeatable:** `--list "red,blue"`. Item delimiter defaults to comma; override with `--list-delim`.
 - **Files, repeatable:** `--file a.txt` — each file is one list, **one item per line**. Preferred for large lists (no delimiter ambiguity, pairs with streaming).
-- **Stdin:** one list piped in, or multiple lists separated by a blank line. When stdin is combined with `--list`/`--file`, the stdin list(s) are ordered **after** all flag-provided lists (which keep argument order among themselves), in the order they appear on stdin.
+- **Stdin (explicit only):** `--file -` reads one list from standard input (one item per line), positioned in file-source order. Stdin is **never** read by autodetection — only when `-` is passed explicitly — so the tool never blocks on, or silently consumes, a caller's stdin.
 
 ### 4.3 Inputs — separators
 
@@ -120,7 +120,7 @@ Runs before streaming starts, so failures are early and cheap. Skipped for stdou
 - `1` runtime error (file not found/unreadable, write failure, insufficient space, etc.)
 
 **Every failure carries three parts**, so both humans and programs can diagnose:
-1. **Stable machine-readable error code** — e.g. `OUTPUT_EXISTS`, `EMPTY_LIST`, `BAD_DELIMITER`, `INSUFFICIENT_SPACE`, `FILE_SIZE_LIMIT`, `COUNT_OVERFLOW`, `FILE_UNREADABLE`, `NO_LISTS`. Codes never silently change meaning — they are part of the API.
+1. **Stable machine-readable error code** — e.g. `OUTPUT_EXISTS`, `EMPTY_LIST`, `BAD_DELIMITER`, `INSUFFICIENT_SPACE`, `FILE_SIZE_LIMIT`, `COUNT_OVERFLOW`, `FILE_UNREADABLE`, `NO_LISTS`, `SOURCE_CONFLICT`. Codes never silently change meaning — they are part of the API.
 2. **Plain-language message** — what happened and why.
 3. **Context** — which file, which list index, the relevant limits/numbers.
 
@@ -129,6 +129,7 @@ In `--format jsonl`, errors are emitted as a JSON object on stderr so consumers 
 **Edge cases**
 - **Empty list** (a source with zero items): the Cartesian product is empty → emit nothing, **exit 0**, warn on stderr (`EMPTY_LIST`, naming the list). It is a valid answer, not a crash.
 - **No lists at all** → `NO_LISTS`, exit 2.
+- **Both `--list` and `--file` given** → `SOURCE_CONFLICT`, exit 2.
 - **Count overflow:** compute counts and size estimates in a wide/checked integer; if the total genuinely cannot be represented, `--count-only` reports `COUNT_OVERFLOW` ("too large to count exactly") rather than lying or panicking. Streaming still works — the total is never required to stream.
 
 ---
@@ -163,7 +164,7 @@ Boundary check: a consumer understands the CLI without reading the engine intern
 
 - **Engine unit tests (against the library directly):** product correctness; field-varying order and `--reverse`; `--offset`/`--limit` slicing; count correctness including overflow; exact size estimate; empty-list behavior.
 - **CLI black-box tests (invoking the binary):** argument parsing; each input source (inline/file/stdin) and mixing; each output format (text/JSONL/lean); stdout-vs-stderr separation; exit codes; streaming behavior (assert it does not buffer the whole set).
-- **Defensive / edge suite:** nonexistent input file; permission-denied output path; existing output file without `--overwrite` (and success with it); oversized delimiter; count-overflow inputs; simulated insufficient space; malformed input — each asserts a clean coded error and a non-panic exit.
+- **Defensive / edge suite:** nonexistent input file; permission-denied output path; existing output file without `--overwrite` (and success with it); oversized delimiter; both `--list` and `--file` given (`SOURCE_CONFLICT`); count-overflow inputs; simulated insufficient space; malformed input — each asserts a clean coded error and a non-panic exit.
 
 ---
 

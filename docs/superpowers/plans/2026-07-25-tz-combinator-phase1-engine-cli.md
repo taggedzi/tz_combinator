@@ -16,7 +16,8 @@
 - `combinator-cli` deps: `clap = { version = "4", features = ["derive"] }`, `serde_json = "1"`, `fs2 = "0.4"`, `combinator-core = { path = "../combinator-core" }`.
 - **Data → stdout only. Diagnostics (errors/warnings) → stderr only.**
 - **Exit codes:** `0` success, `2` usage/argument error, `1` runtime error.
-- **Stable error codes are an API contract** — the string codes below never change meaning: `NO_LISTS`, `EMPTY_LIST`, `BAD_DELIMITER`, `OUTPUT_EXISTS`, `INSUFFICIENT_SPACE`, `FILE_SIZE_LIMIT`, `COUNT_OVERFLOW`, `FILE_UNREADABLE`, `WRITE_FAILED`.
+- **Stable error codes are an API contract** — the string codes below never change meaning: `NO_LISTS`, `SOURCE_CONFLICT`, `EMPTY_LIST`, `BAD_DELIMITER`, `OUTPUT_EXISTS`, `INSUFFICIENT_SPACE`, `FILE_SIZE_LIMIT`, `COUNT_OVERFLOW`, `FILE_UNREADABLE`, `WRITE_FAILED`.
+- **Input is either `--list` or `--file`, never both** (mixing ⇒ `SOURCE_CONFLICT`, exit 2). Lists are consumed in argument order within the chosen source. Stdin is read **only** when a `--file -` argument is passed explicitly — never autodetected.
 - **No panics on any input.** Every error path returns a typed error; a panic is a bug.
 - **Delimiter maximum length: 4096 bytes** for `--sep`, `--rec-sep`, `--list-delim`. `--list-delim` must additionally be non-empty (splitting on an empty delimiter is undefined).
 - **Defaults:** field separator = empty string; record separator = `\n`; inline list delimiter = `,`; existing output file fails unless `--overwrite`; pre-flight on for file output.
@@ -651,22 +652,18 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
     let index_digits = decimal_width(total.saturating_sub(1)) as u128;
 
     // Per-record fixed structural bytes.
-    // lean:      {"i":<idx>,"value":"<value>"}\n   -> `{"i":` (5) + `,"value":"` (10) + `"}` (2) + `\n` (1) = 18
-    // non-lean:  ... + `,"fields":[` (11) + `]` (1)  plus 2 quotes + 1 comma per field (minus one comma)
-    let mut per_record: u128 = 18 + index_digits;
-    let mut variable = match total.checked_mul(item_bytes / total + field_sep_in_value / total) {
-        // NOTE: item_bytes/total and field_sep_in_value are aggregates; add them directly instead.
-        _ => 0,
-    };
-    // Aggregate the value bytes directly (avoid per-record division rounding):
-    variable = match item_bytes.checked_add(field_sep_in_value) {
+    // lean:      {"i":<idx>,"value":"<value>"}\n  -> `{"i":`(5) + `,"value":"`(10) + `"}`(2) + `\n`(1) = 18
+    // non-lean:  ... + `,"fields":[`(11) + `]`(1) = 12 more, plus 2 quotes + (k-1) commas per record
+    let per_record: u128 = if lean { 18 + index_digits } else { 30 + index_digits };
+
+    // Variable (content) bytes. The `value` string appears once (item bytes +
+    // field separators). Non-lean repeats item bytes inside `fields`, wrapped in
+    // 2 quotes per field and (k-1) commas per record.
+    let mut variable = match item_bytes.checked_add(field_sep_in_value) {
         Some(v) => v,
         None => return SizeEstimate::Overflow,
     };
-
     if !lean {
-        per_record = per_record + 12; // `,"fields":[` + `]`
-        // quotes: 2 per field; commas: (k-1) per record.
         let quote_bytes = match total.checked_mul(2 * k) {
             Some(v) => v,
             None => return SizeEstimate::Overflow,
@@ -675,7 +672,6 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
             Some(v) => v,
             None => return SizeEstimate::Overflow,
         };
-        // fields also repeats the item bytes:
         variable = match variable
             .checked_add(item_bytes)
             .and_then(|v| v.checked_add(quote_bytes))
@@ -709,18 +705,7 @@ fn decimal_width(mut n: u128) -> u32 {
 }
 ```
 
-> Implementer note: the `variable` block above assigns twice for clarity of derivation; keep only the final aggregate assignments. The net computation is: `value_bytes = item_bytes + field_sep_in_value`; non-lean adds `fields_bytes = item_bytes + 2*k*total + (k-1)*total`. If simplifying, delete the first `variable` placeholder assignment and its `match` entirely.
-
-- [ ] **Step 4: Simplify per implementer note, then wire into lib.rs**
-
-Remove the placeholder first `variable` assignment so the code reads:
-```rust
-    let mut per_record: u128 = 18 + index_digits;
-    let mut variable = match item_bytes.checked_add(field_sep_in_value) {
-        Some(v) => v,
-        None => return SizeEstimate::Overflow,
-    };
-```
+- [ ] **Step 4: Wire the module into lib.rs**
 
 `crates/combinator-core/src/lib.rs`:
 ```rust
@@ -920,9 +905,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
   - `pub const MAX_DELIM_BYTES: usize = 4096;`
   - `pub fn validate_delims(field_sep: &str, rec_sep: &str, list_delim: &str) -> Result<(), AppError>` — enforces the 4096-byte cap on all three and non-empty `list_delim`; errors are `BAD_DELIMITER`.
   - `pub fn split_inline(value: &str, delim: &str) -> Vec<String>` — splits an inline `--list` value (delim guaranteed non-empty by `validate_delims`).
-  - `pub fn read_file_list(path: &str) -> Result<Vec<String>, AppError>` — one item per line, trailing `\r` stripped; missing/unreadable ⇒ `FILE_UNREADABLE`.
-  - `pub fn read_stdin_lists(raw: &str) -> Vec<Vec<String>>` — splits stdin into lists on blank lines, each list one item per line.
-  - Ordering rule (enforced by the caller in Task 10, documented here): flag-provided lists in argument order, then stdin lists appended last.
+  - `pub fn read_file_list(path: &str) -> Result<Vec<String>, AppError>` — one item per line, trailing `\r` stripped; missing/unreadable ⇒ `FILE_UNREADABLE`. **The path `-` reads standard input** (explicit stdin) instead of a file.
+  - No stdin-autodetection and no blank-line multi-list parsing: stdin is a single list obtained only via `--file -`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -968,18 +952,6 @@ mod tests {
         let e = read_file_list("does-not-exist-12345.txt").unwrap_err();
         assert_eq!(e.code, "FILE_UNREADABLE");
         assert_eq!(e.exit, 1);
-    }
-
-    #[test]
-    fn stdin_splits_lists_on_blank_lines() {
-        let raw = "a\nb\n\nc\nd\n";
-        assert_eq!(
-            read_stdin_lists(raw),
-            vec![
-                vec!["a".to_string(), "b".to_string()],
-                vec!["c".to_string(), "d".to_string()],
-            ]
-        );
     }
 
     #[test]
@@ -1036,22 +1008,22 @@ pub fn split_inline(value: &str, delim: &str) -> Vec<String> {
 }
 
 /// Reads a file as a list, one item per line, stripping a trailing `\r`.
+/// The path `-` reads standard input instead (explicit stdin only).
 pub fn read_file_list(path: &str) -> Result<Vec<String>, AppError> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}"))
-            .with("path", path)
-    })?;
+    let content = if path == "-" {
+        let mut buf = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).map_err(|e| {
+            AppError::runtime("FILE_UNREADABLE", format!("could not read stdin: {e}"))
+                .with("path", "-")
+        })?;
+        buf
+    } else {
+        std::fs::read_to_string(path).map_err(|e| {
+            AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}"))
+                .with("path", path)
+        })?
+    };
     Ok(split_lines(&content))
-}
-
-/// Splits stdin content into lists on blank lines.
-pub fn read_stdin_lists(raw: &str) -> Vec<Vec<String>> {
-    let normalized = raw.replace("\r\n", "\n");
-    normalized
-        .split("\n\n")
-        .map(|block| block.lines().map(|l| l.to_string()).collect::<Vec<_>>())
-        .filter(|list: &Vec<String>| !list.is_empty())
-        .collect()
 }
 
 fn split_lines(content: &str) -> Vec<String> {
@@ -1066,7 +1038,7 @@ Add `mod input;` below `mod error;` in `crates/combinator-cli/src/main.rs`.
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test -p combinator-cli input`
-Expected: PASS (8 tests).
+Expected: PASS (7 tests).
 
 - [ ] **Step 6: Commit**
 
@@ -1457,10 +1429,12 @@ pub enum OutFormat {
 #[command(name = "combinator", version, about)]
 pub struct Cli {
     /// Inline list, split by --list-delim. Repeatable; order is field order.
+    /// Mutually exclusive with --file.
     #[arg(long)]
     pub list: Vec<String>,
 
-    /// File list, one item per line. Repeatable; ordered after inline lists' positions as written.
+    /// File list, one item per line (path `-` reads stdin). Repeatable; order
+    /// is field order. Mutually exclusive with --list.
     #[arg(long)]
     pub file: Vec<String>,
 
@@ -1592,6 +1566,32 @@ fn no_lists_is_usage_error() {
 }
 
 #[test]
+fn mixing_list_and_file_is_source_conflict() {
+    let out = bin()
+        .args(["--list", "a,b", "--file", "some.txt"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SOURCE_CONFLICT"));
+}
+
+#[test]
+fn reads_list_from_stdin_dash() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = bin()
+        .args(["--file", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"a\nb\n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\n");
+}
+
+#[test]
 fn empty_list_warns_and_exits_zero() {
     // An inline empty value produces a single empty item, not an empty list, so
     // use a file with no lines to get a truly empty list.
@@ -1672,7 +1672,7 @@ mod input;
 mod output;
 mod preflight;
 
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, Write};
 
 use clap::Parser;
 use combinator_core::{combination_count, combinations, Count, ProductOptions};
@@ -1694,24 +1694,29 @@ fn main() {
 fn run(cli: Cli) -> Result<(), AppError> {
     input::validate_delims(&cli.sep, &cli.rec_sep, &cli.list_delim)?;
 
-    // Gather lists: inline + file in argument order is not preserved across flags
-    // by clap, so we honor "inline lists, then file lists, then stdin lists".
+    // Input is either --list or --file, never both. Order within the chosen
+    // source is argument order (clap preserves it). `--file -` reads stdin.
     let mut lists: Vec<Vec<String>> = Vec::new();
-    for value in &cli.list {
-        lists.push(input::split_inline(value, &cli.list_delim));
-    }
-    for path in &cli.file {
-        lists.push(input::read_file_list(path)?);
-    }
-    if !atty_stdin() {
-        let mut raw = String::new();
-        if std::io::stdin().read_to_string(&mut raw).is_ok() && !raw.trim().is_empty() {
-            lists.extend(input::read_stdin_lists(&raw));
+    match (cli.list.is_empty(), cli.file.is_empty()) {
+        (false, false) => {
+            return Err(AppError::usage(
+                "SOURCE_CONFLICT",
+                "use either --list or --file, not both",
+            ));
         }
-    }
-
-    if lists.is_empty() {
-        return Err(AppError::usage("NO_LISTS", "no input lists were provided"));
+        (true, true) => {
+            return Err(AppError::usage("NO_LISTS", "no input lists were provided"));
+        }
+        (false, true) => {
+            for value in &cli.list {
+                lists.push(input::split_inline(value, &cli.list_delim));
+            }
+        }
+        (true, false) => {
+            for path in &cli.file {
+                lists.push(input::read_file_list(path)?);
+            }
+        }
     }
 
     let json_out = matches!(cli.format, OutFormat::Jsonl);
@@ -1811,13 +1816,6 @@ fn available_space(path: &str) -> u64 {
     fs2::available_space(&dir).unwrap_or(u64::MAX)
 }
 
-fn atty_stdin() -> bool {
-    // Best-effort: treat stdin as a TTY (no piped input) unless we can detect a pipe.
-    // On failure, assume TTY so we do not block waiting on stdin.
-    use std::io::IsTerminal;
-    std::io::stdin().is_terminal()
-}
-
 fn current_index_placeholder() -> u128 {
     0
 }
@@ -1844,7 +1842,7 @@ and delete the `current_index_placeholder` function. (`cli.offset..` is a `Range
 - [ ] **Step 5: Run the full test suite to verify it passes**
 
 Run: `cargo test`
-Expected: PASS — all core unit tests, all CLI unit tests, and all 8 end-to-end tests pass.
+Expected: PASS — all core unit tests, all CLI unit tests, and all 10 end-to-end tests pass.
 
 - [ ] **Step 6: Manual smoke check (defensive behavior)**
 
@@ -1955,7 +1953,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the README**
 
-Create `README.md` documenting: purpose; install/build (`cargo build --release`); every flag from Task 9 with its default; the two output formats with example lines; the stable error-code table (all nine codes with meaning and exit code); the stdout/stderr channel discipline; and a "consuming from other programs" note (spawn the binary, read stdout, parse `--format jsonl`). Include the worked example:
+Create `README.md` documenting: purpose; install/build (`cargo build --release`); every flag from Task 9 with its default; the "either `--list` or `--file`, never both" rule and explicit `--file -` stdin; the two output formats with example lines; the stable error-code table (all ten codes with meaning and exit code); the stdout/stderr channel discipline; and a "consuming from other programs" note (spawn the binary, read stdout, parse `--format jsonl`). Include the worked example:
 ```
 $ combinator --list "red,blue" --list "car,bike" --sep "-"
 red-car
@@ -1984,7 +1982,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Spec coverage** — every spec section maps to a task:
 - Combination semantics / ordered Cartesian product → Task 3.
 - Streaming-first, adaptive → Task 3 (lazy iterator) + Task 10 (streamed writes, OS-pipe backpressure).
-- Input sources (inline/file/stdin, argument order, stdin last) → Task 6 + Task 10.
+- Input sources (either `--list` or `--file`, argument order, explicit `--file -` stdin, `SOURCE_CONFLICT` on mixing) → Task 6 + Task 10.
 - Separators + delimiter caps → Task 6 + Task 9 (defaults).
 - `--reverse` → Task 3 + Task 9.
 - Output destination + `--output`/`--overwrite` → Task 7 + Task 10.
@@ -1998,6 +1996,6 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **Deferred (correctly out of scope):** `--progress`, permutations/choose-k modes, REST/GUI/web — matching the spec's scope boundaries.
 
-**Placeholder scan:** the two `Implementer note` items (Task 4 `variable` simplification, Task 10 index fix) are deliberate derivation-then-cleanup steps, each with the exact final code given — not open TODOs.
+**Placeholder scan:** the one `Implementer note` item (Task 10 index fix — Step 3 uses a placeholder index, Step 4 replaces it with the offset-aligned counter) is a deliberate write-then-fix step with the exact final code given — not an open TODO.
 
 **Type consistency:** `Count`, `SizeEstimate`, `SizeInput`, `ProductOptions`, `AppError`, `Format`, `OutFormat`, `Cli` names and signatures are used identically across the tasks that produce and consume them.
