@@ -159,5 +159,8 @@ The plan was implemented sequentially, with each item developed and merged from 
 | Escaped diagnostics | `security/06-escape-diagnostics` | `6fa6428` |
 | Locked dependency verification | `security/07-reproducible-builds` | `ca9c021` |
 | Security documentation | `security/08-security-documentation` | `a7c871c` |
+| Final history bookkeeping | `security/09-final-history` | `a56d773` |
+| Documentation line-ending cleanup | `security/10-normalize-plan` | `f916635` |
+| Windows reparse-point protection | `security/11-reparse-point-protection` | `8019a7d` |
 
 All implementation branches were merged into local `master` with merge commits before the next branch was created.
