@@ -127,3 +127,33 @@ fn oversized_delimiter_is_usage_error() {
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("BAD_DELIMITER"));
 }
+
+#[test]
+fn preflight_size_check_respects_limit() {
+    let dir = std::env::temp_dir();
+    let path_full = dir.join("combinator_e2e_preflight_full.txt");
+    let path_ltd = dir.join("combinator_e2e_preflight_ltd.txt");
+    let l1 = "a,b,c,d,e,f,g,h,i,j"; // 10
+    let l2 = "0,1,2,3,4,5,6,7,8,9"; // 10 -> 100 combos, each record "xy\n" = 3 bytes => 300 bytes full
+
+    // Full product (300 bytes) exceeds the 100-byte file-size limit.
+    let out_full = bin()
+        .args(["--list", l1, "--list", l2, "-o", path_full.to_str().unwrap(), "--max-file-size", "100"])
+        .output().unwrap();
+    // --limit 20 -> 60 bytes, within the limit.
+    let out_ltd = bin()
+        .args(["--list", l1, "--list", l2, "--limit", "20", "-o", path_ltd.to_str().unwrap(), "--max-file-size", "100"])
+        .output().unwrap();
+
+    let full_code = out_full.status.code();
+    let full_err = String::from_utf8_lossy(&out_full.stderr).into_owned();
+    let ltd_ok = out_ltd.status.success();
+    let ltd_lines = std::fs::read_to_string(&path_ltd).unwrap_or_default().lines().count();
+    std::fs::remove_file(&path_full).ok();
+    std::fs::remove_file(&path_ltd).ok();
+
+    assert_eq!(full_code, Some(1), "unbounded write should hit the file-size limit");
+    assert!(full_err.contains("FILE_SIZE_LIMIT"), "stderr: {full_err}");
+    assert!(ltd_ok, "limited write should pass pre-flight");
+    assert_eq!(ltd_lines, 20);
+}

@@ -8,7 +8,7 @@ use std::io::{BufWriter, Write};
 
 use clap::Parser;
 use combinator_core::{combination_count, combinations, Count, ProductOptions};
-use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeInput};
+use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 
 use cli::{Cli, OutFormat};
 use error::{render, render_warning, AppError};
@@ -88,24 +88,65 @@ fn run(cli: Cli) -> Result<(), AppError> {
     if let Some(path) = &cli.output {
         preflight::check_output_path(path, cli.overwrite)?;
         if !cli.no_preflight {
-            let estimate = if json_out {
-                estimate_jsonl_size(
-                    &SizeInput { lists: &lists, field_sep_bytes: cli.sep.len() as u64, rec_sep_bytes: cli.rec_sep.len() as u64 },
-                    cli.lean_output,
-                )
-            } else {
-                estimate_text_size(&SizeInput {
-                    lists: &lists,
-                    field_sep_bytes: cli.sep.len() as u64,
-                    rec_sep_bytes: cli.rec_sep.len() as u64,
-                })
-            };
+            let estimate = bounded_size_estimate(&cli, &lists, json_out);
             let available = available_space(path);
             preflight::check_capacity(estimate, available, cli.max_file_size)?;
         }
     }
 
     stream(&cli, &lists, json_out)
+}
+
+/// Estimates output size accounting for --offset/--limit, so a bounded write is
+/// not rejected on the size of the full product. Returns a safe upper bound: the
+/// smaller of the full-product estimate and (records_to_write * max_record_bytes),
+/// where max_record_bytes formats the longest item from each list once.
+fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> SizeEstimate {
+    let input = SizeInput {
+        lists,
+        field_sep_bytes: cli.sep.len() as u64,
+        rec_sep_bytes: cli.rec_sep.len() as u64,
+    };
+    let full = if json_out {
+        estimate_jsonl_size(&input, cli.lean_output)
+    } else {
+        estimate_text_size(&input)
+    };
+
+    // How many records will actually be written.
+    let lens: Vec<usize> = lists.iter().map(|l| l.len()).collect();
+    let count: Option<u128> = match combination_count(&lens) {
+        Count::Exact(total) => {
+            let remaining = total.saturating_sub(cli.offset);
+            Some(match cli.limit {
+                Some(l) => remaining.min(l),
+                None => remaining,
+            })
+        }
+        // Unbounded product is only bounded if --limit caps it.
+        Count::Overflow => cli.limit,
+    };
+
+    // Per-record upper bound: format the longest-possible record once.
+    let format = if json_out { Format::Jsonl } else { Format::Text };
+    let bounded: Option<u128> = count.and_then(|c| {
+        let max_items: Vec<&str> = lists
+            .iter()
+            .map(|l| l.iter().map(|s| s.as_str()).max_by_key(|s| s.len()).unwrap_or(""))
+            .collect();
+        let max_index = cli.offset.saturating_add(c.saturating_sub(1));
+        let per_record =
+            format_record(&max_items, max_index, &cli.sep, &cli.rec_sep, format, cli.lean_output)
+                .len() as u128;
+        c.checked_mul(per_record)
+    });
+
+    match (full, bounded) {
+        (SizeEstimate::Bytes(f), Some(b)) => SizeEstimate::Bytes(f.min(b)),
+        (SizeEstimate::Bytes(f), None) => SizeEstimate::Bytes(f),
+        (SizeEstimate::Overflow, Some(b)) => SizeEstimate::Bytes(b),
+        (SizeEstimate::Overflow, None) => SizeEstimate::Overflow,
+    }
 }
 
 fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppError> {
