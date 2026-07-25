@@ -13,7 +13,8 @@ use combinator_core::{
     SizeEstimate, SizeInput,
 };
 use combinator_core::{
-    operation_count, ConcatOptions, Count, Operation, ProductOptions, ZipOptions,
+    operation_count, ConcatOptions, Count, Operation, ProductOptions, Template, TemplateError,
+    ZipOptions,
 };
 
 use cli::{
@@ -22,8 +23,8 @@ use cli::{
     HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{render, render_warning, AppError};
-use input::{InputBudget, InputLimits};
-use output::{format_record, Format};
+use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
+use output::{format_record_with, Format};
 use output_file::OutputFile;
 
 enum OutputWriter<'a> {
@@ -102,6 +103,7 @@ fn concat_operation(args: ConcatArgs) -> (CommonArgs, String, Operation) {
 fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     validate_resource_limits(&common)?;
     input::validate_delims(&sep, &common.rec_sep, &common.list_delim)?;
+    let template = load_template(&common, &sep)?;
 
     if let Operation::Product(product_opts) = &op {
         if product_opts.reverse && product_opts.reverse_fields {
@@ -172,6 +174,12 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         .with("observed", total_items)
         .with("limit", common.max_total_items));
     }
+
+    let empty_template = Template::parse("").expect("empty template is valid");
+    let template_for_validation = template.as_ref().unwrap_or(&empty_template);
+    template_for_validation
+        .validate_fields(&common.names, lists.len())
+        .map_err(template_error)?;
 
     let json_out = matches!(common.format, OutFormat::Jsonl);
 
@@ -244,13 +252,90 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     if let Some(path) = &common.output {
         preflight::check_output_path(path, common.overwrite)?;
         if !common.no_preflight {
-            let estimate = bounded_size_estimate(&common, &sep, &op, &lists, json_out);
+            let estimate =
+                bounded_size_estimate(&common, &sep, &op, &lists, json_out, template.as_ref());
             let available = available_space(path)?;
             preflight::check_capacity(estimate, available, effective_output_limit(&common))?;
         }
     }
 
-    stream(&common, &sep, &op, &lists, json_out)
+    stream(&common, &sep, &op, &lists, json_out, template.as_ref())
+}
+
+fn load_template(common: &CommonArgs, sep: &str) -> Result<Option<Template>, AppError> {
+    if common.template.is_some() && common.template_file.is_some() {
+        return Err(AppError::usage(
+            "TEMPLATE_CONFLICT",
+            "use either --template or --template-file, not both",
+        ));
+    }
+    if (common.template.is_some() || common.template_file.is_some()) && !sep.is_empty() {
+        return Err(AppError::usage(
+            "TEMPLATE_SEPARATOR_CONFLICT",
+            "a template cannot be combined with a non-empty --sep",
+        ));
+    }
+    let max_template_bytes = common.max_input_bytes.min(MAX_TEMPLATE_BYTES);
+    let source = match (&common.template, &common.template_file) {
+        (Some(value), None) => {
+            if value.len() > max_template_bytes {
+                return Err(AppError::usage(
+                    "TEMPLATE_TOO_LARGE",
+                    "template exceeds the configured template byte limit",
+                )
+                .with("observed", value.len())
+                .with("limit", max_template_bytes));
+            }
+            value.clone()
+        }
+        (None, Some(path)) => input::read_template_bounded(path, max_template_bytes)?,
+        (None, None) => return Ok(None),
+        (Some(_), Some(_)) => unreachable!("template source conflict handled above"),
+    };
+    Template::parse(&source).map(Some).map_err(template_error)
+}
+
+fn template_error(error: TemplateError) -> AppError {
+    let (code, message, position) = match error {
+        TemplateError::InvalidSyntax { position } => (
+            "TEMPLATE_INVALID",
+            "template syntax is invalid",
+            Some(position),
+        ),
+        TemplateError::InvalidReference { position } => (
+            "TEMPLATE_INVALID",
+            "template reference is invalid",
+            Some(position),
+        ),
+        TemplateError::InvalidName { position } => (
+            "TEMPLATE_INVALID_NAME",
+            "a field name is invalid",
+            Some(position),
+        ),
+        TemplateError::DuplicateName { position } => (
+            "TEMPLATE_DUPLICATE_NAME",
+            "a field name was supplied more than once",
+            Some(position),
+        ),
+        TemplateError::NameCountMismatch { expected, actual } => {
+            return AppError::usage(
+                "TEMPLATE_NAMES_MISMATCH",
+                "the number of field names must equal the number of input lists",
+            )
+            .with("expected", expected)
+            .with("actual", actual);
+        }
+        TemplateError::UnknownField { position } => (
+            "TEMPLATE_UNKNOWN_FIELD",
+            "template references an unknown field",
+            Some(position),
+        ),
+    };
+    let error = AppError::usage(code, message);
+    match position {
+        Some(position) => error.with("position", position),
+        None => error,
+    }
 }
 
 fn validate_resource_limits(common: &CommonArgs) -> Result<(), AppError> {
@@ -324,13 +409,19 @@ fn bounded_size_estimate(
     op: &Operation,
     lists: &[Vec<String>],
     json_out: bool,
+    template: Option<&Template>,
 ) -> SizeEstimate {
     let input = SizeInput {
         lists,
         field_sep_bytes: sep.len() as u64,
         rec_sep_bytes: common.rec_sep.len() as u64,
     };
-    let full = if json_out {
+    let full = if template.is_some() {
+        // The legacy estimator does not know about template literals or
+        // repeated references. The mode-aware bounded estimate below is the
+        // conservative source of truth for templated records.
+        SizeEstimate::Overflow
+    } else if json_out {
         estimate_jsonl_size(&input, common.lean_output)
     } else {
         estimate_text_size(&input)
@@ -386,14 +477,17 @@ fn bounded_size_estimate(
                 .collect(),
         };
         let max_index = common.offset.saturating_add(c.saturating_sub(1));
-        let per_record = format_record(
+        let per_record = format_record_with(
             &max_items,
             max_index,
             sep,
             &common.rec_sep,
             format,
             common.lean_output,
+            template,
+            &common.names,
         )
+        .expect("template was validated before estimation")
         .len() as u128;
         c.checked_mul(per_record)
     });
@@ -412,6 +506,7 @@ fn stream(
     op: &Operation,
     lists: &[Vec<String>],
     json_out: bool,
+    template: Option<&Template>,
 ) -> Result<(), AppError> {
     let format = if json_out {
         Format::Jsonl
@@ -458,14 +553,17 @@ fn stream(
     macro_rules! emit {
         ($items:expr) => {{
             let items = $items;
-            let record = format_record(
+            let record = format_record_with(
                 &items,
                 index,
                 sep,
                 &common.rec_sep,
                 format,
                 common.lean_output,
-            );
+                template,
+                &common.names,
+            )
+            .map_err(template_error)?;
             let record_bytes = u64::try_from(record.len()).map_err(|_| {
                 AppError::runtime(
                     "OUTPUT_LIMIT_EXCEEDED",

@@ -5,6 +5,7 @@ use std::io::Read;
 use crate::error::AppError;
 
 pub const MAX_DELIM_BYTES: usize = 4096;
+pub const MAX_TEMPLATE_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct InputLimits {
@@ -142,6 +143,44 @@ pub fn read_file_list_bounded(
             .with("path", path)
     })?;
     read_bounded(file, path, limits, budget)
+}
+
+/// Reads a UTF-8 template file without retaining more than `max_bytes + 1`
+/// bytes, so an oversized template is rejected before it can grow memory.
+pub fn read_template_bounded(path: &str, max_bytes: usize) -> Result<String, AppError> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        AppError::usage(
+            "TEMPLATE_FILE_UNREADABLE",
+            format!("could not read template file: {e}"),
+        )
+        .with("path", path)
+    })?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| {
+            AppError::usage(
+                "TEMPLATE_FILE_UNREADABLE",
+                format!("could not read template file: {e}"),
+            )
+            .with("path", path)
+        })?;
+    if bytes.len() > max_bytes {
+        return Err(AppError::usage(
+            "TEMPLATE_TOO_LARGE",
+            "template exceeds the configured template byte limit",
+        )
+        .with("observed", bytes.len())
+        .with("limit", max_bytes)
+        .with("path", path));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        AppError::usage(
+            "TEMPLATE_FILE_UNREADABLE",
+            "template file is not valid UTF-8",
+        )
+        .with("path", path)
+    })
 }
 
 fn read_bounded<R: Read>(

@@ -52,6 +52,18 @@ pub struct CommonArgs {
     #[arg(long)]
     pub file: Vec<String>,
 
+    /// Literal template for rendering each output value.
+    #[arg(long)]
+    pub template: Option<String>,
+
+    /// UTF-8 file containing the output template.
+    #[arg(long = "template-file")]
+    pub template_file: Option<String>,
+
+    /// Field name aligned with each input list; repeat once per list.
+    #[arg(long = "name")]
+    pub names: Vec<String>,
+
     /// Record separator between combinations (text mode only).
     #[arg(long = "rec-sep", default_value = "\n")]
     pub rec_sep: String,

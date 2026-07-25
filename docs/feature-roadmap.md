@@ -34,7 +34,7 @@ The central design principles are:
 |---|---|---|---|
 | F1 | Explicit operation modes: product, zip, concat, join | Everyone; removes semantic ambiguity | P0 |
 | F2 | Robust input and output formats: CSV, TSV, NUL, escaped inline data | Admins and data pipelines | P0 |
-| F3 | Templates and field-aware output | Automation, URLs, configs, test generation | P0 |
+| F3 | Templates and field-aware output | Automation, URLs, configs, test generation | P0 — implemented |
 | F4 | Deterministic sharding and resumable work | Batch and distributed jobs | P1 |
 | F5 | Dry-run, explain, and operational summaries | Admins and deployment systems | P1 |
 | F6 | Pipeline ergonomics and process integration | Shell and subprocess callers | P1 |
@@ -507,4 +507,3 @@ A feature is not complete when the happy-path code works. It must also have:
 - compatibility tests for existing invocations
 - benchmark evidence where performance is a stated goal
 - security review of paths, parsing, output replacement, and diagnostics
-
