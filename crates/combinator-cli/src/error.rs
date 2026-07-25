@@ -10,11 +10,21 @@ pub struct AppError {
 
 impl AppError {
     pub fn usage(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), context: Vec::new(), exit: 2 }
+        Self {
+            code,
+            message: message.into(),
+            context: Vec::new(),
+            exit: 2,
+        }
     }
 
     pub fn runtime(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), context: Vec::new(), exit: 1 }
+        Self {
+            code,
+            message: message.into(),
+            context: Vec::new(),
+            exit: 1,
+        }
     }
 
     pub fn with(mut self, key: &str, value: impl ToString) -> Self {
@@ -56,7 +66,11 @@ fn render_line(code: &str, message: &str, context: &[(String, String)], json: bo
             .map(|(k, v)| format!("{}={}", escape_text(k), escape_text(v)))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("error[{}]: {} ({ctx})", escape_text(code), escape_text(message))
+        format!(
+            "error[{}]: {} ({ctx})",
+            escape_text(code),
+            escape_text(message)
+        )
     }
 }
 
@@ -115,10 +129,13 @@ mod tests {
 
     #[test]
     fn text_render_escapes_control_characters() {
-        let e = AppError::runtime("WRITE_FAILED", "bad\npath\u{1b}[31m")
-            .with("path", "line\r\nnext");
+        let e =
+            AppError::runtime("WRITE_FAILED", "bad\npath\u{1b}[31m").with("path", "line\r\nnext");
         let rendered = render(&e, false);
-        assert_eq!(rendered, r"error[WRITE_FAILED]: bad\npath\u{001b}[31m (path=line\r\nnext)");
+        assert_eq!(
+            rendered,
+            r"error[WRITE_FAILED]: bad\npath\u{001b}[31m (path=line\r\nnext)"
+        );
         assert!(!rendered.contains('\n'));
     }
 }

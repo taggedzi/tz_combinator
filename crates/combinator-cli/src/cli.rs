@@ -145,7 +145,15 @@ mod tests {
 
     #[test]
     fn parses_repeated_lists_and_files() {
-        let cli = Cli::parse_from(["combinator", "--list", "a", "--list", "b", "--file", "f.txt"]);
+        let cli = Cli::parse_from([
+            "combinator",
+            "--list",
+            "a",
+            "--list",
+            "b",
+            "--file",
+            "f.txt",
+        ]);
         assert_eq!(cli.list, vec!["a", "b"]);
         assert_eq!(cli.file, vec!["f.txt"]);
     }

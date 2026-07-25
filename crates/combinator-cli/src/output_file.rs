@@ -44,7 +44,9 @@ impl OutputFile {
     }
 
     pub fn file_mut(&mut self) -> &mut File {
-        self.file.as_mut().expect("output file remains open until commit")
+        self.file
+            .as_mut()
+            .expect("output file remains open until commit")
     }
 
     /// Commits the completed output. A staged overwrite is replaced atomically.
@@ -72,8 +74,10 @@ impl OutputFile {
                 } else {
                     "WRITE_FAILED"
                 };
-                return Err(AppError::runtime(code, format!("could not commit output file: {e}"))
-                    .with("path", self.destination.display()));
+                return Err(
+                    AppError::runtime(code, format!("could not commit output file: {e}"))
+                        .with("path", self.destination.display()),
+                );
             }
         }
         self.committed = true;
@@ -117,7 +121,11 @@ fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> 
     for _ in 0..32 {
         let suffix = random_suffix()?;
         let candidate = parent.join(format!(".{name}.combinator-{suffix}.tmp"));
-        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
             Ok(file) => return Ok((candidate, file)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => {
@@ -146,7 +154,10 @@ fn link_new_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
 fn random_suffix() -> Result<String, AppError> {
     let mut bytes = [0u8; 16];
     fill_random(&mut bytes).map_err(|e| {
-        AppError::runtime("WRITE_FAILED", format!("could not generate a secure temporary filename: {e}"))
+        AppError::runtime(
+            "WRITE_FAILED",
+            format!("could not generate a secure temporary filename: {e}"),
+        )
     })?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
@@ -193,7 +204,11 @@ fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     };
 
     let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
-    let target: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
     // SAFETY: both buffers are NUL-terminated UTF-16 paths that remain alive
     // for the duration of the OS call; the flags request replacement and flush.
     let ok = unsafe {

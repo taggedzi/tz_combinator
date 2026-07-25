@@ -103,7 +103,11 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
     // Per-record fixed structural bytes.
     // lean:      {"i":<idx>,"value":"<value>"}\n  -> `{"i":`(5) + `,"value":"`(10) + `"}`(2) + `\n`(1) = 18
     // non-lean:  ... + `,"fields":[`(11) + `]`(1) = 12 more, plus 2 quotes + (k-1) commas per record
-    let per_record: u128 = if lean { 18 + index_digits } else { 30 + index_digits };
+    let per_record: u128 = if lean {
+        18 + index_digits
+    } else {
+        30 + index_digits
+    };
 
     // Variable (content) bytes. The `value` string appears once (item bytes +
     // field separators). Non-lean repeats item bytes inside `fields`, wrapped in
@@ -178,23 +182,41 @@ mod tests {
         // 4 combos. item bytes: list0 sum 3 * others 2 = 6; list1 sum 2 * others 2 = 4 -> 10.
         // separators: field_sep 1 byte * (k-1)=1 + rec_sep 1 byte = 2 per record * 4 = 8.
         // total = 18.
-        let input = SizeInput { lists: &lists(), field_sep_bytes: 1, rec_sep_bytes: 1 };
+        let input = SizeInput {
+            lists: &lists(),
+            field_sep_bytes: 1,
+            rec_sep_bytes: 1,
+        };
         assert_eq!(estimate_text_size(&input), SizeEstimate::Bytes(18));
     }
 
     #[test]
     fn text_size_empty_list_is_zero() {
         let lists = vec![vec!["a".to_string()], Vec::<String>::new()];
-        let input = SizeInput { lists: &lists, field_sep_bytes: 1, rec_sep_bytes: 1 };
+        let input = SizeInput {
+            lists: &lists,
+            field_sep_bytes: 1,
+            rec_sep_bytes: 1,
+        };
         assert_eq!(estimate_text_size(&input), SizeEstimate::Bytes(0));
     }
 
     #[test]
     fn jsonl_size_is_at_least_text_size() {
         let ls = lists();
-        let input = SizeInput { lists: &ls, field_sep_bytes: 1, rec_sep_bytes: 1 };
-        let text = match estimate_text_size(&input) { SizeEstimate::Bytes(b) => b, _ => panic!() };
-        let json = match estimate_jsonl_size(&input, false) { SizeEstimate::Bytes(b) => b, _ => panic!() };
+        let input = SizeInput {
+            lists: &ls,
+            field_sep_bytes: 1,
+            rec_sep_bytes: 1,
+        };
+        let text = match estimate_text_size(&input) {
+            SizeEstimate::Bytes(b) => b,
+            _ => panic!(),
+        };
+        let json = match estimate_jsonl_size(&input, false) {
+            SizeEstimate::Bytes(b) => b,
+            _ => panic!(),
+        };
         assert!(json >= text, "jsonl {json} should be >= text {text}");
     }
 
@@ -205,30 +227,51 @@ mod tests {
             vec!["a".to_string(), "b".to_string()],
             (1..=5).map(|n| n.to_string()).collect::<Vec<_>>(),
         ];
-        let input = SizeInput { lists: &lists, field_sep_bytes: 1000, rec_sep_bytes: 1 };
-        let text = match estimate_text_size(&input) { SizeEstimate::Bytes(b) => b, _ => panic!() };
-        let json = match estimate_jsonl_size(&input, false) { SizeEstimate::Bytes(b) => b, _ => panic!() };
+        let input = SizeInput {
+            lists: &lists,
+            field_sep_bytes: 1000,
+            rec_sep_bytes: 1,
+        };
+        let text = match estimate_text_size(&input) {
+            SizeEstimate::Bytes(b) => b,
+            _ => panic!(),
+        };
+        let json = match estimate_jsonl_size(&input, false) {
+            SizeEstimate::Bytes(b) => b,
+            _ => panic!(),
+        };
         assert!(json >= text, "jsonl {json} must be >= text {text}");
     }
 
     #[test]
     fn jsonl_upper_bound_accounts_for_escaping() {
         let lists = vec![vec!["\"\\\n".to_string()]];
-        let input = SizeInput { lists: &lists, field_sep_bytes: 0, rec_sep_bytes: 1 };
+        let input = SizeInput {
+            lists: &lists,
+            field_sep_bytes: 0,
+            rec_sep_bytes: 1,
+        };
         let estimated = match estimate_jsonl_size(&input, false) {
             SizeEstimate::Bytes(b) => b,
             SizeEstimate::Overflow => panic!(),
         };
         let escaped = serde_json::to_string(&lists[0][0]).unwrap();
         let actual = format!(r#"{{"i":0,"value":{escaped},"fields":[{escaped}]}}\n"#).len() as u128;
-        assert!(estimated >= actual, "estimate {estimated} below actual {actual}");
+        assert!(
+            estimated >= actual,
+            "estimate {estimated} below actual {actual}"
+        );
     }
 
     #[test]
     fn overflow_propagates() {
         let lens = vec!["x".to_string(); 2];
         let big = vec![lens; 40]; // 2^40 combos, huge byte total overflow-prone via multiply chain
-        let input = SizeInput { lists: &big, field_sep_bytes: 1, rec_sep_bytes: 1 };
+        let input = SizeInput {
+            lists: &big,
+            field_sep_bytes: 1,
+            rec_sep_bytes: 1,
+        };
         // 2^40 combos * bytes stays within u128, so assert it is Bytes not panic:
         assert!(matches!(estimate_text_size(&input), SizeEstimate::Bytes(_)));
     }

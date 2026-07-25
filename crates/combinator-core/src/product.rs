@@ -151,7 +151,10 @@ mod tests {
 
     #[test]
     fn reverse_order_leftmost_fastest() {
-        let opts = ProductOptions { reverse_fields: true, ..Default::default() };
+        let opts = ProductOptions {
+            reverse_fields: true,
+            ..Default::default()
+        };
         assert_eq!(
             collect(opts),
             vec![vec![0, 0], vec![1, 0], vec![0, 1], vec![1, 1]]
@@ -160,7 +163,10 @@ mod tests {
 
     #[test]
     fn reverse_order_reverses_complete_product() {
-        let opts = ProductOptions { reverse: true, ..Default::default() };
+        let opts = ProductOptions {
+            reverse: true,
+            ..Default::default()
+        };
         assert_eq!(
             collect(opts),
             vec![vec![1, 1], vec![1, 0], vec![0, 1], vec![0, 0]]
@@ -169,43 +175,66 @@ mod tests {
 
     #[test]
     fn reverse_offset_and_limit_paginate_from_end() {
-        let opts = ProductOptions { reverse: true, offset: 1, limit: Some(2), ..Default::default() };
+        let opts = ProductOptions {
+            reverse: true,
+            offset: 1,
+            limit: Some(2),
+            ..Default::default()
+        };
         assert_eq!(collect(opts), vec![vec![1, 0], vec![0, 1]]);
     }
 
     #[test]
     fn offset_skips_leading_combinations() {
-        let opts = ProductOptions { offset: 2, ..Default::default() };
+        let opts = ProductOptions {
+            offset: 2,
+            ..Default::default()
+        };
         assert_eq!(collect(opts), vec![vec![1, 0], vec![1, 1]]);
     }
 
     #[test]
     fn limit_caps_output() {
-        let opts = ProductOptions { limit: Some(1), ..Default::default() };
+        let opts = ProductOptions {
+            limit: Some(1),
+            ..Default::default()
+        };
         assert_eq!(collect(opts), vec![vec![0, 0]]);
     }
 
     #[test]
     fn offset_and_limit_paginate() {
-        let opts = ProductOptions { offset: 1, limit: Some(2), ..Default::default() };
+        let opts = ProductOptions {
+            offset: 1,
+            limit: Some(2),
+            ..Default::default()
+        };
         assert_eq!(collect(opts), vec![vec![0, 1], vec![1, 0]]);
     }
 
     #[test]
     fn offset_past_end_yields_nothing() {
-        let opts = ProductOptions { offset: 99, ..Default::default() };
+        let opts = ProductOptions {
+            offset: 99,
+            ..Default::default()
+        };
         assert!(collect(opts).is_empty());
     }
 
     #[test]
     fn empty_list_yields_nothing() {
         let lists = vec![vec!["a".to_string()], Vec::<String>::new()];
-        assert!(combinations(&lists, ProductOptions::default()).next().is_none());
+        assert!(combinations(&lists, ProductOptions::default())
+            .next()
+            .is_none());
     }
 
     #[test]
     fn limit_zero_yields_nothing() {
-        let opts = ProductOptions { limit: Some(0), ..Default::default() };
+        let opts = ProductOptions {
+            limit: Some(0),
+            ..Default::default()
+        };
         assert!(collect(opts).is_empty());
     }
 }

@@ -13,10 +13,15 @@ fn malformed_inputs_never_panic() {
         vec!["--file", "/nonexistent/path/nope.txt"],
         vec!["--list", "a,b", "--offset", "999999999999"],
         vec!["--list", "a,b", "--limit", "0"],
-        vec!["--list", ""],                       // single empty item, not empty list
+        vec!["--list", ""], // single empty item, not empty list
         vec!["--list", "a,b", "--list-delim", ""],
         vec!["--list", "a", "--sep", &long_sep],
-        vec!["--list", "a,b", "--offset", "340282366920938463463374607431768211455"],
+        vec![
+            "--list",
+            "a,b",
+            "--offset",
+            "340282366920938463463374607431768211455",
+        ],
     ];
     for args in cases {
         let out = bin().args(&args).output().unwrap();
