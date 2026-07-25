@@ -78,6 +78,9 @@ CI must additionally run the pinned dependency audit. The final master worktree 
 | Secure temporary names | `security/16-secure-temp-names` | `0ffdbbf` |
 | Pinned CI supply chain | `security/17-pinned-ci-supply-chain` | `9e8fbf9` |
 | Identity-safe cleanup | `security/18-identity-safe-cleanup` | `5ec7fa0` |
-| Follow-up documentation | `security/19-followup-documentation` | pending |
+| Follow-up documentation | `security/19-followup-documentation` | `74600a7` |
+| Follow-up formatting | `security/20-format-followup-changes` | `cc5ac0c` |
+
+The follow-up documentation and formatting branches were merged after all implementation branches and final verification passed.
 
 All five follow-up implementation branches were merged into local `master` in sequence before the next implementation branch was created.
