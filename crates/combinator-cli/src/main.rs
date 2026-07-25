@@ -2,6 +2,7 @@ mod cli;
 mod error;
 mod input;
 mod output;
+mod output_file;
 mod preflight;
 
 use std::io::{BufWriter, Write};
@@ -13,6 +14,28 @@ use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, Siz
 use cli::{Cli, OutFormat};
 use error::{render, render_warning, AppError};
 use output::{format_record, Format};
+use output_file::OutputFile;
+
+enum OutputWriter<'a> {
+    File(&'a mut std::fs::File),
+    Stdout(std::io::Stdout),
+}
+
+impl Write for OutputWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::File(file) => file.write(buf),
+            Self::Stdout(stdout) => stdout.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::File(file) => file.flush(),
+            Self::Stdout(stdout) => stdout.flush(),
+        }
+    }
+}
 
 fn main() {
     let cli = Cli::parse();
@@ -165,13 +188,14 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
     };
     let format = if json_out { Format::Jsonl } else { Format::Text };
 
-    let mut writer: BufWriter<Box<dyn Write>> = if let Some(path) = &cli.output {
-        let file = std::fs::File::create(path).map_err(|e| {
-            AppError::runtime("WRITE_FAILED", format!("could not create output file: {e}")).with("path", path)
-        })?;
-        BufWriter::new(Box::new(file))
-    } else {
-        BufWriter::new(Box::new(std::io::stdout()))
+    let mut output_file = cli
+        .output
+        .as_deref()
+        .map(|path| OutputFile::open(path, cli.overwrite))
+        .transpose()?;
+    let mut writer = match output_file.as_mut() {
+        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
+        None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
 
     let mut index: u128 = cli.offset;
@@ -186,6 +210,10 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
         index = index.saturating_add(1);
     }
     writer.flush().map_err(write_err)?;
+    drop(writer);
+    if let Some(file) = output_file {
+        file.commit()?;
+    }
     Ok(())
 }
 
