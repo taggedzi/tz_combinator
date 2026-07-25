@@ -158,7 +158,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
         preflight::check_output_path(path, cli.overwrite)?;
         if !cli.no_preflight {
             let estimate = bounded_size_estimate(&cli, &lists, json_out);
-            let available = available_space(path);
+            let available = available_space(path)?;
             preflight::check_capacity(
                 estimate,
                 available,
@@ -303,11 +303,14 @@ fn write_err(e: std::io::Error) -> AppError {
     AppError::runtime("WRITE_FAILED", format!("failed writing output: {e}"))
 }
 
-fn available_space(path: &str) -> u64 {
+fn available_space(path: &str) -> Result<u64, AppError> {
     let dir = std::path::Path::new(path)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    fs2::available_space(&dir).unwrap_or(u64::MAX)
+    fs2::available_space(&dir).map_err(|e| {
+        AppError::runtime("CAPACITY_UNKNOWN", format!("could not determine available disk space: {e}"))
+            .with("path", dir.display())
+    })
 }
