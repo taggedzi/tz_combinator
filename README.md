@@ -100,6 +100,54 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
 
+## Operation modes
+
+`combinator` supports three operations. The bare invocation with no
+subcommand — everything shown above — means `product`, and behaves
+identically to `combinator product ...`:
+
+```
+combinator [OPTIONS]           # product (default)
+combinator product [OPTIONS]   # same as above, explicit
+combinator zip [OPTIONS]       # positional pairing
+combinator concat [OPTIONS]    # sequential concatenation
+```
+
+- **`product`** — the ordered Cartesian product described throughout this
+  document: one item from each list per combination.
+- **`zip`** — pairs lists positionally: item 0 from every list, then item 1,
+  and so on. Requires a policy for unequal-length lists via
+  `--on-unequal <error|truncate|cycle>` (default `error`, which refuses to
+  silently drop data): `truncate` stops at the shortest list's length,
+  `cycle` wraps shorter lists to match the longest.
+
+  ```
+  $ combinator zip --list "a,b,c" --list "x,y" --sep "-" --on-unequal cycle
+  a-x
+  b-y
+  c-x
+  ```
+- **`concat`** — emits every item from list 1, then every item from list 2,
+  and so on, preserving order. Each output record has exactly one field, so
+  `concat` has **no `--sep` flag** (there is nothing to join within a
+  record); passing `--sep` to `concat` is a usage error.
+
+  ```
+  $ combinator concat --list "a,b" --list "x,y,z"
+  a
+  b
+  x
+  y
+  z
+  ```
+
+Flags that only make sense for one mode are rejected at parse time (exit 2)
+under the others: `--reverse-fields` only exists under `product`,
+`--on-unequal` only exists under `zip`, and `--sep` does not exist under
+`concat`. `--reverse`, `--offset`, `--limit`, `--count-only`, and every
+output/format/resource-limit flag in the table above apply to all three
+modes.
+
 ## Output formats
 
 ### Text (default)
@@ -249,6 +297,7 @@ zero combinations).
 | `TOO_MANY_ITEMS` | 1 | A list or the combined inputs exceed an item-count limit. |
 | `TOO_MANY_LISTS` | 1 | The invocation exceeds the maximum list count. |
 | `COMBINATION_LIMIT_EXCEEDED` | 1 | Generation would exceed the configured combination limit. |
+| `ZIP_LENGTH_MISMATCH` | 1 | `zip` with `--on-unequal error` (the default) and input lists of different lengths. |
 | `OUTPUT_LIMIT_EXCEEDED` | 1 | The generated output would exceed the configured byte limit. |
 | `CAPACITY_UNKNOWN` | 1 | Available disk capacity could not be determined during pre-flight. |
 | `UNSAFE_OUTPUT_PATH` | 1 | The output path is a symbolic link or otherwise unsafe to overwrite. |
