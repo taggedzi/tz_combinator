@@ -158,6 +158,6 @@ The plan was implemented sequentially, with each item developed and merged from 
 | Fail-closed capacity checks | `security/05-fail-closed-capacity` | `b4c879e` |
 | Escaped diagnostics | `security/06-escape-diagnostics` | `6fa6428` |
 | Locked dependency verification | `security/07-reproducible-builds` | `ca9c021` |
-| Security documentation | `security/08-security-documentation` | pending |
+| Security documentation | `security/08-security-documentation` | `a7c871c` |
 
 All implementation branches were merged into local `master` with merge commits before the next branch was created.
