@@ -112,6 +112,14 @@ pub struct CommonArgs {
     #[arg(long)]
     pub limit: Option<u128>,
 
+    /// Zero-based contiguous shard number.
+    #[arg(long = "shard-index", requires = "shard_count")]
+    pub shard_index: Option<u128>,
+
+    /// Total number of contiguous shards.
+    #[arg(long = "shard-count", requires = "shard_index")]
+    pub shard_count: Option<u128>,
+
     /// Print only the total count, generating nothing.
     #[arg(long = "count-only")]
     pub count_only: bool,
