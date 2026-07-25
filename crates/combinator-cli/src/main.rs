@@ -1,5 +1,6 @@
 mod error;
 mod input;
+mod output;
 mod preflight;
 
 fn main() {
