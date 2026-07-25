@@ -121,7 +121,8 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
         BufWriter::new(Box::new(std::io::stdout()))
     };
 
-    for (index, indices) in (cli.offset..).zip(combinations(lists, opts)) {
+    let mut index: u128 = cli.offset;
+    for indices in combinations(lists, opts) {
         let items: Vec<&str> = indices
             .iter()
             .enumerate()
@@ -129,6 +130,7 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
             .collect();
         let record = format_record(&items, index, &cli.sep, &cli.rec_sep, format, cli.lean_output);
         writer.write_all(record.as_bytes()).map_err(write_err)?;
+        index = index.saturating_add(1);
     }
     writer.flush().map_err(write_err)?;
     Ok(())
