@@ -12,6 +12,7 @@ pub struct OutputFile {
     file: Option<File>,
     destination: PathBuf,
     temporary: Option<PathBuf>,
+    overwrite: bool,
     committed: bool,
 }
 
@@ -20,35 +21,15 @@ impl OutputFile {
     /// sibling temporary file for atomic replacement.
     pub fn open(path: &str, overwrite: bool) -> Result<Self, AppError> {
         let destination = PathBuf::from(path);
-        if !overwrite {
-            let file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&destination)
-                .map_err(|e| {
-                    let code = if e.kind() == std::io::ErrorKind::AlreadyExists {
-                        "OUTPUT_EXISTS"
-                    } else {
-                        "WRITE_FAILED"
-                    };
-                    AppError::runtime(code, format!("could not create output file: {e}"))
-                        .with("path", path)
-                })?;
-            return Ok(Self {
-                file: Some(file),
-                destination,
-                temporary: None,
-                committed: false,
-            });
-        }
-
-        if let Ok(metadata) = fs::symlink_metadata(&destination) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to overwrite a symbolic link or reparse point",
-                )
-                .with("path", path));
+        if overwrite {
+            if let Ok(metadata) = fs::symlink_metadata(&destination) {
+                if is_unsafe_target(&metadata) {
+                    return Err(AppError::runtime(
+                        "UNSAFE_OUTPUT_PATH",
+                        "refusing to overwrite a symbolic link or reparse point",
+                    )
+                    .with("path", path));
+                }
             }
         }
 
@@ -57,6 +38,7 @@ impl OutputFile {
             file: Some(file),
             destination,
             temporary: Some(temporary),
+            overwrite,
             committed: false,
         })
     }
@@ -77,13 +59,21 @@ impl OutputFile {
             })?;
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
-            if let Err(e) = replace_file(&temporary, &self.destination) {
+            let result = if self.overwrite {
+                replace_file(&temporary, &self.destination)
+            } else {
+                link_new_file(&temporary, &self.destination)
+            };
+            if let Err(e) = result {
                 let _ = fs::remove_file(&temporary);
                 self.committed = true;
-                return Err(
-                    AppError::runtime("WRITE_FAILED", format!("could not commit output file: {e}"))
-                        .with("path", self.destination.display()),
-                );
+                let code = if !self.overwrite && e.kind() == std::io::ErrorKind::AlreadyExists {
+                    "OUTPUT_EXISTS"
+                } else {
+                    "WRITE_FAILED"
+                };
+                return Err(AppError::runtime(code, format!("could not commit output file: {e}"))
+                    .with("path", self.destination.display()));
             }
         }
         self.committed = true;
@@ -113,8 +103,6 @@ impl Drop for OutputFile {
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
             let _ = fs::remove_file(temporary);
-        } else {
-            let _ = fs::remove_file(&self.destination);
         }
     }
 }
@@ -147,6 +135,12 @@ fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> 
         "could not choose a unique temporary output filename",
     )
     .with("path", destination.display()))
+}
+
+fn link_new_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::hard_link(temporary, destination)?;
+    let _ = fs::remove_file(temporary);
+    Ok(())
 }
 
 fn random_suffix() -> Result<String, AppError> {
