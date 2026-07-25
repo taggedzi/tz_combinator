@@ -7,7 +7,7 @@ mod preflight;
 
 use std::io::{BufWriter, Write};
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use combinator_core::{
     combinations, concat_records, estimate_jsonl_size, estimate_text_size, zip_records,
     SizeEstimate, SizeInput,
@@ -32,6 +32,8 @@ enum OutputWriter<'a> {
     Stdout(std::io::Stdout),
 }
 
+type Warning = (&'static str, &'static str, Vec<(String, String)>);
+
 impl Write for OutputWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
@@ -50,6 +52,25 @@ impl Write for OutputWriter<'_> {
 
 fn main() {
     let cli = Cli::parse();
+    if let Some(mode) = cli.command.as_ref() {
+        match mode {
+            Mode::Completions { shell } => {
+                if let Err(e) = generate_completions(*shell) {
+                    eprintln!("{}", render(&e, false));
+                    std::process::exit(e.exit);
+                }
+                return;
+            }
+            Mode::Man => {
+                if let Err(e) = generate_man_page() {
+                    eprintln!("{}", render(&e, false));
+                    std::process::exit(e.exit);
+                }
+                return;
+            }
+            Mode::Product(_) | Mode::Zip(_) | Mode::Concat(_) => {}
+        }
+    }
     let (common, sep, op) = resolve(cli);
     let json_errors = matches!(common.format, OutFormat::Jsonl | OutFormat::Json);
     if let Err(e) = run(common, sep, op) {
@@ -67,6 +88,7 @@ fn resolve(cli: Cli) -> (CommonArgs, String, Operation) {
         Some(Mode::Product(args)) => product_operation(args),
         Some(Mode::Zip(args)) => zip_operation(args),
         Some(Mode::Concat(args)) => concat_operation(args),
+        Some(Mode::Completions { .. } | Mode::Man) => unreachable!("handled in main"),
         None => product_operation(cli.product),
     }
 }
@@ -195,24 +217,23 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
 
     let json_out = matches!(common.format, OutFormat::Jsonl);
 
-    // Warn on any empty list (result will be empty, exit 0).
+    // Collect warnings until all validation and preflight checks have passed.
+    // This prevents a warning from appearing before a later fatal diagnostic.
+    let mut warnings: Vec<Warning> = Vec::new();
     for (i, l) in lists.iter().enumerate() {
         if l.is_empty() {
-            eprintln!(
-                "{}",
-                render_warning(
-                    "EMPTY_LIST",
-                    "a list is empty; zero combinations will be produced",
-                    &[("list_index".to_string(), i.to_string())],
-                    json_out,
-                )
-            );
+            warnings.push((
+                "EMPTY_LIST",
+                "a list is empty; zero combinations will be produced",
+                vec![("list_index".to_string(), i.to_string())],
+            ));
         }
     }
 
     if common.count_only {
         match operation_count(&op, &lists) {
             Ok(Count::Exact(n)) => {
+                emit_warnings(&common, &warnings, json_out)?;
                 println!("{n}");
                 return Ok(());
             }
@@ -261,6 +282,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     }
 
     if common.explain || common.dry_run {
+        emit_warnings(&common, &warnings, json_out)?;
         let estimate = bounded_size_estimate(
             &common,
             &sep,
@@ -283,7 +305,22 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         }
     }
 
+    emit_warnings(&common, &warnings, json_out)?;
     stream(&common, &sep, &op, &lists, json_out, template.as_ref())
+}
+
+fn emit_warnings(common: &CommonArgs, warnings: &[Warning], json: bool) -> Result<(), AppError> {
+    if let Some(&(code, message, ref context)) = warnings.first() {
+        if common.warnings_as_errors {
+            return Err(AppError::runtime(code, message).with_context(context));
+        }
+    }
+    if !common.quiet {
+        for (code, message, context) in warnings {
+            eprintln!("{}", render_warning(code, message, context, json));
+        }
+    }
+    Ok(())
 }
 
 fn explain(
@@ -657,6 +694,7 @@ fn stream(
     let mut index: u128 = common.offset;
     let output_limit = effective_output_limit(common);
     let mut written: u64 = 0;
+    let mut emitted: u128 = 0;
 
     enum Records {
         Multi(Box<dyn Iterator<Item = Vec<usize>>>),
@@ -715,8 +753,15 @@ fn stream(
                 }
                 written = next;
             }
-            writer.write_all(record.as_bytes()).map_err(write_err)?;
+            match writer.write_all(record.as_bytes()) {
+                Ok(()) => {}
+                Err(e) if common.output.is_none() && e.kind() == std::io::ErrorKind::BrokenPipe => {
+                    return Ok(())
+                }
+                Err(e) => return Err(write_err(e)),
+            }
             index = index.saturating_add(1);
+            emitted = emitted.saturating_add(1);
         }};
     }
 
@@ -738,12 +783,50 @@ fn stream(
             }
         }
     }
-    writer.flush().map_err(write_err)?;
+    match writer.flush() {
+        Ok(()) => {}
+        Err(e) if common.output.is_none() && e.kind() == std::io::ErrorKind::BrokenPipe => {
+            return Ok(())
+        }
+        Err(e) => return Err(write_err(e)),
+    }
     drop(writer);
     if let Some(file) = output_file {
         file.commit()?;
     }
+    if common.summary {
+        let _ = writeln!(
+            std::io::stderr(),
+            "summary[OUTPUT]: records={emitted}, bytes={written}"
+        );
+    }
     Ok(())
+}
+
+fn generate_completions(shell: clap_complete::Shell) -> Result<(), AppError> {
+    let mut command = Cli::command();
+    let mut output = Vec::new();
+    clap_complete::generate(shell, &mut command, "combinator", &mut output);
+    write_auxiliary_stdout(&output)
+}
+
+fn generate_man_page() -> Result<(), AppError> {
+    let command = Cli::command();
+    let man = clap_mangen::Man::new(command);
+    let mut output = Vec::new();
+    man.render(&mut output).map_err(|e| {
+        AppError::runtime("WRITE_FAILED", format!("failed generating man page: {e}"))
+    })?;
+    write_auxiliary_stdout(&output)
+}
+
+fn write_auxiliary_stdout(output: &[u8]) -> Result<(), AppError> {
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_all(output) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(write_err(e)),
+    }
 }
 
 fn effective_output_limit(common: &CommonArgs) -> Option<u64> {

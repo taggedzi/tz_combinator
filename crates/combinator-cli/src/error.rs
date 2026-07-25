@@ -31,6 +31,11 @@ impl AppError {
         self.context.push((key.to_string(), value.to_string()));
         self
     }
+
+    pub fn with_context(mut self, context: &[(String, String)]) -> Self {
+        self.context.extend(context.iter().cloned());
+        self
+    }
 }
 
 /// Renders a diagnostic as a single stderr line.

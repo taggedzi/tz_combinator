@@ -102,8 +102,16 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--max-total-items <N>` | `5000000` | Maximum total items across all lists. |
 | `--max-combinations <N>` | `10000000` | Maximum combinations generated unless `--count-only` is used. |
 | `--no-preflight` | off | Skip pre-flight validation for file output. Runtime output limits still apply. |
+| `--quiet` | off | Suppress non-fatal warnings; fatal diagnostics are unaffected. |
+| `--warnings-as-errors` | off | Convert the first non-fatal warning into a runtime error. Takes precedence over `--quiet`. |
+| `--summary` | off | Print `records` and `bytes` to stderr after successful generated output. |
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
+
+The `completions <shell>` subcommand generates a completion script for
+`bash`, `elvish`, `fish`, `powershell`, or `zsh`. The `man` subcommand writes
+the generated roff manual page to stdout. Both are derived from the CLI
+definition and keep stdout free of diagnostics.
 
 ## Operation modes
 
@@ -323,7 +331,8 @@ has constrained them to an approved directory.
 - **stdout** carries only generated data: combination records (text or
   jsonl), or the single number printed by `--count-only`. Nothing else is
   ever written there.
-- **stderr** carries all diagnostics: errors and the `EMPTY_LIST` warning.
+- **stderr** carries all diagnostics: errors, warnings, and optional
+  `--summary` output.
   Each diagnostic is one line. When `--format jsonl` is in effect, error
   lines are also JSON, with an `error` object containing `code`, `context`,
   and `message` fields (key order is not part of the contract — parse by
@@ -341,7 +350,8 @@ errors (bad arguments/input) exit **2**; runtime errors (I/O, capacity, and
 similar failures encountered while executing an otherwise-valid command) exit
 **1**. `EMPTY_LIST` is the sole non-fatal warning: it is written to stderr but
 does not change the exit code (the run still exits **0**, having produced
-zero combinations).
+zero combinations). `--quiet` suppresses it; `--warnings-as-errors` reports it
+as a runtime error with exit **1**.
 
 | Code | Exit | Meaning |
 |---|---|---|
@@ -415,8 +425,8 @@ etc.):
    with `--format jsonl` and parse each line as a JSON object
    (`{"i": <index>, "value": <string>, "fields": [<string>, ...]}`, or a bare
    JSON string per line if `--lean-output` was also passed).
-3. Read stderr separately; a non-empty stderr line means a diagnostic (error
-   or the `EMPTY_LIST` warning) — check the process exit code to tell an
+3. Read stderr separately; a non-empty stderr line means a diagnostic (error,
+   warning, or optional summary) — check the process exit code to tell an
    error (1 or 2) from a clean run that merely warned (0).
 4. Do not rely on any output before the process exits other than what has
    already been read from the pipe — the tool streams records as they're

@@ -548,3 +548,94 @@ fn json_format_requires_explain_or_dry_run() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("FORMAT_UNSUPPORTED"));
 }
+
+#[test]
+fn quiet_suppresses_non_fatal_warnings() {
+    let path = std::env::temp_dir().join(format!("combinator_quiet_{}.txt", std::process::id()));
+    std::fs::write(&path, "").unwrap();
+    let output = bin()
+        .args(["--file", path.to_str().unwrap(), "--quiet"])
+        .output()
+        .unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn warnings_as_errors_prevents_output_and_preserves_context() {
+    let path = std::env::temp_dir().join(format!(
+        "combinator_warning_error_{}.txt",
+        std::process::id()
+    ));
+    let output_path = std::env::temp_dir().join(format!(
+        "combinator_warning_output_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&path, "").unwrap();
+    let output = bin()
+        .args([
+            "--file",
+            path.to_str().unwrap(),
+            "--warnings-as-errors",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&output_path).ok();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("EMPTY_LIST"));
+    assert!(stderr.contains("list_index=0"));
+    assert!(!output_path.exists());
+}
+
+#[test]
+fn summary_is_stderr_only() {
+    let output = bin().args(["--list", "a,b", "--summary"]).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "a\nb\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "summary[OUTPUT]: records=2, bytes=4\n"
+    );
+}
+
+#[test]
+fn completion_and_man_subcommands_generate_stdout() {
+    let completion = bin().args(["completions", "bash"]).output().unwrap();
+    assert!(completion.status.success());
+    assert!(String::from_utf8_lossy(&completion.stdout).contains("combinator"));
+    assert!(completion.stderr.is_empty());
+
+    let man = bin().args(["man"]).output().unwrap();
+    assert!(man.status.success());
+    assert!(String::from_utf8_lossy(&man.stdout).contains(".TH combinator"));
+    assert!(man.stderr.is_empty());
+}
+
+#[test]
+fn closed_stdout_is_a_clean_cancellation() {
+    use std::process::Stdio;
+
+    let mut child = bin()
+        .args([
+            "--list",
+            &std::iter::repeat("x")
+                .take(10_000)
+                .collect::<Vec<_>>()
+                .join(","),
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let status = child.wait().unwrap();
+    assert!(
+        status.success(),
+        "closed stdout should not be a write error"
+    );
+}
