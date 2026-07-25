@@ -45,6 +45,21 @@ pub enum InputFormat {
     Inline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum JoinFormat {
+    Csv,
+    Tsv,
+    Jsonl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum JoinTypeArg {
+    Inner,
+    Left,
+    Full,
+    Anti,
+}
+
 /// CLI-facing mirror of `combinator_core::UnequalPolicy` (clap's `ValueEnum`
 /// derive cannot target a foreign type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -246,6 +261,24 @@ pub struct ConcatArgs {
     pub common: CommonArgs,
 }
 
+#[derive(Debug, Args)]
+pub struct JoinArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    #[arg(long)]
+    pub left: String,
+    #[arg(long)]
+    pub right: String,
+    #[arg(long = "left-key")]
+    pub left_key: String,
+    #[arg(long = "right-key")]
+    pub right_key: String,
+    #[arg(long = "type", value_enum, default_value_t = JoinTypeArg::Inner)]
+    pub join_type: JoinTypeArg,
+    #[arg(long = "join-format", value_enum, default_value_t = JoinFormat::Csv)]
+    pub join_format: JoinFormat,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Mode {
     /// Ordered Cartesian product (the default when no subcommand is given).
@@ -254,6 +287,8 @@ pub enum Mode {
     Zip(ZipArgs),
     /// Sequential concatenation of the input lists.
     Concat(ConcatArgs),
+    /// Keyed relational join of two structured files.
+    Join(JoinArgs),
     /// Generate shell completion script.
     Completions {
         #[arg(value_enum)]
