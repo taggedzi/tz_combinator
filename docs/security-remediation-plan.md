@@ -143,3 +143,21 @@ Acceptance tests:
 ## 8. Documentation and final security verification
 
 Update the README with resource limits, atomic output behavior, symlink handling, runtime versus preflight enforcement, new errors, and deployment guidance. Finish with a full regression suite covering hostile input, output races, JSON escaping, resource exhaustion, diagnostic injection, and reproducible builds.
+
+## Implementation history
+
+The plan was implemented sequentially, with each item developed and merged from a dedicated branch:
+
+| Area | Branch | Implementation commit |
+|---|---|---|
+| Plan and agent guidance | `security/00-remediation-plan` | `43c5e43` |
+| Secure output creation and replacement | `security/01-safe-output-files` | `376702f` |
+| Runtime output limits | `security/02-enforce-output-limits` | `6878e85` |
+| Bounded input and product resources | `security/03-bound-input-resources` | `4874f54` |
+| Conservative JSONL estimates | `security/04-conservative-json-estimates` | `a9f2f6b` |
+| Fail-closed capacity checks | `security/05-fail-closed-capacity` | `b4c879e` |
+| Escaped diagnostics | `security/06-escape-diagnostics` | `6fa6428` |
+| Locked dependency verification | `security/07-reproducible-builds` | `ca9c021` |
+| Security documentation | `security/08-security-documentation` | pending |
+
+All implementation branches were merged into local `master` with merge commits before the next branch was created.

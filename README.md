@@ -18,7 +18,7 @@ This repository is a Cargo workspace with two crates:
 ## Building / installing
 
 ```
-cargo build --release
+cargo build --release --locked
 ```
 
 The binary is produced at `target/release/combinator` (`target/release/combinator.exe`
@@ -88,8 +88,15 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--lean-output` | off | In `jsonl` format, emit only the value as a bare JSON string per line, instead of the full `{"i":...,"value":...,"fields":[...]}` object. |
 | `-o, --output <PATH>` | stdout | Write output to this file instead of stdout. |
 | `-f, --overwrite` (alias `--force`) | off | Allow overwriting `--output` if it already exists. |
-| `--max-file-size <BYTES>` | none | Optional filesystem max-file-size cap, checked during pre-flight when writing to a file. |
-| `--no-preflight` | off | Skip pre-flight validation (existence, disk space, size cap) for file output. |
+| `--max-file-size <BYTES>` | none | Optional file-output cap. It is checked during pre-flight and enforced while writing. |
+| `--max-output-bytes <BYTES>` | `1073741824` | Maximum output bytes for every invocation, including stdout. |
+| `--max-input-bytes <BYTES>` | `67108864` | Maximum bytes read from each file, stdin stream, or inline list. |
+| `--max-item-bytes <BYTES>` | `1048576` | Maximum bytes in one list item. |
+| `--max-items-per-list <N>` | `1000000` | Maximum items accepted from one list. |
+| `--max-lists <N>` | `128` | Maximum number of lists accepted. |
+| `--max-total-items <N>` | `5000000` | Maximum total items across all lists. |
+| `--max-combinations <N>` | `10000000` | Maximum combinations generated unless `--count-only` is used. |
+| `--no-preflight` | off | Skip pre-flight validation for file output. Runtime output limits still apply. |
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
 
@@ -180,6 +187,25 @@ $ combinator --list "a,b" --list "c,d,e" --count-only
 6
 ```
 
+## Security and resource behavior
+
+Inputs are bounded by default. Files and stdin are read incrementally rather
+than loaded without limit; use the `--max-*` flags to tune limits for a trusted
+ workload. Generation is bounded by `--max-combinations` and
+`--max-output-bytes`; provide an explicit `--limit` for especially large or
+attacker-controlled requests.
+
+File output is created exclusively when overwrite is disabled. Overwrites are
+staged in a sibling temporary file and committed only after successful writing,
+so failures preserve the previous destination. Symlink output targets are
+rejected. The pre-flight disk-space check is advisory and is not a reservation;
+the runtime byte limit remains authoritative. `--no-preflight` disables only
+the early capacity estimate.
+
+For automation, run the binary with `--format jsonl`, capture stdout and stderr
+separately, and treat all input and output paths as untrusted unless the caller
+has constrained them to an approved directory.
+
 ## stdout / stderr discipline
 
 - **stdout** carries only generated data: combination records (text or
@@ -198,7 +224,7 @@ stderr alone and get nothing but diagnostics.
 
 ## Error codes
 
-`combinator` uses a fixed set of ten stable, machine-readable codes. Usage
+`combinator` uses stable, machine-readable codes. Usage
 errors (bad arguments/input) exit **2**; runtime errors (I/O, capacity, and
 similar failures encountered while executing an otherwise-valid command) exit
 **1**. `EMPTY_LIST` is the sole non-fatal warning: it is written to stderr but
@@ -216,6 +242,14 @@ zero combinations).
 | `FILE_SIZE_LIMIT` | 1 | Pre-flight estimate of the output size exceeds `--max-file-size`. |
 | `COUNT_OVERFLOW` | 1 | The total combination count (for `--count-only`, or for the pre-flight size estimate) is too large to represent exactly. |
 | `FILE_UNREADABLE` | 1 | A `--file` path (or stdin, for `--file -`) could not be read. |
+| `INPUT_TOO_LARGE` | 1 | A file, stdin stream, or inline list exceeds the input byte limit. |
+| `ITEM_TOO_LARGE` | 1 | A list item exceeds the item byte limit. |
+| `TOO_MANY_ITEMS` | 1 | A list or the combined inputs exceed an item-count limit. |
+| `TOO_MANY_LISTS` | 1 | The invocation exceeds the maximum list count. |
+| `COMBINATION_LIMIT_EXCEEDED` | 1 | Generation would exceed the configured combination limit. |
+| `OUTPUT_LIMIT_EXCEEDED` | 1 | The generated output would exceed the configured byte limit. |
+| `CAPACITY_UNKNOWN` | 1 | Available disk capacity could not be determined during pre-flight. |
+| `UNSAFE_OUTPUT_PATH` | 1 | The output path is a symbolic link or otherwise unsafe to overwrite. |
 | `WRITE_FAILED` | 1 | Creating or writing to the output file failed. |
 
 Example (`NO_LISTS`, plain-text rendering — the default):
