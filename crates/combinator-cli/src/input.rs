@@ -1,8 +1,27 @@
 //! Gathering lists from inline, file, and stdin sources; delimiter validation.
 
+use std::io::Read;
+
 use crate::error::AppError;
 
 pub const MAX_DELIM_BYTES: usize = 4096;
+
+#[derive(Debug, Clone, Copy)]
+pub struct InputLimits {
+    pub max_input_bytes: usize,
+    pub max_item_bytes: usize,
+    pub max_items_per_list: usize,
+}
+
+impl Default for InputLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 64 * 1024 * 1024,
+            max_item_bytes: 1024 * 1024,
+            max_items_per_list: 1_000_000,
+        }
+    }
+}
 
 /// Validates the three delimiters. All three respect the byte cap; the inline
 /// list delimiter must additionally be non-empty.
@@ -27,31 +46,103 @@ pub fn validate_delims(field_sep: &str, rec_sep: &str, list_delim: &str) -> Resu
 }
 
 /// Splits an inline `--list` value on a non-empty delimiter.
-pub fn split_inline(value: &str, delim: &str) -> Vec<String> {
-    value.split(delim).map(|s| s.to_string()).collect()
+pub fn split_inline_bounded(
+    value: &str,
+    delim: &str,
+    limits: InputLimits,
+) -> Result<Vec<String>, AppError> {
+    if value.len() > limits.max_input_bytes {
+        return Err(input_limit("INPUT_TOO_LARGE", "inline list exceeds the input byte limit", value.len()));
+    }
+    let mut items = Vec::new();
+    for part in value.split(delim) {
+        if part.len() > limits.max_item_bytes {
+            return Err(input_limit("ITEM_TOO_LARGE", "list item exceeds the item byte limit", part.len()));
+        }
+        if items.len() == limits.max_items_per_list {
+            return Err(input_limit(
+                "TOO_MANY_ITEMS",
+                "list exceeds the maximum item count",
+                items.len() + 1,
+            ));
+        }
+        items.push(part.to_string());
+    }
+    Ok(items)
 }
 
 /// Reads a file as a list, one item per line, stripping a trailing `\r`.
 /// The path `-` reads standard input instead (explicit stdin only).
-pub fn read_file_list(path: &str) -> Result<Vec<String>, AppError> {
-    let content = if path == "-" {
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf).map_err(|e| {
-            AppError::runtime("FILE_UNREADABLE", format!("could not read stdin: {e}"))
-                .with("path", "-")
-        })?;
-        buf
-    } else {
-        std::fs::read_to_string(path).map_err(|e| {
-            AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}"))
-                .with("path", path)
-        })?
-    };
-    Ok(split_lines(&content))
+pub fn read_file_list_bounded(path: &str, limits: InputLimits) -> Result<Vec<String>, AppError> {
+    if path == "-" {
+        return read_bounded(std::io::stdin().lock(), path, limits);
+    }
+    let file = std::fs::File::open(path).map_err(|e| {
+        AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}")).with("path", path)
+    })?;
+    read_bounded(file, path, limits)
 }
 
-fn split_lines(content: &str) -> Vec<String> {
-    content.lines().map(|l| l.to_string()).collect()
+fn read_bounded<R: Read>(mut reader: R, path: &str, limits: InputLimits) -> Result<Vec<String>, AppError> {
+    let mut output = Vec::new();
+    let mut current = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut total = 0usize;
+
+    loop {
+        let read = reader.read(&mut chunk).map_err(|e| {
+            AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}")).with("path", path)
+        })?;
+        if read == 0 {
+            break;
+        }
+        total = total.checked_add(read).ok_or_else(|| {
+            input_limit("INPUT_TOO_LARGE", "input byte count overflowed", usize::MAX)
+        })?;
+        if total > limits.max_input_bytes {
+            return Err(input_limit("INPUT_TOO_LARGE", "input exceeds the input byte limit", total)
+                .with("path", path));
+        }
+        for &byte in &chunk[..read] {
+            if byte == b'\n' {
+                finish_item(&mut output, &mut current, limits, path)?;
+            } else {
+                if current.len() >= limits.max_item_bytes {
+                    return Err(input_limit("ITEM_TOO_LARGE", "list item exceeds the item byte limit", current.len())
+                        .with("path", path));
+                }
+                current.push(byte);
+            }
+        }
+    }
+    if !current.is_empty() {
+        finish_item(&mut output, &mut current, limits, path)?;
+    }
+    Ok(output)
+}
+
+fn finish_item(
+    output: &mut Vec<String>,
+    current: &mut Vec<u8>,
+    limits: InputLimits,
+    path: &str,
+) -> Result<(), AppError> {
+    if current.last() == Some(&b'\r') {
+        current.pop();
+    }
+    if output.len() == limits.max_items_per_list {
+        return Err(input_limit("TOO_MANY_ITEMS", "list exceeds the maximum item count", output.len() + 1)
+            .with("path", path));
+    }
+    let item = String::from_utf8(std::mem::take(current)).map_err(|_| {
+        AppError::runtime("FILE_UNREADABLE", "list file is not valid UTF-8").with("path", path)
+    })?;
+    output.push(item);
+    Ok(())
+}
+
+fn input_limit(code: &'static str, message: &'static str, value: usize) -> AppError {
+    AppError::runtime(code, message).with("observed", value)
 }
 
 #[cfg(test)]
@@ -79,17 +170,17 @@ mod tests {
 
     #[test]
     fn splits_inline_on_comma() {
-        assert_eq!(split_inline("red,blue,green", ","), vec!["red", "blue", "green"]);
+        assert_eq!(split_inline_bounded("red,blue,green", ",", InputLimits::default()).unwrap(), vec!["red", "blue", "green"]);
     }
 
     #[test]
     fn splits_inline_on_custom_delim() {
-        assert_eq!(split_inline("a::b", "::"), vec!["a", "b"]);
+        assert_eq!(split_inline_bounded("a::b", "::", InputLimits::default()).unwrap(), vec!["a", "b"]);
     }
 
     #[test]
     fn read_missing_file_errors() {
-        let e = read_file_list("does-not-exist-12345.txt").unwrap_err();
+        let e = read_file_list_bounded("does-not-exist-12345.txt", InputLimits::default()).unwrap_err();
         assert_eq!(e.code, "FILE_UNREADABLE");
         assert_eq!(e.exit, 1);
     }
@@ -100,7 +191,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("combinator_test_crlf.txt");
         std::fs::write(&path, "a\r\nb\r\n").unwrap();
-        let got = read_file_list(path.to_str().unwrap()).unwrap();
+        let got = read_file_list_bounded(path.to_str().unwrap(), InputLimits::default()).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
     }
