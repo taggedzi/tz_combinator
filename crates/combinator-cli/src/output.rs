@@ -6,6 +6,9 @@ use combinator_core::{Template, TemplateError};
 pub enum Format {
     Text,
     Jsonl,
+    Csv,
+    Tsv,
+    Nul,
 }
 
 /// Formats one combination into the exact bytes to emit (including the record
@@ -82,7 +85,27 @@ pub fn format_record_with(
                 "{{\"i\":{i_json},\"value\":{value_json},\"fields\":{fields_json}{named_json}}}\n"
             ))
         }
+        Format::Csv => Ok(csv_record(items, b',')),
+        Format::Tsv => Ok(csv_record(items, b'\t')),
+        Format::Nul => Ok(format!("{value}\0")),
     }
+}
+
+fn csv_record(items: &[&str], separator: u8) -> String {
+    let mut writer = csv::WriterBuilder::new()
+        .has_headers(false)
+        .delimiter(separator)
+        .terminator(csv::Terminator::Any(b'\n'))
+        .from_writer(Vec::new());
+    writer
+        .write_record(items)
+        .expect("writing a CSV record to memory cannot fail");
+    String::from_utf8(
+        writer
+            .into_inner()
+            .expect("flushing a CSV record in memory cannot fail"),
+    )
+    .expect("CSV output is valid UTF-8 because input fields are UTF-8")
 }
 
 #[cfg(test)]

@@ -33,7 +33,7 @@ The central design principles are:
 | ID | Feature | Primary users | Priority |
 |---|---|---|---|
 | F1 | Explicit operation modes: product, zip, concat, join | Everyone; removes semantic ambiguity | P0 |
-| F2 | Robust input and output formats: CSV, TSV, NUL, escaped inline data | Admins and data pipelines | P0 |
+| F2 | Robust input and output formats: CSV, TSV, NUL, escaped inline data | Admins and data pipelines | P0 — implemented |
 | F3 | Templates and field-aware output | Automation, URLs, configs, test generation | P0 — implemented |
 | F4 | Deterministic sharding and resumable work | Batch and distributed jobs | P1 |
 | F5 | Dry-run, explain, and operational summaries | Admins and deployment systems | P1 |

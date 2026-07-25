@@ -594,6 +594,110 @@ fn warnings_as_errors_prevents_output_and_preserves_context() {
 }
 
 #[test]
+fn escaped_inline_input_preserves_delimiters_and_decodes_escapes() {
+    let out = bin()
+        .args([
+            "--input-format",
+            "inline",
+            "--list",
+            r"a\,b,c\n",
+            "--format",
+            "nul",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"a,b\0c\n\0");
+}
+
+#[test]
+fn csv_input_accepts_quoted_delimiters_and_csv_output_quotes_fields() {
+    let input = std::env::temp_dir().join(format!("combinator_f2_csv_{}.csv", std::process::id()));
+    let second = std::env::temp_dir().join(format!(
+        "combinator_f2_csv_second_{}.csv",
+        std::process::id()
+    ));
+    std::fs::write(&input, "\"a,b\"\nplain\n").unwrap();
+    std::fs::write(&second, "x\n").unwrap();
+    let out = bin()
+        .args([
+            "--input-format",
+            "csv",
+            "--file",
+            input.to_str().unwrap(),
+            "--file",
+            second.to_str().unwrap(),
+            "--format",
+            "csv",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"\"a,b\",x\nplain,x\n");
+    let _ = std::fs::remove_file(input);
+    let _ = std::fs::remove_file(second);
+}
+
+#[test]
+fn nul_input_keeps_newlines_inside_records() {
+    let input = std::env::temp_dir().join(format!("combinator_f2_nul_{}.dat", std::process::id()));
+    std::fs::write(&input, b"first\nline\0second\0").unwrap();
+    let out = bin()
+        .args([
+            "--input-format",
+            "nul",
+            "--file",
+            input.to_str().unwrap(),
+            "--format",
+            "nul",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"first\nline\0second\0");
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn mixed_sources_require_opt_in_and_reject_duplicate_stdin() {
+    let input =
+        std::env::temp_dir().join(format!("combinator_f2_mixed_{}.txt", std::process::id()));
+    std::fs::write(&input, "file\n").unwrap();
+    let mixed = bin()
+        .args(["--list", "inline", "--file", input.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(mixed.status.code(), Some(2));
+    let duplicate = bin().args(["--file", "-", "--file", "-"]).output().unwrap();
+    assert_eq!(duplicate.status.code(), Some(2));
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
+fn malformed_csv_is_rejected_before_output_file_creation() {
+    let input =
+        std::env::temp_dir().join(format!("combinator_f2_bad_csv_{}.csv", std::process::id()));
+    let output =
+        std::env::temp_dir().join(format!("combinator_f2_bad_csv_{}.out", std::process::id()));
+    let _ = std::fs::remove_file(&output);
+    std::fs::write(&input, b"first,second\n").unwrap();
+    let out = bin()
+        .args([
+            "--input-format",
+            "csv",
+            "--file",
+            input.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!output.exists());
+    let _ = std::fs::remove_file(input);
+}
+
+#[test]
 fn summary_is_stderr_only() {
     let output = bin().args(["--list", "a,b", "--summary"]).output().unwrap();
     assert!(output.status.success());

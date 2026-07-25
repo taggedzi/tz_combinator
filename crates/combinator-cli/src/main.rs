@@ -18,9 +18,9 @@ use combinator_core::{
 };
 
 use cli::{
-    Cli, CommonArgs, ConcatArgs, Mode, OutFormat, ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS,
-    HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS,
-    HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
+    Cli, CommonArgs, ConcatArgs, InputFormat, Mode, OutFormat, ProductArgs, ZipArgs,
+    HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES,
+    HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
@@ -130,6 +130,34 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
             "--format json is only valid with --explain or --dry-run",
         ));
     }
+    if common
+        .file
+        .iter()
+        .filter(|path| path.as_str() == "-")
+        .count()
+        > 1
+    {
+        return Err(AppError::usage(
+            "DUPLICATE_STDIN",
+            "stdin may be used as an input source only once",
+        ));
+    }
+    if common.input_format == Some(InputFormat::Inline) && !common.file.is_empty() {
+        return Err(AppError::usage(
+            "INPUT_FORMAT_INVALID",
+            "inline input format may only be used with --list",
+        ));
+    }
+    if matches!(
+        common.input_format,
+        Some(InputFormat::Lines | InputFormat::Csv | InputFormat::Tsv | InputFormat::Nul)
+    ) && !common.list.is_empty()
+    {
+        return Err(AppError::usage(
+            "INPUT_FORMAT_INVALID",
+            "this input format requires --file; use --input-format inline with --list",
+        ));
+    }
     if common.count_only && (common.explain || common.dry_run) {
         return Err(AppError::usage(
             "MODE_CONFLICT",
@@ -148,8 +176,8 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         }
     }
 
-    // Input is either --list or --file, never both. Order within the chosen
-    // source is argument order (clap preserves it). `--file -` reads stdin.
+    // By default --list and --file remain mutually exclusive. Mixed sources
+    // require an explicit opt-in because source order is part of the contract.
     let mut lists: Vec<Vec<String>> = Vec::new();
     if common.list.len().max(common.file.len()) > common.max_lists {
         return Err(
@@ -164,30 +192,73 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         max_items_per_list: common.max_items_per_list,
     };
     let mut input_budget = InputBudget::new(common.max_input_bytes, common.max_total_items);
-    match (common.list.is_empty(), common.file.is_empty()) {
-        (false, false) => {
+    match (
+        common.list.is_empty(),
+        common.file.is_empty(),
+        common.allow_mixed_inputs,
+    ) {
+        (false, false, false) => {
             return Err(AppError::usage(
                 "SOURCE_CONFLICT",
-                "use either --list or --file, not both",
+                "use either --list or --file, or pass --allow-mixed-inputs",
             ));
         }
-        (true, true) => {
+        (true, true, _) => {
             return Err(AppError::usage("NO_LISTS", "no input lists were provided"));
         }
-        (false, true) => {
+        (false, true, _) => {
             for value in &common.list {
-                lists.push(input::split_inline_bounded(
-                    value,
-                    &common.list_delim,
+                let parsed = if common.input_format == Some(InputFormat::Inline) {
+                    input::split_escaped_inline_bounded(
+                        value,
+                        &common.list_delim,
+                        input_limits,
+                        &mut input_budget,
+                    )?
+                } else {
+                    input::split_inline_bounded(
+                        value,
+                        &common.list_delim,
+                        input_limits,
+                        &mut input_budget,
+                    )?
+                };
+                lists.push(parsed);
+            }
+        }
+        (true, false, _) => {
+            for path in &common.file {
+                lists.push(input::read_file_list_format_bounded(
+                    path,
+                    common.input_format.unwrap_or(InputFormat::Lines),
                     input_limits,
                     &mut input_budget,
                 )?);
             }
         }
-        (true, false) => {
+        (false, false, true) => {
+            for value in &common.list {
+                let parsed = if common.input_format == Some(InputFormat::Inline) {
+                    input::split_escaped_inline_bounded(
+                        value,
+                        &common.list_delim,
+                        input_limits,
+                        &mut input_budget,
+                    )?
+                } else {
+                    input::split_inline_bounded(
+                        value,
+                        &common.list_delim,
+                        input_limits,
+                        &mut input_budget,
+                    )?
+                };
+                lists.push(parsed);
+            }
             for path in &common.file {
-                lists.push(input::read_file_list_bounded(
+                lists.push(input::read_file_list_format_bounded(
                     path,
+                    common.input_format.unwrap_or(InputFormat::Lines),
                     input_limits,
                     &mut input_budget,
                 )?);
@@ -347,6 +418,9 @@ fn explain(
         OutFormat::Text => "text",
         OutFormat::Jsonl => "jsonl",
         OutFormat::Json => "json",
+        OutFormat::Csv => "csv",
+        OutFormat::Tsv => "tsv",
+        OutFormat::Nul => "nul",
     };
     let destination = if common.output.is_some() {
         "file"
@@ -608,10 +682,13 @@ fn bounded_size_estimate(
     };
 
     // Per-record upper bound: format the longest-possible record once.
-    let format = if json_out {
-        Format::Jsonl
-    } else {
-        Format::Text
+    let format = match common.format {
+        OutFormat::Text => Format::Text,
+        OutFormat::Jsonl => Format::Jsonl,
+        OutFormat::Csv => Format::Csv,
+        OutFormat::Tsv => Format::Tsv,
+        OutFormat::Nul => Format::Nul,
+        OutFormat::Json => Format::Text,
     };
     let bounded: Option<u128> = count.and_then(|c| {
         let longest_key = |s: &&String| {
@@ -675,10 +752,19 @@ fn stream(
     json_out: bool,
     template: Option<&Template>,
 ) -> Result<(), AppError> {
-    let format = if json_out {
-        Format::Jsonl
-    } else {
-        Format::Text
+    let format = match common.format {
+        OutFormat::Text => Format::Text,
+        OutFormat::Jsonl => Format::Jsonl,
+        OutFormat::Csv => Format::Csv,
+        OutFormat::Tsv => Format::Tsv,
+        OutFormat::Nul => Format::Nul,
+        OutFormat::Json => {
+            if json_out {
+                Format::Jsonl
+            } else {
+                Format::Text
+            }
+        }
     };
 
     let mut output_file = common
