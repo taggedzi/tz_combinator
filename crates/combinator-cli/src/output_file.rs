@@ -1,12 +1,11 @@
 //! Secure output-file creation and replacement.
 
 use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::AppError;
-
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Owns an output file and commits it only after successful generation.
 pub struct OutputFile {
@@ -127,9 +126,9 @@ fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> 
         .and_then(|n| n.to_str())
         .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output path has no valid filename"))?;
 
-    for _ in 0..128 {
-        let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(".{name}.combinator-{id}-{}.tmp", std::process::id()));
+    for _ in 0..32 {
+        let suffix = random_suffix()?;
+        let candidate = parent.join(format!(".{name}.combinator-{suffix}.tmp"));
         match OpenOptions::new().write(true).create_new(true).open(&candidate) {
             Ok(file) => return Ok((candidate, file)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -148,6 +147,43 @@ fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> 
         "could not choose a unique temporary output filename",
     )
     .with("path", destination.display()))
+}
+
+fn random_suffix() -> Result<String, AppError> {
+    let mut bytes = [0u8; 16];
+    fill_random(&mut bytes).map_err(|e| {
+        AppError::runtime("WRITE_FAILED", format!("could not generate a secure temporary filename: {e}"))
+    })?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(unix)]
+fn fill_random(bytes: &mut [u8]) -> std::io::Result<()> {
+    let mut source = File::open("/dev/urandom")?;
+    source.read_exact(bytes)
+}
+
+#[cfg(windows)]
+fn fill_random(bytes: &mut [u8]) -> std::io::Result<()> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+
+    // SAFETY: the destination is a valid writable byte slice for the duration
+    // of the OS call, and the system-preferred RNG does not require a handle.
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::from_raw_os_error(status as i32))
+    }
 }
 
 #[cfg(unix)]
