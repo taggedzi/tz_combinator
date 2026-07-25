@@ -205,7 +205,18 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
     let bounded: Option<u128> = count.and_then(|c| {
         let max_items: Vec<&str> = lists
             .iter()
-            .map(|l| l.iter().map(|s| s.as_str()).max_by_key(|s| s.len()).unwrap_or(""))
+            .map(|l| {
+                l.iter()
+                    .max_by_key(|s| {
+                        if json_out {
+                            serde_json::to_string(s).map(|v| v.len()).unwrap_or(usize::MAX)
+                        } else {
+                            s.len()
+                        }
+                    })
+                    .map(String::as_str)
+                    .unwrap_or("")
+            })
             .collect();
         let max_index = cli.offset.saturating_add(c.saturating_sub(1));
         let per_record =
