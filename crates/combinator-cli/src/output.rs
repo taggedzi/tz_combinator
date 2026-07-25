@@ -25,24 +25,21 @@ pub fn format_record(
             s
         }
         Format::Jsonl => {
-            // index is u128; serde_json numbers are limited, so emit via json! with
-            // a number built from string is unsafe. Instead include i as a JSON number
-            // only when it fits in u64; otherwise as a string. Indices beyond u64::MAX
-            // require > 1.8e19 combinations and are not practically reachable, but we
-            // stay correct regardless.
-            let i_value: serde_json::Value = if index <= u64::MAX as u128 {
-                serde_json::Value::from(index as u64)
+            // Build with explicit key order (i, value, fields). serde_json's
+            // json! macro sorts keys alphabetically without the preserve_order
+            // feature, so assemble the line by hand while still delegating all
+            // escaping to serde_json::to_string. The index is a JSON number when
+            // it fits in u64, otherwise a JSON string (unreachable in practice,
+            // but kept correct).
+            let i_json = if index <= u64::MAX as u128 {
+                (index as u64).to_string()
             } else {
-                serde_json::Value::String(index.to_string())
+                serde_json::to_string(&index.to_string()).expect("string is always serializable")
             };
-            let obj = serde_json::json!({
-                "i": i_value,
-                "value": value,
-                "fields": items,
-            });
-            let mut s = obj.to_string();
-            s.push('\n');
-            s
+            let value_json = serde_json::to_string(&value).expect("string is always serializable");
+            let fields_json =
+                serde_json::to_string(items).expect("string slice is always serializable");
+            format!("{{\"i\":{i_json},\"value\":{value_json},\"fields\":{fields_json}}}\n")
         }
     }
 }
@@ -76,6 +73,14 @@ mod tests {
         assert_eq!(v["fields"][0], "red");
         assert_eq!(v["fields"][1], "car");
         assert!(line.ends_with('\n'));
+    }
+
+    #[test]
+    fn jsonl_full_shape_exact_key_order() {
+        assert_eq!(
+            format_record(&["red", "car"], 3, "-", "\n", Format::Jsonl, false),
+            "{\"i\":3,\"value\":\"red-car\",\"fields\":[\"red\",\"car\"]}\n"
+        );
     }
 
     #[test]
