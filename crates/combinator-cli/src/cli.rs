@@ -6,6 +6,13 @@ pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_073_741_824;
 pub const DEFAULT_MAX_LISTS: usize = 128;
 pub const DEFAULT_MAX_TOTAL_ITEMS: usize = 5_000_000;
 pub const DEFAULT_MAX_COMBINATIONS: u128 = 10_000_000;
+pub const HARD_MAX_OUTPUT_BYTES: u64 = DEFAULT_MAX_OUTPUT_BYTES;
+pub const HARD_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
+pub const HARD_MAX_ITEM_BYTES: usize = 1024 * 1024;
+pub const HARD_MAX_ITEMS_PER_LIST: usize = 1_000_000;
+pub const HARD_MAX_LISTS: usize = DEFAULT_MAX_LISTS;
+pub const HARD_MAX_TOTAL_ITEMS: usize = DEFAULT_MAX_TOTAL_ITEMS;
+pub const HARD_MAX_COMBINATIONS: u128 = DEFAULT_MAX_COMBINATIONS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutFormat {

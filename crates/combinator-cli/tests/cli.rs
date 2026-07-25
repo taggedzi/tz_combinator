@@ -204,3 +204,13 @@ fn runtime_output_limit_stops_streaming() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("OUTPUT_LIMIT_EXCEEDED"));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "a\n");
 }
+
+#[test]
+fn resource_limits_cannot_be_raised_above_hard_ceiling() {
+    let out = bin()
+        .args(["--list", "a", "--max-output-bytes", "18446744073709551615"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("RESOURCE_LIMIT_TOO_HIGH"));
+}
