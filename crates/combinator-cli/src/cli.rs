@@ -24,6 +24,18 @@ pub enum OutFormat {
     Nul,
 }
 
+impl From<OutFormat> for combinator_core::Format {
+    fn from(value: OutFormat) -> Self {
+        match value {
+            OutFormat::Text | OutFormat::Json => Self::Text,
+            OutFormat::Jsonl => Self::Jsonl,
+            OutFormat::Csv => Self::Csv,
+            OutFormat::Tsv => Self::Tsv,
+            OutFormat::Nul => Self::Nul,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum InputFormat {
     Lines,

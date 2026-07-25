@@ -10,10 +10,7 @@ mod sharding;
 use std::io::{BufWriter, Write};
 
 use clap::{CommandFactory, Parser};
-use combinator_core::{
-    combinations, concat_records, estimate_jsonl_size, estimate_text_size, zip_records,
-    SizeEstimate, SizeInput,
-};
+use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 use combinator_core::{
     operation_count, ConcatOptions, Count, Operation, ProductOptions, Template, TemplateError,
     ZipOptions,
@@ -24,7 +21,7 @@ use cli::{
     HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES,
     HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
-use error::{render, render_warning, AppError};
+use error::{exit_code, render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
 use normalize::MAX_TRANSFORMS;
 use output::{format_record_with, Format};
@@ -61,14 +58,14 @@ fn main() {
             Mode::Completions { shell } => {
                 if let Err(e) = generate_completions(*shell) {
                     eprintln!("{}", render(&e, false));
-                    std::process::exit(e.exit);
+                    std::process::exit(exit_code(&e));
                 }
                 return;
             }
             Mode::Man => {
                 if let Err(e) = generate_man_page() {
                     eprintln!("{}", render(&e, false));
-                    std::process::exit(e.exit);
+                    std::process::exit(exit_code(&e));
                 }
                 return;
             }
@@ -79,7 +76,7 @@ fn main() {
     let json_errors = matches!(common.format, OutFormat::Jsonl | OutFormat::Json);
     if let Err(e) = run(common, sep, op) {
         eprintln!("{}", render(&e, json_errors));
-        std::process::exit(e.exit);
+        std::process::exit(exit_code(&e));
     }
 }
 
@@ -401,7 +398,69 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     }
 
     emit_warnings(&common, &warnings, json_out)?;
-    stream(&common, &sep, &op, &lists, json_out, template.as_ref())
+    stream_core(&common, &sep, &op, &lists, template.as_ref())
+}
+
+fn stream_core(
+    common: &CommonArgs,
+    sep: &str,
+    op: &Operation,
+    lists: &[Vec<String>],
+    template: Option<&Template>,
+) -> Result<(), AppError> {
+    let mut output_file = common
+        .output
+        .as_deref()
+        .map(|path| OutputFile::open(path, common.overwrite))
+        .transpose()?;
+    let mut writer = match output_file.as_mut() {
+        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
+        None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
+    };
+    let result = combinator_core::execute(
+        combinator_core::ExecutionRequest {
+            operation: op,
+            lists,
+            format: common.format.into(),
+            field_sep: sep,
+            record_sep: &common.rec_sep,
+            lean: common.lean_output,
+            template,
+            names: &common.names,
+            max_output_bytes: effective_output_limit(common).unwrap_or(u64::MAX),
+            max_combinations: common.max_combinations,
+            cancel: None,
+        },
+        &mut writer,
+    );
+    let result = match result {
+        Err(error) if common.output.is_none() && error.message.contains("os error 232") => {
+            return Ok(())
+        }
+        other => other?,
+    };
+    match writer.flush() {
+        Ok(()) => {}
+        Err(error) if common.output.is_none() && is_broken_pipe(&error) => return Ok(()),
+        Err(error) => return Err(write_err(error)),
+    }
+    drop(writer);
+    if let Some(file) = output_file {
+        file.commit()?;
+    }
+    if common.summary {
+        let _ = writeln!(
+            std::io::stderr(),
+            "summary[OUTPUT]: records={}, bytes={}",
+            result.records,
+            result.bytes
+        );
+    }
+    Ok(())
+}
+
+fn is_broken_pipe(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::BrokenPipe || error.raw_os_error() == Some(232)
 }
 
 fn emit_warnings(common: &CommonArgs, warnings: &[Warning], json: bool) -> Result<(), AppError> {
@@ -858,151 +917,6 @@ fn bounded_size_estimate(
         (SizeEstimate::Overflow, Some(b)) => SizeEstimate::Bytes(b),
         (SizeEstimate::Overflow, None) => SizeEstimate::Overflow,
     }
-}
-
-fn stream(
-    common: &CommonArgs,
-    sep: &str,
-    op: &Operation,
-    lists: &[Vec<String>],
-    json_out: bool,
-    template: Option<&Template>,
-) -> Result<(), AppError> {
-    let format = match common.format {
-        OutFormat::Text => Format::Text,
-        OutFormat::Jsonl => Format::Jsonl,
-        OutFormat::Csv => Format::Csv,
-        OutFormat::Tsv => Format::Tsv,
-        OutFormat::Nul => Format::Nul,
-        OutFormat::Json => {
-            if json_out {
-                Format::Jsonl
-            } else {
-                Format::Text
-            }
-        }
-    };
-
-    let mut output_file = common
-        .output
-        .as_deref()
-        .map(|path| OutputFile::open(path, common.overwrite))
-        .transpose()?;
-    let mut writer = match output_file.as_mut() {
-        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
-        None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
-    };
-
-    let mut index: u128 = common.offset;
-    let output_limit = effective_output_limit(common);
-    let mut written: u64 = 0;
-    let mut emitted: u128 = 0;
-
-    enum Records {
-        Multi(Box<dyn Iterator<Item = Vec<usize>>>),
-        Single(Box<dyn Iterator<Item = (usize, usize)>>),
-    }
-
-    let records = match op {
-        Operation::Product(opts) => Records::Multi(Box::new(combinations(lists, opts.clone()))),
-        Operation::Zip(opts) => Records::Multi(Box::new(
-            zip_records(lists, opts.clone()).map_err(|_| {
-                AppError::runtime(
-                    "ZIP_LENGTH_MISMATCH",
-                    "zip inputs have unequal lengths; pass --on-unequal truncate or cycle",
-                )
-            })?,
-        )),
-        Operation::Concat(opts) => {
-            Records::Single(Box::new(concat_records(lists, opts.clone()).ok_or_else(
-                || AppError::runtime("COUNT_OVERFLOW", "concatenated item count overflowed"),
-            )?))
-        }
-    };
-
-    macro_rules! emit {
-        ($items:expr) => {{
-            let items = $items;
-            let record = format_record_with(
-                &items,
-                index,
-                sep,
-                &common.rec_sep,
-                format,
-                common.lean_output,
-                template,
-                &common.names,
-            )
-            .map_err(template_error)?;
-            let record_bytes = u64::try_from(record.len()).map_err(|_| {
-                AppError::runtime(
-                    "OUTPUT_LIMIT_EXCEEDED",
-                    "output record is too large to write",
-                )
-            })?;
-            if let Some(limit) = output_limit {
-                let next = written.checked_add(record_bytes).ok_or_else(|| {
-                    AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
-                })?;
-                if next > limit {
-                    return Err(AppError::runtime(
-                        "OUTPUT_LIMIT_EXCEEDED",
-                        "output exceeds the configured byte limit",
-                    )
-                    .with("written_bytes", written)
-                    .with("record_bytes", record_bytes)
-                    .with("limit_bytes", limit));
-                }
-                written = next;
-            }
-            match writer.write_all(record.as_bytes()) {
-                Ok(()) => {}
-                Err(e) if common.output.is_none() && e.kind() == std::io::ErrorKind::BrokenPipe => {
-                    return Ok(())
-                }
-                Err(e) => return Err(write_err(e)),
-            }
-            index = index.saturating_add(1);
-            emitted = emitted.saturating_add(1);
-        }};
-    }
-
-    match records {
-        Records::Multi(iter) => {
-            for indices in iter {
-                let items: Vec<&str> = indices
-                    .iter()
-                    .enumerate()
-                    .map(|(list_i, &item_i)| lists[list_i][item_i].as_str())
-                    .collect();
-                emit!(items);
-            }
-        }
-        Records::Single(iter) => {
-            for (list_i, item_i) in iter {
-                let items: Vec<&str> = vec![lists[list_i][item_i].as_str()];
-                emit!(items);
-            }
-        }
-    }
-    match writer.flush() {
-        Ok(()) => {}
-        Err(e) if common.output.is_none() && e.kind() == std::io::ErrorKind::BrokenPipe => {
-            return Ok(())
-        }
-        Err(e) => return Err(write_err(e)),
-    }
-    drop(writer);
-    if let Some(file) = output_file {
-        file.commit()?;
-    }
-    if common.summary {
-        let _ = writeln!(
-            std::io::stderr(),
-            "summary[OUTPUT]: records={emitted}, bytes={written}"
-        );
-    }
-    Ok(())
 }
 
 fn generate_completions(shell: clap_complete::Shell) -> Result<(), AppError> {
