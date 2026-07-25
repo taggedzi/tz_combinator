@@ -44,10 +44,10 @@ impl OutputFile {
         }
 
         if let Ok(metadata) = fs::symlink_metadata(&destination) {
-            if metadata.file_type().is_symlink() {
+            if is_unsafe_target(&metadata) {
                 return Err(AppError::runtime(
                     "UNSAFE_OUTPUT_PATH",
-                    "refusing to overwrite a symbolic link",
+                    "refusing to overwrite a symbolic link or reparse point",
                 )
                 .with("path", path));
             }
@@ -90,6 +90,20 @@ impl OutputFile {
         self.committed = true;
         Ok(())
     }
+}
+
+#[cfg(not(windows))]
+fn is_unsafe_target(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn is_unsafe_target(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 impl Drop for OutputFile {
