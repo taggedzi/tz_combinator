@@ -1,5 +1,6 @@
 //! Mode-neutral operation dispatch over product/zip/concat.
 
+use crate::concat::{concat_count, ConcatOptions};
 use crate::count::{combination_count, Count};
 use crate::product::ProductOptions;
 use crate::zip::{zip_count, ZipLengthMismatch, ZipOptions};
@@ -9,6 +10,7 @@ use crate::zip::{zip_count, ZipLengthMismatch, ZipOptions};
 pub enum Operation {
     Product(ProductOptions),
     Zip(ZipOptions),
+    Concat(ConcatOptions),
 }
 
 /// Counts combinations for whichever operation is selected.
@@ -19,6 +21,7 @@ pub fn count(op: &Operation, lists: &[Vec<String>]) -> Result<Count, ZipLengthMi
     match op {
         Operation::Product(_opts) => Ok(combination_count(&lens)),
         Operation::Zip(opts) => zip_count(&lens, opts.on_unequal),
+        Operation::Concat(_opts) => Ok(concat_count(&lens)),
     }
 }
 
@@ -54,5 +57,11 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(count(&op, &lists()).unwrap(), Count::Exact(2));
+    }
+
+    #[test]
+    fn concat_dispatches_to_concat_count() {
+        let op = Operation::Concat(ConcatOptions::default());
+        assert_eq!(count(&op, &lists()).unwrap(), Count::Exact(4));
     }
 }

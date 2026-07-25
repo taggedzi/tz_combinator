@@ -9,7 +9,8 @@ use std::io::{BufWriter, Write};
 
 use clap::Parser;
 use combinator_core::{
-    combinations, estimate_jsonl_size, estimate_text_size, zip_records, SizeEstimate, SizeInput,
+    combinations, concat_records, estimate_jsonl_size, estimate_text_size, zip_records,
+    SizeEstimate, SizeInput,
 };
 use combinator_core::{operation_count, Count, Operation, ProductOptions, ZipOptions};
 
@@ -343,23 +344,35 @@ fn bounded_size_estimate(
         Format::Text
     };
     let bounded: Option<u128> = count.and_then(|c| {
-        let max_items: Vec<&str> = lists
-            .iter()
-            .map(|l| {
-                l.iter()
-                    .max_by_key(|s| {
-                        if json_out {
-                            serde_json::to_string(s)
-                                .map(|v| v.len())
-                                .unwrap_or(usize::MAX)
-                        } else {
-                            s.len()
-                        }
-                    })
+        let longest_key = |s: &&String| {
+            if json_out {
+                serde_json::to_string(s)
+                    .map(|v| v.len())
+                    .unwrap_or(usize::MAX)
+            } else {
+                s.len()
+            }
+        };
+        let max_items: Vec<&str> = match op {
+            Operation::Concat(_) => {
+                let longest = lists
+                    .iter()
+                    .flatten()
+                    .max_by_key(longest_key)
                     .map(String::as_str)
-                    .unwrap_or("")
-            })
-            .collect();
+                    .unwrap_or("");
+                vec![longest]
+            }
+            Operation::Product(_) | Operation::Zip(_) => lists
+                .iter()
+                .map(|l| {
+                    l.iter()
+                        .max_by_key(longest_key)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                })
+                .collect(),
+        };
         let max_index = common.offset.saturating_add(c.saturating_sub(1));
         let per_record = format_record(
             &max_items,
@@ -407,52 +420,83 @@ fn stream(
     let mut index: u128 = common.offset;
     let output_limit = effective_output_limit(common);
     let mut written: u64 = 0;
-    let index_source: Box<dyn Iterator<Item = Vec<usize>>> = match op {
-        Operation::Product(opts) => Box::new(combinations(lists, opts.clone())),
-        Operation::Zip(opts) => Box::new(zip_records(lists, opts.clone()).map_err(|_| {
-            AppError::runtime(
-                "ZIP_LENGTH_MISMATCH",
-                "zip inputs have unequal lengths; pass --on-unequal truncate or cycle",
-            )
-        })?),
-    };
-    for indices in index_source {
-        let items: Vec<&str> = indices
-            .iter()
-            .enumerate()
-            .map(|(list_i, &item_i)| lists[list_i][item_i].as_str())
-            .collect();
-        let record = format_record(
-            &items,
-            index,
-            sep,
-            &common.rec_sep,
-            format,
-            common.lean_output,
-        );
-        let record_bytes = u64::try_from(record.len()).map_err(|_| {
-            AppError::runtime(
-                "OUTPUT_LIMIT_EXCEEDED",
-                "output record is too large to write",
-            )
-        })?;
-        if let Some(limit) = output_limit {
-            let next = written.checked_add(record_bytes).ok_or_else(|| {
-                AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
-            })?;
-            if next > limit {
-                return Err(AppError::runtime(
-                    "OUTPUT_LIMIT_EXCEEDED",
-                    "output exceeds the configured byte limit",
+
+    enum Records {
+        Multi(Box<dyn Iterator<Item = Vec<usize>>>),
+        Single(Box<dyn Iterator<Item = (usize, usize)>>),
+    }
+
+    let records = match op {
+        Operation::Product(opts) => Records::Multi(Box::new(combinations(lists, opts.clone()))),
+        Operation::Zip(opts) => Records::Multi(Box::new(
+            zip_records(lists, opts.clone()).map_err(|_| {
+                AppError::runtime(
+                    "ZIP_LENGTH_MISMATCH",
+                    "zip inputs have unequal lengths; pass --on-unequal truncate or cycle",
                 )
-                .with("written_bytes", written)
-                .with("record_bytes", record_bytes)
-                .with("limit_bytes", limit));
-            }
-            written = next;
+            })?,
+        )),
+        Operation::Concat(opts) => {
+            Records::Single(Box::new(concat_records(lists, opts.clone()).ok_or_else(
+                || AppError::runtime("COUNT_OVERFLOW", "concatenated item count overflowed"),
+            )?))
         }
-        writer.write_all(record.as_bytes()).map_err(write_err)?;
-        index = index.saturating_add(1);
+    };
+
+    macro_rules! emit {
+        ($items:expr) => {{
+            let items = $items;
+            let record = format_record(
+                &items,
+                index,
+                sep,
+                &common.rec_sep,
+                format,
+                common.lean_output,
+            );
+            let record_bytes = u64::try_from(record.len()).map_err(|_| {
+                AppError::runtime(
+                    "OUTPUT_LIMIT_EXCEEDED",
+                    "output record is too large to write",
+                )
+            })?;
+            if let Some(limit) = output_limit {
+                let next = written.checked_add(record_bytes).ok_or_else(|| {
+                    AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+                })?;
+                if next > limit {
+                    return Err(AppError::runtime(
+                        "OUTPUT_LIMIT_EXCEEDED",
+                        "output exceeds the configured byte limit",
+                    )
+                    .with("written_bytes", written)
+                    .with("record_bytes", record_bytes)
+                    .with("limit_bytes", limit));
+                }
+                written = next;
+            }
+            writer.write_all(record.as_bytes()).map_err(write_err)?;
+            index = index.saturating_add(1);
+        }};
+    }
+
+    match records {
+        Records::Multi(iter) => {
+            for indices in iter {
+                let items: Vec<&str> = indices
+                    .iter()
+                    .enumerate()
+                    .map(|(list_i, &item_i)| lists[list_i][item_i].as_str())
+                    .collect();
+                emit!(items);
+            }
+        }
+        Records::Single(iter) => {
+            for (list_i, item_i) in iter {
+                let items: Vec<&str> = vec![lists[list_i][item_i].as_str()];
+                emit!(items);
+            }
+        }
     }
     writer.flush().map_err(write_err)?;
     drop(writer);
