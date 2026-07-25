@@ -5,6 +5,7 @@ mod normalize;
 mod output;
 mod output_file;
 mod preflight;
+mod sharding;
 
 use std::io::{BufWriter, Write};
 
@@ -28,6 +29,7 @@ use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
 use normalize::MAX_TRANSFORMS;
 use output::{format_record_with, Format};
 use output_file::OutputFile;
+use sharding::{page as shard_page, range as shard_range, ShardError};
 
 enum OutputWriter<'a> {
     File(&'a mut std::fs::File),
@@ -126,6 +128,7 @@ fn concat_operation(args: ConcatArgs) -> (CommonArgs, String, Operation) {
 
 fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     validate_resource_limits(&common)?;
+    validate_shard_args(&common)?;
     if matches!(common.format, OutFormat::Json) && !(common.explain || common.dry_run) {
         return Err(AppError::usage(
             "FORMAT_UNSUPPORTED",
@@ -349,6 +352,10 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
             ));
         }
     };
+    let mut common = common;
+    let mut op = op;
+    let shard = apply_shard(&mut common, &mut op, total_for_limits)?;
+
     match total_for_limits {
         Count::Exact(total) if common.limit.unwrap_or(total) > common.max_combinations => {
             return Err(AppError::runtime(
@@ -379,7 +386,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
             matches!(common.format, OutFormat::Jsonl),
             template.as_ref(),
         );
-        return explain(&common, &op, &lists, total_for_limits, estimate);
+        return explain(&common, &op, &lists, total_for_limits, estimate, shard);
     }
 
     // Pre-flight for file output.
@@ -417,6 +424,7 @@ fn explain(
     lists: &[Vec<String>],
     count: Count,
     estimate: SizeEstimate,
+    shard: Option<sharding::ShardRange>,
 ) -> Result<(), AppError> {
     let exact_count = match count {
         Count::Exact(value) => Some(value),
@@ -431,6 +439,7 @@ fn explain(
         SizeEstimate::Overflow => None,
     };
     let operation = operation_name(op);
+    let ordering = ordering_name(op);
     let format = match common.format {
         OutFormat::Text => "text",
         OutFormat::Jsonl => "jsonl",
@@ -449,6 +458,7 @@ fn explain(
         let summary = serde_json::json!({
             "schema_version": 1,
             "operation": operation,
+            "ordering": ordering,
             "transforms": &common.transforms,
             "input": {
                 "lists": lists.len(),
@@ -459,6 +469,7 @@ fn explain(
             "combination_count_overflow": exact_count.is_none(),
             "offset": common.offset,
             "limit": common.limit,
+            "shard": shard.map(|range| serde_json::json!({"start": range.start, "end": range.end})),
             "records_to_emit": records_to_emit,
             "estimated_output_bytes": estimated_bytes,
             "estimated_output_overflow": estimated_bytes.is_none(),
@@ -478,6 +489,7 @@ fn explain(
     } else {
         println!("schema_version=1");
         println!("operation={operation}");
+        println!("ordering={ordering}");
         println!("transforms={}", common.transforms.join(","));
         println!("input_lists={}", lists.len());
         println!(
@@ -500,6 +512,10 @@ fn explain(
                 .limit
                 .map_or_else(|| "unlimited".to_string(), |n| n.to_string())
         );
+        if let Some(range) = shard {
+            println!("shard_start={}", range.start);
+            println!("shard_end={}", range.end);
+        }
         println!(
             "records_to_emit={}",
             records_to_emit.map_or_else(|| "unknown".to_string(), |n| n.to_string())
@@ -520,6 +536,87 @@ fn operation_name(op: &Operation) -> &'static str {
         Operation::Zip(_) => "zip",
         Operation::Concat(_) => "concat",
     }
+}
+
+fn ordering_name(op: &Operation) -> &'static str {
+    match op {
+        Operation::Product(options) if options.reverse_fields => "reverse-fields",
+        Operation::Product(options) if options.reverse => "reverse",
+        Operation::Product(_) => "forward",
+        Operation::Zip(options) if options.reverse => "reverse",
+        Operation::Zip(_) => "forward",
+        Operation::Concat(options) if options.reverse => "reverse",
+        Operation::Concat(_) => "forward",
+    }
+}
+
+fn validate_shard_args(common: &CommonArgs) -> Result<(), AppError> {
+    match (common.shard_index, common.shard_count) {
+        (None, None) => Ok(()),
+        (Some(_), Some(0)) => Err(AppError::usage(
+            "SHARD_COUNT_INVALID",
+            "--shard-count must be positive",
+        )),
+        (Some(index), Some(count)) if index >= count => Err(AppError::usage(
+            "SHARD_INDEX_INVALID",
+            "--shard-index must be less than --shard-count",
+        )),
+        (Some(_), Some(_)) => Ok(()),
+        _ => Err(AppError::usage(
+            "SHARD_ARGUMENTS_INCOMPLETE",
+            "--shard-index and --shard-count must be provided together",
+        )),
+    }
+}
+
+fn apply_shard(
+    common: &mut CommonArgs,
+    op: &mut Operation,
+    count: Count,
+) -> Result<Option<sharding::ShardRange>, AppError> {
+    let (index, shard_count) = match (common.shard_index, common.shard_count) {
+        (Some(index), Some(count)) => (index, count),
+        _ => return Ok(None),
+    };
+    let total = match count {
+        Count::Exact(value) => value,
+        Count::Overflow => {
+            return Err(AppError::runtime(
+                "SHARD_COUNT_OVERFLOW",
+                "cannot compute a shard range for an overflowing combination count",
+            ));
+        }
+    };
+    let shard = shard_range(total, index, shard_count).map_err(|error| match error {
+        ShardError::ZeroCount => {
+            AppError::usage("SHARD_COUNT_INVALID", "--shard-count must be positive")
+        }
+        ShardError::IndexOutOfRange => AppError::usage(
+            "SHARD_INDEX_INVALID",
+            "--shard-index must be less than --shard-count",
+        ),
+        ShardError::Overflow => {
+            AppError::runtime("SHARD_COUNT_OVERFLOW", "shard range arithmetic overflowed")
+        }
+    })?;
+    let (offset, limit) = shard_page(shard, common.offset, common.limit);
+    common.offset = offset;
+    common.limit = Some(limit);
+    match op {
+        Operation::Product(options) => {
+            options.offset = offset;
+            options.limit = Some(limit);
+        }
+        Operation::Zip(options) => {
+            options.offset = offset;
+            options.limit = Some(limit);
+        }
+        Operation::Concat(options) => {
+            options.offset = offset;
+            options.limit = Some(limit);
+        }
+    }
+    Ok(Some(shard))
 }
 
 fn load_template(common: &CommonArgs, sep: &str) -> Result<Option<Template>, AppError> {

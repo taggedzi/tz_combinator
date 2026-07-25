@@ -101,6 +101,8 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--reverse-fields` | off | Vary the **leftmost** list fastest instead of the rightmost. Mutually exclusive with `--reverse`. |
 | `--offset <N>` | `0` | Skip this many leading combinations before emitting. |
 | `--limit <N>` | unlimited | Emit at most this many combinations. |
+| `--shard-index <N>` | none | Select a zero-based contiguous shard; requires `--shard-count`. |
+| `--shard-count <N>` | none | Partition the ordered output into this many contiguous shards; requires `--shard-index`. |
 | `--count-only` | off | Print only the total combination count and exit; generates nothing. |
 | `--explain` | off | Print a validated execution summary and generate nothing. Use `--format json` for JSON. |
 | `--dry-run` | off | Validate the request and print a summary without generating records or creating output files. |
@@ -307,6 +309,26 @@ $ combinator --list "a,b" --list "c,d" --format jsonl --offset 1 --limit 2
 {"i":2,"value":"bc","fields":["b","c"]}
 ```
 
+`--shard-index` and `--shard-count` split the selected output ordering into
+balanced, contiguous half-open ranges. Earlier shards receive one extra
+record when the count is not evenly divisible. Existing `--offset` and
+`--limit` are intersected with the shard range, so they can resume or further
+page a shard without changing its boundaries. The same rule applies to
+`zip` and `concat`; with `--reverse`, ranges are assigned in reverse output
+order. The range algorithm is version 1 and is deterministic for stable
+inputs:
+
+```
+$ combinator --list "a,b" --list "1,2,3" --sep "-" --shard-index 1 --shard-count 2
+b-1
+b-2
+b-3
+```
+
+Use `--explain --format json` to obtain the full count plus the effective
+offset, limit, shard range, ordering, and output estimate without generating
+records.
+
 `--count-only` prints just the total combination count and exits, without
 generating any combinations:
 
@@ -403,6 +425,10 @@ as a runtime error with exit **1**.
 | `TRANSFORM_LIMIT` | 2 | The invocation contains too many transformation expressions. |
 | `DUPLICATE_ITEM` | 1 | `reject-duplicates` found a duplicate within an input list. |
 | `MODE_CONFLICT` | 2 | Mutually exclusive generation-summary modes were combined. |
+| `SHARD_ARGUMENTS_INCOMPLETE` | 2 | `--shard-index` and `--shard-count` must be provided together. |
+| `SHARD_COUNT_INVALID` | 2 | `--shard-count` must be positive. |
+| `SHARD_INDEX_INVALID` | 2 | `--shard-index` must be less than `--shard-count`. |
+| `SHARD_COUNT_OVERFLOW` | 1 | The shard range could not be computed safely. |
 | `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
 | `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |

@@ -35,7 +35,7 @@ The central design principles are:
 | F1 | Explicit operation modes: product, zip, concat, join | Everyone; removes semantic ambiguity | P0 |
 | F2 | Robust input and output formats: CSV, TSV, NUL, escaped inline data | Admins and data pipelines | P0 — implemented |
 | F3 | Templates and field-aware output | Automation, URLs, configs, test generation | P0 — implemented |
-| F4 | Deterministic sharding and resumable work | Batch and distributed jobs | P1 |
+| F4 | Deterministic sharding and resumable work | Batch and distributed jobs | P1 — implemented |
 | F5 | Dry-run, explain, and operational summaries | Admins and deployment systems | P1 |
 | F6 | Pipeline ergonomics and process integration | Shell and subprocess callers | P1 |
 | F7 | Normalization and transformation operations | Data cleanup and automation | P1 |
@@ -221,14 +221,15 @@ remain supported.
 
 1. Define shard validation: count must be positive and index must be less than
    count.
-2. Specify whether shards are contiguous ranges or round-robin records; use
-   contiguous ranges first because they preserve sequential file access.
+2. Use balanced contiguous half-open ranges in the selected output ordering;
+   this is algorithm version 1.
 3. Compute shard ranges with checked `u128` arithmetic.
-4. Feed the computed range into the existing product paging engine.
-5. Define interactions with reverse order and other operations.
-6. Add JSONL metadata or `--explain` output for reproducibility.
-7. Test exact coverage: no duplicates, no gaps, stable union, and overflow
-   handling.
+4. Intersect the computed range with the existing global offset/limit page.
+5. Apply the effective page to product, zip, and concat, including reverse
+   output.
+6. Report the shard range and effective page in `--explain --format json`.
+7. Test exact coverage: no duplicates, no gaps, stable union, and invalid
+   parameter handling.
 
 ### Security and acceptance criteria
 

@@ -20,6 +20,101 @@ fn basic_product_to_stdout() {
 }
 
 #[test]
+fn shards_cover_product_without_gaps_or_duplicates() {
+    let all = bin()
+        .args(["--list", "a,b", "--list", "1,2,3", "--sep", "-"])
+        .output()
+        .unwrap();
+    let mut sharded = String::new();
+    for index in 0..3 {
+        let out = bin()
+            .args([
+                "--list",
+                "a,b",
+                "--list",
+                "1,2,3",
+                "--sep",
+                "-",
+                "--shard-index",
+                &index.to_string(),
+                "--shard-count",
+                "3",
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        sharded.push_str(&String::from_utf8_lossy(&out.stdout));
+    }
+    assert_eq!(sharded, String::from_utf8_lossy(&all.stdout));
+}
+
+#[test]
+fn shards_follow_reverse_output_order() {
+    let out = bin()
+        .args([
+            "--list",
+            "a,b",
+            "--list",
+            "1,2,3",
+            "--sep",
+            "-",
+            "--reverse",
+            "--shard-index",
+            "0",
+            "--shard-count",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "b-3\nb-2\nb-1\n");
+}
+
+#[test]
+fn explain_reports_effective_shard_page() {
+    let out = bin()
+        .args([
+            "--list",
+            "a,b",
+            "--list",
+            "1,2,3",
+            "--format",
+            "json",
+            "--explain",
+            "--shard-index",
+            "1",
+            "--shard-count",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["offset"], 3);
+    assert_eq!(json["limit"], 3);
+    assert_eq!(json["records_to_emit"], 3);
+    assert_eq!(json["shard"]["start"], 3);
+    assert_eq!(json["shard"]["end"], 6);
+}
+
+#[test]
+fn invalid_shard_arguments_fail_before_input_use() {
+    let out = bin()
+        .args([
+            "--file",
+            "missing-input",
+            "--shard-count",
+            "0",
+            "--shard-index",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SHARD_COUNT_INVALID"));
+}
+
+#[test]
 fn bare_product_matches_explicit_product_subcommand() {
     let args = ["--list", "a,b", "--list", "x,y", "--sep", "-"];
     let bare = bin().args(args).output().unwrap();
