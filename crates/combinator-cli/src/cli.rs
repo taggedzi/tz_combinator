@@ -34,9 +34,13 @@ pub struct Cli {
     #[arg(long = "list-delim", default_value = ",")]
     pub list_delim: String,
 
-    /// Vary the leftmost list fastest instead of the rightmost.
+    /// Emit combinations in reverse of the default order.
     #[arg(long)]
     pub reverse: bool,
+
+    /// Vary the leftmost list fastest instead of the rightmost.
+    #[arg(long)]
+    pub reverse_fields: bool,
 
     /// Skip this many leading combinations.
     #[arg(long, default_value_t = 0)]
@@ -87,6 +91,7 @@ mod tests {
         assert_eq!(cli.rec_sep, "\n");
         assert_eq!(cli.list_delim, ",");
         assert!(!cli.reverse);
+        assert!(!cli.reverse_fields);
         assert_eq!(cli.offset, 0);
         assert!(cli.limit.is_none());
         assert!(matches!(cli.format, OutFormat::Text));
@@ -103,5 +108,12 @@ mod tests {
         let cli = Cli::parse_from(["combinator", "--list", "a", "--list", "b", "--file", "f.txt"]);
         assert_eq!(cli.list, vec!["a", "b"]);
         assert_eq!(cli.file, vec!["f.txt"]);
+    }
+
+    #[test]
+    fn parses_reverse_modes() {
+        let cli = Cli::parse_from(["combinator", "--list", "a,b", "--reverse-fields"]);
+        assert!(!cli.reverse);
+        assert!(cli.reverse_fields);
     }
 }
