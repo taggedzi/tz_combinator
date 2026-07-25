@@ -191,7 +191,8 @@ $ combinator --list "a,b" --list "c,d,e" --count-only
 
 Inputs are bounded by default. Files and stdin are read incrementally rather
 than loaded without limit; use the `--max-*` flags to tune limits for a trusted
- workload. Generation is bounded by `--max-combinations` and
+ workload. The compiled hard ceilings cannot be raised by command-line flags.
+Generation is bounded by `--max-combinations` and
 `--max-output-bytes`; provide an explicit `--limit` for especially large or
 attacker-controlled requests.
 
@@ -237,6 +238,7 @@ zero combinations).
 | `SOURCE_CONFLICT` | 2 | Both `--list` and `--file` were given; only one source is allowed. |
 | `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
+| `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |
 | `OUTPUT_EXISTS` | 1 | `--output` names a file that already exists and `--overwrite` was not passed. |
 | `INSUFFICIENT_SPACE` | 1 | Pre-flight estimate of the output size exceeds available disk space. |
 | `FILE_SIZE_LIMIT` | 1 | Pre-flight estimate of the output size exceeds `--max-file-size`. |
