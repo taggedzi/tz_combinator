@@ -12,10 +12,12 @@ use combinator_core::{
     combinations, concat_records, estimate_jsonl_size, estimate_text_size, zip_records,
     SizeEstimate, SizeInput,
 };
-use combinator_core::{operation_count, Count, Operation, ProductOptions, ZipOptions};
+use combinator_core::{
+    operation_count, ConcatOptions, Count, Operation, ProductOptions, ZipOptions,
+};
 
 use cli::{
-    Cli, CommonArgs, Mode, OutFormat, ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS,
+    Cli, CommonArgs, ConcatArgs, Mode, OutFormat, ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS,
     HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS,
     HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
@@ -63,6 +65,7 @@ fn resolve(cli: Cli) -> (CommonArgs, String, Operation) {
     match cli.command {
         Some(Mode::Product(args)) => product_operation(args),
         Some(Mode::Zip(args)) => zip_operation(args),
+        Some(Mode::Concat(args)) => concat_operation(args),
         None => product_operation(cli.product),
     }
 }
@@ -85,6 +88,15 @@ fn zip_operation(args: ZipArgs) -> (CommonArgs, String, Operation) {
         limit: args.common.limit,
     };
     (args.common, args.sep, Operation::Zip(opts))
+}
+
+fn concat_operation(args: ConcatArgs) -> (CommonArgs, String, Operation) {
+    let opts = ConcatOptions {
+        reverse: args.common.reverse,
+        offset: args.common.offset,
+        limit: args.common.limit,
+    };
+    (args.common, String::new(), Operation::Concat(opts))
 }
 
 fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {

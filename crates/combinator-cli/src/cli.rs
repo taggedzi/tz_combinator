@@ -159,12 +159,21 @@ pub struct ZipArgs {
     pub on_unequal: UnequalPolicyArg,
 }
 
+/// Sequential concatenation of the input lists.
+#[derive(Debug, Args)]
+pub struct ConcatArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Mode {
     /// Ordered Cartesian product (the default when no subcommand is given).
     Product(ProductArgs),
     /// Positional pairing of the input lists.
     Zip(ZipArgs),
+    /// Sequential concatenation of the input lists.
+    Concat(ConcatArgs),
 }
 
 /// Streams combinations of text lists: product (default), zip, concat.
@@ -254,5 +263,22 @@ mod tests {
         let result =
             Cli::try_parse_from(["combinator", "zip", "--list", "a,b", "--reverse-fields"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn concat_subcommand_has_no_sep_field() {
+        let result = Cli::try_parse_from(["combinator", "concat", "--list", "a,b", "--sep", "-"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn concat_subcommand_parses() {
+        let cli = Cli::parse_from(["combinator", "concat", "--list", "a,b", "--list", "c,d"]);
+        match cli.command {
+            Some(Mode::Concat(args)) => {
+                assert_eq!(args.common.list, vec!["a,b", "c,d"]);
+            }
+            other => panic!("expected concat subcommand, got {other:?}"),
+        }
     }
 }
