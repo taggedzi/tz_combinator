@@ -148,6 +148,18 @@ pub struct CommonArgs {
     /// Skip pre-flight validation for file output.
     #[arg(long = "no-preflight")]
     pub no_preflight: bool,
+
+    /// Suppress non-fatal warnings.
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Treat non-fatal warnings as runtime errors.
+    #[arg(long = "warnings-as-errors")]
+    pub warnings_as_errors: bool,
+
+    /// Print a one-line record/byte summary to stderr after successful output.
+    #[arg(long)]
+    pub summary: bool,
 }
 
 /// Ordered Cartesian product of the input lists (the default operation).
@@ -195,6 +207,13 @@ pub enum Mode {
     Zip(ZipArgs),
     /// Sequential concatenation of the input lists.
     Concat(ConcatArgs),
+    /// Generate shell completion script.
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
+    /// Generate a roff man page for the CLI.
+    Man,
 }
 
 /// Streams combinations of text lists: product (default), zip, concat.
