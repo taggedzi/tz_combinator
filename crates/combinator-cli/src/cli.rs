@@ -1,6 +1,6 @@
 //! Command-line argument definitions.
 
-use clap::{Parser, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_073_741_824;
 pub const DEFAULT_MAX_LISTS: usize = 128;
@@ -20,10 +20,28 @@ pub enum OutFormat {
     Jsonl,
 }
 
-/// Streams the ordered Cartesian product of text lists.
-#[derive(Debug, Parser)]
-#[command(name = "combinator", version, about)]
-pub struct Cli {
+/// CLI-facing mirror of `combinator_core::UnequalPolicy` (clap's `ValueEnum`
+/// derive cannot target a foreign type).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UnequalPolicyArg {
+    Error,
+    Truncate,
+    Cycle,
+}
+
+impl From<UnequalPolicyArg> for combinator_core::UnequalPolicy {
+    fn from(value: UnequalPolicyArg) -> Self {
+        match value {
+            UnequalPolicyArg::Error => combinator_core::UnequalPolicy::Error,
+            UnequalPolicyArg::Truncate => combinator_core::UnequalPolicy::Truncate,
+            UnequalPolicyArg::Cycle => combinator_core::UnequalPolicy::Cycle,
+        }
+    }
+}
+
+/// Flags shared by every operation mode.
+#[derive(Debug, Args)]
+pub struct CommonArgs {
     /// Inline list, split by --list-delim. Repeatable; order is field order.
     /// Mutually exclusive with --file.
     #[arg(long)]
@@ -33,10 +51,6 @@ pub struct Cli {
     /// is field order. Mutually exclusive with --list.
     #[arg(long)]
     pub file: Vec<String>,
-
-    /// Field separator joining items within a combination.
-    #[arg(long, default_value = "")]
-    pub sep: String,
 
     /// Record separator between combinations (text mode only).
     #[arg(long = "rec-sep", default_value = "\n")]
@@ -49,10 +63,6 @@ pub struct Cli {
     /// Emit combinations in reverse of the default order.
     #[arg(long)]
     pub reverse: bool,
-
-    /// Vary the leftmost list fastest instead of the rightmost.
-    #[arg(long)]
-    pub reverse_fields: bool,
 
     /// Skip this many leading combinations.
     #[arg(long, default_value_t = 0)]
@@ -119,6 +129,64 @@ pub struct Cli {
     pub no_preflight: bool,
 }
 
+/// Ordered Cartesian product of the input lists (the default operation).
+#[derive(Debug, Args)]
+pub struct ProductArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+
+    /// Field separator joining items within a combination.
+    #[arg(long, default_value = "")]
+    pub sep: String,
+
+    /// Vary the leftmost list fastest instead of the rightmost.
+    #[arg(long = "reverse-fields")]
+    pub reverse_fields: bool,
+}
+
+/// Positional pairing of the input lists.
+#[derive(Debug, Args)]
+pub struct ZipArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+
+    /// Field separator joining items within a combination.
+    #[arg(long, default_value = "")]
+    pub sep: String,
+
+    /// Policy when input lists have unequal lengths.
+    #[arg(long = "on-unequal", value_enum, default_value_t = UnequalPolicyArg::Error)]
+    pub on_unequal: UnequalPolicyArg,
+}
+
+/// Sequential concatenation of the input lists.
+#[derive(Debug, Args)]
+pub struct ConcatArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Mode {
+    /// Ordered Cartesian product (the default when no subcommand is given).
+    Product(ProductArgs),
+    /// Positional pairing of the input lists.
+    Zip(ZipArgs),
+    /// Sequential concatenation of the input lists.
+    Concat(ConcatArgs),
+}
+
+/// Streams combinations of text lists: product (default), zip, concat.
+#[derive(Debug, Parser)]
+#[command(name = "combinator", version, about)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Mode>,
+
+    #[command(flatten)]
+    pub product: ProductArgs,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,20 +195,21 @@ mod tests {
     #[test]
     fn defaults_are_sane() {
         let cli = Cli::parse_from(["combinator", "--list", "a,b"]);
-        assert_eq!(cli.sep, "");
-        assert_eq!(cli.rec_sep, "\n");
-        assert_eq!(cli.list_delim, ",");
-        assert!(!cli.reverse);
-        assert!(!cli.reverse_fields);
-        assert_eq!(cli.offset, 0);
-        assert!(cli.limit.is_none());
-        assert!(matches!(cli.format, OutFormat::Text));
+        assert_eq!(cli.product.sep, "");
+        assert_eq!(cli.product.common.rec_sep, "\n");
+        assert_eq!(cli.product.common.list_delim, ",");
+        assert!(!cli.product.common.reverse);
+        assert!(!cli.product.reverse_fields);
+        assert_eq!(cli.product.common.offset, 0);
+        assert!(cli.product.common.limit.is_none());
+        assert!(matches!(cli.product.common.format, OutFormat::Text));
+        assert!(cli.command.is_none());
     }
 
     #[test]
     fn overwrite_alias_force_works() {
         let cli = Cli::parse_from(["combinator", "--list", "a", "-o", "x.txt", "-f"]);
-        assert!(cli.overwrite);
+        assert!(cli.product.common.overwrite);
     }
 
     #[test]
@@ -154,14 +223,62 @@ mod tests {
             "--file",
             "f.txt",
         ]);
-        assert_eq!(cli.list, vec!["a", "b"]);
-        assert_eq!(cli.file, vec!["f.txt"]);
+        assert_eq!(cli.product.common.list, vec!["a", "b"]);
+        assert_eq!(cli.product.common.file, vec!["f.txt"]);
     }
 
     #[test]
     fn parses_reverse_modes() {
         let cli = Cli::parse_from(["combinator", "--list", "a,b", "--reverse-fields"]);
-        assert!(!cli.reverse);
-        assert!(cli.reverse_fields);
+        assert!(!cli.product.common.reverse);
+        assert!(cli.product.reverse_fields);
+    }
+
+    #[test]
+    fn explicit_product_subcommand_parses_same_shape() {
+        let cli = Cli::parse_from(["combinator", "product", "--list", "a,b", "--sep", "-"]);
+        match cli.command {
+            Some(Mode::Product(args)) => {
+                assert_eq!(args.common.list, vec!["a,b"]);
+                assert_eq!(args.sep, "-");
+            }
+            other => panic!("expected explicit product subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zip_subcommand_parses_with_default_policy() {
+        let cli = Cli::parse_from(["combinator", "zip", "--list", "a,b", "--list", "c,d"]);
+        match cli.command {
+            Some(Mode::Zip(args)) => {
+                assert_eq!(args.on_unequal, UnequalPolicyArg::Error);
+                assert_eq!(args.common.list, vec!["a,b", "c,d"]);
+            }
+            other => panic!("expected zip subcommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zip_rejects_reverse_fields_flag() {
+        let result =
+            Cli::try_parse_from(["combinator", "zip", "--list", "a,b", "--reverse-fields"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn concat_subcommand_has_no_sep_field() {
+        let result = Cli::try_parse_from(["combinator", "concat", "--list", "a,b", "--sep", "-"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn concat_subcommand_parses() {
+        let cli = Cli::parse_from(["combinator", "concat", "--list", "a,b", "--list", "c,d"]);
+        match cli.command {
+            Some(Mode::Concat(args)) => {
+                assert_eq!(args.common.list, vec!["a,b", "c,d"]);
+            }
+            other => panic!("expected concat subcommand, got {other:?}"),
+        }
     }
 }
