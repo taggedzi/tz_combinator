@@ -65,8 +65,11 @@ pub fn estimate_text_size(input: &SizeInput) -> SizeEstimate {
     }
 }
 
-/// Upper-bound estimate for JSON Lines output. Ignores content-dependent JSON
-/// string escaping, so treat it as a close estimate, not an exact figure.
+/// Conservative upper-bound estimate for JSON Lines output.
+///
+/// JSON escaping can expand an input byte to at most six output bytes (`\\u00XX`)
+/// for the supported UTF-8 strings, so this deliberately overestimates escaped
+/// content. Runtime output limits remain authoritative.
 pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
     let lens: Vec<usize> = input.lists.iter().map(|l| l.len()).collect();
     let total = match combination_count(&lens) {
@@ -86,7 +89,8 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
         None => return SizeEstimate::Overflow,
     };
     let field_sep_in_value = match (input.field_sep_bytes as u128)
-        .checked_mul(k.saturating_sub(1))
+        .checked_mul(6)
+        .and_then(|v| v.checked_mul(k.saturating_sub(1)))
         .and_then(|v| v.checked_mul(total))
     {
         Some(v) => v,
@@ -104,7 +108,11 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
     // Variable (content) bytes. The `value` string appears once (item bytes +
     // field separators). Non-lean repeats item bytes inside `fields`, wrapped in
     // 2 quotes per field and (k-1) commas per record.
-    let mut variable = match item_bytes.checked_add(field_sep_in_value) {
+    let escaped_item_bytes = match item_bytes.checked_mul(6) {
+        Some(v) => v,
+        None => return SizeEstimate::Overflow,
+    };
+    let mut variable = match escaped_item_bytes.checked_add(field_sep_in_value) {
         Some(v) => v,
         None => return SizeEstimate::Overflow,
     };
@@ -122,7 +130,7 @@ pub fn estimate_jsonl_size(input: &SizeInput, lean: bool) -> SizeEstimate {
             None => return SizeEstimate::Overflow,
         };
         variable = match variable
-            .checked_add(item_bytes)
+            .checked_add(escaped_item_bytes)
             .and_then(|v| v.checked_add(quote_bytes))
             .and_then(|v| v.checked_add(comma_bytes))
         {
@@ -201,6 +209,19 @@ mod tests {
         let text = match estimate_text_size(&input) { SizeEstimate::Bytes(b) => b, _ => panic!() };
         let json = match estimate_jsonl_size(&input, false) { SizeEstimate::Bytes(b) => b, _ => panic!() };
         assert!(json >= text, "jsonl {json} must be >= text {text}");
+    }
+
+    #[test]
+    fn jsonl_upper_bound_accounts_for_escaping() {
+        let lists = vec![vec!["\"\\\n".to_string()]];
+        let input = SizeInput { lists: &lists, field_sep_bytes: 0, rec_sep_bytes: 1 };
+        let estimated = match estimate_jsonl_size(&input, false) {
+            SizeEstimate::Bytes(b) => b,
+            SizeEstimate::Overflow => panic!(),
+        };
+        let escaped = serde_json::to_string(&lists[0][0]).unwrap();
+        let actual = format!(r#"{{"i":0,"value":{escaped},"fields":[{escaped}]}}\n"#).len() as u128;
+        assert!(estimated >= actual, "estimate {estimated} below actual {actual}");
     }
 
     #[test]
