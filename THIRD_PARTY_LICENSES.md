@@ -5,10 +5,13 @@ The versions are the versions pinned in `Cargo.lock`. These dependencies are
 not relicensed under the project MIT license; each remains under its own
 license.
 
-All packages below currently declare `MIT OR Apache-2.0`. The package metadata
-and source links provide the authors, copyright notices, and complete license
-text for each exact release. Those notices should remain available when
-redistributing source or compiled binaries.
+The package metadata and source links provide the authors, copyright notices,
+and complete license text for each exact release. License expressions are
+recorded below when they differ from the project's MIT license or when the
+dependency has a relevant dual-license choice. Those notices should remain
+available when redistributing source or compiled binaries. See also
+[`docs/dependency-licenses.md`](docs/dependency-licenses.md) for the CSV
+dependency audit procedure.
 
 ## Direct and transitive dependencies
 
@@ -24,6 +27,8 @@ redistributing source or compiled binaries.
 | `clap_derive` | 4.6.4 | [crates.io](https://crates.io/crates/clap_derive/4.6.4) |
 | `clap_lex` | 1.1.0 | [crates.io](https://crates.io/crates/clap_lex/1.1.0) |
 | `colorchoice` | 1.0.5 | [crates.io](https://crates.io/crates/colorchoice/1.0.5) |
+| `csv` | 1.4.0 | MIT or Unlicense — [crates.io](https://crates.io/crates/csv/1.4.0) |
+| `csv-core` | 0.1.13 | MIT or Unlicense — [crates.io](https://crates.io/crates/csv-core/0.1.13) |
 | `fs2` | 0.4.3 | [crates.io](https://crates.io/crates/fs2/0.4.3) |
 | `heck` | 0.5.0 | [crates.io](https://crates.io/crates/heck/0.5.0) |
 | `is_terminal_polyfill` | 1.70.2 | [crates.io](https://crates.io/crates/is_terminal_polyfill/1.70.2) |
@@ -33,6 +38,7 @@ redistributing source or compiled binaries.
 | `once_cell_polyfill` | 1.70.2 | [crates.io](https://crates.io/crates/once_cell_polyfill/1.70.2) |
 | `proc-macro2` | 1.0.107 | [crates.io](https://crates.io/crates/proc-macro2/1.0.107) |
 | `quote` | 1.0.47 | [crates.io](https://crates.io/crates/quote/1.0.47) |
+| `ryu` | 1.0.23 | Apache-2.0 or BSL-1.0 — [crates.io](https://crates.io/crates/ryu/1.0.23) |
 | `serde` | 1.0.229 | [crates.io](https://crates.io/crates/serde/1.0.229) |
 | `serde_core` | 1.0.229 | [crates.io](https://crates.io/crates/serde_core/1.0.229) |
 | `serde_derive` | 1.0.229 | [crates.io](https://crates.io/crates/serde_derive/1.0.229) |

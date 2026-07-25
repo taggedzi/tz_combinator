@@ -30,6 +30,10 @@ cargo install --path crates/combinator-cli
 
 Requires Rust edition 2021 (`rust-version = "1.74"` in `crates/combinator-cli/Cargo.toml`).
 
+The workspace is MIT-licensed. Third-party dependency licensing, including the
+`csv` crate used for CSV/TSV parsing, is documented in
+[`docs/dependency-licenses.md`](docs/dependency-licenses.md).
+
 ## Quick example
 
 ```
@@ -45,7 +49,7 @@ Two lists (`red,blue` and `car,bike`) produce 2×2 = 4 combinations. The
 the **leftmost** list vary fastest, or `--reverse` to emit the complete output
 sequence backwards.
 
-## Input: `--list` vs `--file`
+## Input formats and sources
 
 Every list comes from exactly one of two sources, and you must pick one — not
 both — for the whole invocation:
@@ -58,9 +62,17 @@ both — for the whole invocation:
   Pass `--file -` to read that list from **stdin** — stdin is only read when
   `-` is given explicitly; the tool never reads it implicitly.
 
-Mixing `--list` and `--file` in the same invocation is rejected as
-`SOURCE_CONFLICT` (see the error table below). Passing neither is rejected as
-`NO_LISTS`.
+Mixing `--list` and `--file` requires `--allow-mixed-inputs`; inline lists are
+processed first, followed by file sources. Stdin (`--file -`) may appear only
+once. Passing neither is rejected as `NO_LISTS`.
+
+`--input-format` selects bounded file/stdin parsing: `lines` (the default),
+`csv`, `tsv`, or `nul`. CSV/TSV sources are single-column records, with quoted
+delimiters and doubled quotes supported. NUL sources are byte-delimited before
+UTF-8 validation, so newlines are ordinary data. Use `--input-format inline`
+with `--list` to enable escaped values: `\\n`, `\\r`, `\\t`, `\\0`, `\\xNN`,
+`\\\\`, and escaped list delimiters are supported. Malformed escapes, malformed
+CSV, invalid UTF-8, and oversized records fail before output-file replacement.
 
 ```
 $ printf "a\nb\n" | combinator --file -
@@ -74,8 +86,10 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--list <VALUE>` | — | Inline list, split by `--list-delim`. Repeatable. Mutually exclusive with `--file`. |
-| `--file <PATH>` | — | List from a file, one item per line (`-` = stdin). Repeatable. Mutually exclusive with `--list`. |
+| `--list <VALUE>` | — | Inline list, split by `--list-delim`. Repeatable. |
+| `--file <PATH>` | — | List from a file using `--input-format` (`-` = stdin). Repeatable. |
+| `--input-format <lines\|csv\|tsv\|nul\|inline>` | source default | Select bounded file/stdin parsing, or escaped inline parsing. |
+| `--allow-mixed-inputs` | off | Permit `--list` and `--file` together; lists precede files. |
 | `--template <TEMPLATE>` | none | Render each value with a bounded positional or named template. Mutually exclusive with `--template-file`. |
 | `--template-file <PATH>` | none | Read the UTF-8 output template from a bounded file. Mutually exclusive with `--template`. |
 | `--name <NAME>` | none | Name one input field; repeat once per input list, in list order. |
@@ -89,7 +103,7 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--count-only` | off | Print only the total combination count and exit; generates nothing. |
 | `--explain` | off | Print a validated execution summary and generate nothing. Use `--format json` for JSON. |
 | `--dry-run` | off | Validate the request and print a summary without generating records or creating output files. |
-| `--format <text\|jsonl>` | `text` | Output format. |
+| `--format <text\|jsonl\|csv\|tsv\|nul>` | `text` | Output format. CSV/TSV quote fields as needed; NUL terminates each record with `\\0`. |
 | `--lean-output` | off | In `jsonl` format, emit only the value as a bare JSON string per line, instead of the full `{"i":...,"value":...,"fields":[...]}` object. |
 | `-o, --output <PATH>` | stdout | Write output to this file instead of stdout. |
 | `-f, --overwrite` (alias `--force`) | off | Allow overwriting `--output` if it already exists. |
@@ -357,6 +371,12 @@ as a runtime error with exit **1**.
 |---|---|---|
 | `NO_LISTS` | 2 | Neither `--list` nor `--file` was given. |
 | `SOURCE_CONFLICT` | 2 | Both `--list` and `--file` were given; only one source is allowed. |
+| `DUPLICATE_STDIN` | 2 | Stdin was selected more than once as an input source. |
+| `INPUT_FORMAT_INVALID` | 2 | The selected input format is incompatible with the requested source type. |
+| `INLINE_ESCAPE_INVALID` | 2 | Escaped inline input contains an unknown or incomplete escape. |
+| `CSV_MALFORMED` | 2 | CSV/TSV input contains an unterminated or malformed quoted field. |
+| `CSV_MULTIPLE_FIELDS` | 2 | A CSV/TSV input record contains more than one field. |
+| `INPUT_NOT_UTF8` | 2 | A text, CSV, TSV, or NUL-delimited record is not valid UTF-8. |
 | `TEMPLATE_CONFLICT` | 2 | Both `--template` and `--template-file` were given. |
 | `TEMPLATE_SEPARATOR_CONFLICT` | 2 | A template was combined with a non-empty `--sep`. |
 | `TEMPLATE_INVALID` | 2 | Template syntax or a template reference is invalid. |

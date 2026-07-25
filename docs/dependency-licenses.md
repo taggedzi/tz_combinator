@@ -1,0 +1,40 @@
+# Dependency licensing
+
+`tz_combinator` and its workspace crates are licensed under MIT. Third-party
+dependencies remain under their own licenses; adding a dependency does not
+change the license of this project.
+
+## CSV support
+
+The CLI uses the `csv` crate for CSV and TSV parsing. The locked dependency
+versions currently include:
+
+| Crate | Version | License | Use |
+|---|---:|---|---|
+| `csv` | 1.4.0 | MIT or Unlicense | Quoted CSV/TSV reader |
+| `csv-core` | 0.1.13 | MIT or Unlicense | CSV parser core |
+| `itoa` | 1.0.18 | MIT or Apache-2.0 | Transitive formatting dependency |
+| `ryu` | 1.0.23 | Apache-2.0 or BSL-1.0 | Transitive formatting dependency |
+| `serde_core` | 1.0.229 | MIT or Apache-2.0 | Transitive data dependency |
+| `memchr` | 2.8.3 | MIT or Unlicense | Transitive parser dependency |
+
+The `csv` license is documented by [docs.rs](https://docs.rs/crate/csv/1.4.0),
+and its source is maintained at
+[BurntSushi/rust-csv](https://github.com/BurntSushi/rust-csv). The project
+distributes the dependency notices required by the selected licenses; legal
+review should confirm whether the Unlicense option is acceptable for a given
+distribution policy.
+
+## Audit procedure
+
+Before releasing a binary or changing dependencies:
+
+1. Review `Cargo.lock` for the exact resolved dependency set.
+2. Run a license inventory tool such as `cargo license` or `cargo-about`.
+3. Review every normal and platform-specific dependency, including
+   transitive dependencies.
+4. Preserve the generated third-party notices with the release artifacts.
+
+The lockfile is committed so dependency versions and checksums are
+reproducible. A dependency with a license that is not approved by the project
+policy must not be added without an explicit licensing decision.

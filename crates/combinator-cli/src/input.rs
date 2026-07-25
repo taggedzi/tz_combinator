@@ -1,7 +1,8 @@
 //! Gathering lists from inline, file, and stdin sources; delimiter validation.
 
-use std::io::Read;
+use std::io::{Cursor, Read};
 
+use crate::cli::InputFormat;
 use crate::error::AppError;
 
 pub const MAX_DELIM_BYTES: usize = 4096;
@@ -128,6 +129,74 @@ pub fn split_inline_bounded(
     Ok(items)
 }
 
+/// Parses an explicitly escaped inline list. Supported escapes are `\\`, `\\n`,
+/// `\\r`, `\\t`, `\\0`, and `\\xNN`. A backslash before a delimiter makes
+/// that delimiter literal. Unknown and incomplete escapes are rejected.
+pub fn split_escaped_inline_bounded(
+    value: &str,
+    delim: &str,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<String>, AppError> {
+    if value.len() > limits.max_input_bytes {
+        return Err(input_limit(
+            "INPUT_TOO_LARGE",
+            "inline list exceeds the input byte limit",
+            value.len(),
+        ));
+    }
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = value.chars().collect();
+    let delim_chars: Vec<char> = delim.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\\' {
+            i += 1;
+            let escaped = *chars.get(i).ok_or_else(|| {
+                AppError::usage(
+                    "INLINE_ESCAPE_INVALID",
+                    "inline input ends with an incomplete escape",
+                )
+            })?;
+            match escaped {
+                'n' => current.push('\n'),
+                'r' => current.push('\r'),
+                't' => current.push('\t'),
+                '0' => current.push('\0'),
+                '\\' => current.push('\\'),
+                'x' => {
+                    let hi = *chars.get(i + 1).ok_or_else(|| {
+                        AppError::usage("INLINE_ESCAPE_INVALID", "inline hex escape is incomplete")
+                    })?;
+                    let lo = *chars.get(i + 2).ok_or_else(|| {
+                        AppError::usage("INLINE_ESCAPE_INVALID", "inline hex escape is incomplete")
+                    })?;
+                    let value = [hi, lo].iter().collect::<String>();
+                    let byte = u8::from_str_radix(&value, 16).map_err(|_| {
+                        AppError::usage("INLINE_ESCAPE_INVALID", "inline hex escape is invalid")
+                    })?;
+                    current.push(char::from(byte));
+                    i += 2;
+                }
+                other => current.push(other),
+            }
+            i += 1;
+            continue;
+        }
+        if !delim_chars.is_empty() && chars[i..].starts_with(&delim_chars) {
+            finish_parsed_item(&mut items, &mut current, limits, budget, "inline")?;
+            i += delim_chars.len();
+        } else {
+            current.push(ch);
+            i += 1;
+        }
+    }
+    finish_parsed_item(&mut items, &mut current, limits, budget, "inline")?;
+    Ok(items)
+}
+
 /// Reads a file as a list, one item per line, stripping a trailing `\r`.
 /// The path `-` reads standard input instead (explicit stdin only).
 pub fn read_file_list_bounded(
@@ -143,6 +212,186 @@ pub fn read_file_list_bounded(
             .with("path", path)
     })?;
     read_bounded(file, path, limits, budget)
+}
+
+pub fn read_file_list_format_bounded(
+    path: &str,
+    format: InputFormat,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<String>, AppError> {
+    if format == InputFormat::Inline {
+        return Err(AppError::usage(
+            "INPUT_FORMAT_INVALID",
+            "inline input format requires --list",
+        ));
+    }
+    if format == InputFormat::Lines {
+        return read_file_list_bounded(path, limits, budget);
+    }
+    let mut bytes = Vec::new();
+    if path == "-" {
+        read_bytes_bounded(std::io::stdin().lock(), path, limits, budget, &mut bytes)?;
+    } else {
+        let file = std::fs::File::open(path).map_err(|e| {
+            AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}"))
+                .with("path", path)
+        })?;
+        read_bytes_bounded(file, path, limits, budget, &mut bytes)?;
+    }
+    parse_source_bytes(&bytes, path, format, limits, budget)
+}
+
+fn read_bytes_bounded<R: Read>(
+    mut reader: R,
+    path: &str,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+    output: &mut Vec<u8>,
+) -> Result<(), AppError> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk).map_err(|e| {
+            AppError::runtime(
+                "FILE_UNREADABLE",
+                format!("could not read list source: {e}"),
+            )
+            .with("path", path)
+        })?;
+        if read == 0 {
+            break;
+        }
+        let next = output.len().checked_add(read).ok_or_else(|| {
+            input_limit("INPUT_TOO_LARGE", "input byte count overflowed", usize::MAX)
+        })?;
+        if next > limits.max_input_bytes {
+            return Err(input_limit(
+                "INPUT_TOO_LARGE",
+                "input exceeds the input byte limit",
+                next,
+            ));
+        }
+        budget.consume_bytes(read, path)?;
+        output.extend_from_slice(&chunk[..read]);
+    }
+    Ok(())
+}
+
+fn parse_source_bytes(
+    bytes: &[u8],
+    path: &str,
+    format: InputFormat,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<String>, AppError> {
+    match format {
+        InputFormat::Lines => parse_separated_bytes(bytes, b'\n', path, limits, budget),
+        InputFormat::Nul => parse_separated_bytes(bytes, 0, path, limits, budget),
+        InputFormat::Csv => parse_csv_bytes(bytes, b',', path, limits, budget),
+        InputFormat::Tsv => parse_csv_bytes(bytes, b'\t', path, limits, budget),
+        InputFormat::Inline => unreachable!(),
+    }
+}
+
+fn parse_separated_bytes(
+    bytes: &[u8],
+    separator: u8,
+    path: &str,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<String>, AppError> {
+    let mut items = Vec::new();
+    let chunks = bytes.split(|byte| *byte == separator);
+    let chunk_count = chunks.clone().count();
+    for (index, raw) in chunks.enumerate() {
+        let raw = if separator == b'\n' {
+            raw.strip_suffix(b"\r").unwrap_or(raw)
+        } else {
+            raw
+        };
+        if raw.is_empty() && (bytes.is_empty() || index + 1 == chunk_count) {
+            continue;
+        }
+        let value = String::from_utf8(raw.to_vec()).map_err(|_| {
+            AppError::usage("INPUT_NOT_UTF8", "text input is not valid UTF-8").with("path", path)
+        })?;
+        finish_parsed_item(&mut items, &mut value.clone(), limits, budget, path)?;
+    }
+    Ok(items)
+}
+
+fn parse_csv_bytes(
+    bytes: &[u8],
+    separator: u8,
+    path: &str,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<String>, AppError> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(separator)
+        .from_reader(Cursor::new(bytes));
+    let mut items = Vec::new();
+    for result in reader.byte_records() {
+        let record = result.map_err(|error| {
+            AppError::usage("CSV_MALFORMED", format!("malformed CSV/TSV input: {error}"))
+                .with("path", path)
+        })?;
+        if record.len() != 1 {
+            return Err(AppError::usage(
+                "CSV_MULTIPLE_FIELDS",
+                "CSV/TSV input records must contain one field",
+            )
+            .with("path", path));
+        }
+        let value = record.get(0).unwrap_or_default();
+        if value.len() > limits.max_item_bytes {
+            return Err(input_limit(
+                "ITEM_TOO_LARGE",
+                "input item exceeds the item byte limit",
+                value.len(),
+            ));
+        }
+        if items.len() >= limits.max_items_per_list {
+            return Err(input_limit(
+                "TOO_MANY_ITEMS",
+                "list exceeds the maximum item count",
+                items.len() + 1,
+            ));
+        }
+        let value = String::from_utf8(value.to_vec()).map_err(|_| {
+            AppError::usage("INPUT_NOT_UTF8", "text input is not valid UTF-8").with("path", path)
+        })?;
+        budget.consume_item(path)?;
+        items.push(value);
+    }
+    Ok(items)
+}
+
+fn finish_parsed_item(
+    items: &mut Vec<String>,
+    value: &mut String,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+    path: &str,
+) -> Result<(), AppError> {
+    if value.len() > limits.max_item_bytes {
+        return Err(input_limit(
+            "ITEM_TOO_LARGE",
+            "input item exceeds the item byte limit",
+            value.len(),
+        ));
+    }
+    if items.len() >= limits.max_items_per_list {
+        return Err(input_limit(
+            "TOO_MANY_ITEMS",
+            "list exceeds the maximum item count",
+            items.len() + 1,
+        ));
+    }
+    budget.consume_item(path)?;
+    items.push(std::mem::take(value));
+    Ok(())
 }
 
 /// Reads a UTF-8 template file without retaining more than `max_bytes + 1`

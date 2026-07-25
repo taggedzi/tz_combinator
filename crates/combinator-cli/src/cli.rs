@@ -19,6 +19,18 @@ pub enum OutFormat {
     Text,
     Jsonl,
     Json,
+    Csv,
+    Tsv,
+    Nul,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InputFormat {
+    Lines,
+    Csv,
+    Tsv,
+    Nul,
+    Inline,
 }
 
 /// CLI-facing mirror of `combinator_core::UnequalPolicy` (clap's `ValueEnum`
@@ -52,6 +64,14 @@ pub struct CommonArgs {
     /// is field order. Mutually exclusive with --list.
     #[arg(long)]
     pub file: Vec<String>,
+
+    /// Input record format. The default keeps legacy inline-comma and line-file behavior.
+    #[arg(long = "input-format", value_enum)]
+    pub input_format: Option<InputFormat>,
+
+    /// Permit combining --list and --file sources in their explicit argument order.
+    #[arg(long = "allow-mixed-inputs")]
+    pub allow_mixed_inputs: bool,
 
     /// Literal template for rendering each output value.
     #[arg(long)]
