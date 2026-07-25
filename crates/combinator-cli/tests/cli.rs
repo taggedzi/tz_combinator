@@ -22,7 +22,15 @@ fn basic_product_to_stdout() {
 #[test]
 fn reverse_reverses_complete_product() {
     let out = bin()
-        .args(["--list", "red,blue", "--list", "car,bike", "--sep", "-", "--reverse"])
+        .args([
+            "--list",
+            "red,blue",
+            "--list",
+            "car,bike",
+            "--sep",
+            "-",
+            "--reverse",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -35,7 +43,15 @@ fn reverse_reverses_complete_product() {
 #[test]
 fn reverse_fields_preserves_previous_order() {
     let out = bin()
-        .args(["--list", "red,blue", "--list", "car,bike", "--sep", "-", "--reverse-fields"])
+        .args([
+            "--list",
+            "red,blue",
+            "--list",
+            "car,bike",
+            "--sep",
+            "-",
+            "--reverse-fields",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -48,7 +64,14 @@ fn reverse_fields_preserves_previous_order() {
 #[test]
 fn reverse_modes_conflict() {
     let out = bin()
-        .args(["--list", "a,b", "--list", "c,d", "--reverse", "--reverse-fields"])
+        .args([
+            "--list",
+            "a,b",
+            "--list",
+            "c,d",
+            "--reverse",
+            "--reverse-fields",
+        ])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
@@ -105,7 +128,10 @@ fn empty_list_warns_and_exits_zero() {
     // use a file with no lines to get a truly empty list.
     let path = std::env::temp_dir().join("combinator_e2e_empty.txt");
     std::fs::write(&path, "").unwrap();
-    let out = bin().args(["--file", path.to_str().unwrap()]).output().unwrap();
+    let out = bin()
+        .args(["--file", path.to_str().unwrap()])
+        .output()
+        .unwrap();
     std::fs::remove_file(&path).ok();
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
@@ -144,7 +170,9 @@ fn overwrite_writes_file() {
 #[test]
 fn jsonl_and_offset_limit() {
     let out = bin()
-        .args(["--list", "a,b", "--list", "c,d", "--format", "jsonl", "--offset", "1", "--limit", "2"])
+        .args([
+            "--list", "a,b", "--list", "c,d", "--format", "jsonl", "--offset", "1", "--limit", "2",
+        ])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -159,7 +187,10 @@ fn jsonl_and_offset_limit() {
 #[test]
 fn oversized_delimiter_is_usage_error() {
     let big = "x".repeat(5000);
-    let out = bin().args(["--list", "a,b", "--sep", &big]).output().unwrap();
+    let out = bin()
+        .args(["--list", "a,b", "--sep", &big])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("BAD_DELIMITER"));
 }
@@ -174,21 +205,50 @@ fn preflight_size_check_respects_limit() {
 
     // Full product (300 bytes) exceeds the 100-byte file-size limit.
     let out_full = bin()
-        .args(["--list", l1, "--list", l2, "-o", path_full.to_str().unwrap(), "--max-file-size", "100"])
-        .output().unwrap();
+        .args([
+            "--list",
+            l1,
+            "--list",
+            l2,
+            "-o",
+            path_full.to_str().unwrap(),
+            "--max-file-size",
+            "100",
+        ])
+        .output()
+        .unwrap();
     // --limit 20 -> 60 bytes, within the limit.
     let out_ltd = bin()
-        .args(["--list", l1, "--list", l2, "--limit", "20", "-o", path_ltd.to_str().unwrap(), "--max-file-size", "100"])
-        .output().unwrap();
+        .args([
+            "--list",
+            l1,
+            "--list",
+            l2,
+            "--limit",
+            "20",
+            "-o",
+            path_ltd.to_str().unwrap(),
+            "--max-file-size",
+            "100",
+        ])
+        .output()
+        .unwrap();
 
     let full_code = out_full.status.code();
     let full_err = String::from_utf8_lossy(&out_full.stderr).into_owned();
     let ltd_ok = out_ltd.status.success();
-    let ltd_lines = std::fs::read_to_string(&path_ltd).unwrap_or_default().lines().count();
+    let ltd_lines = std::fs::read_to_string(&path_ltd)
+        .unwrap_or_default()
+        .lines()
+        .count();
     std::fs::remove_file(&path_full).ok();
     std::fs::remove_file(&path_ltd).ok();
 
-    assert_eq!(full_code, Some(1), "unbounded write should hit the file-size limit");
+    assert_eq!(
+        full_code,
+        Some(1),
+        "unbounded write should hit the file-size limit"
+    );
     assert!(full_err.contains("FILE_SIZE_LIMIT"), "stderr: {full_err}");
     assert!(ltd_ok, "limited write should pass pre-flight");
     assert_eq!(ltd_lines, 20);

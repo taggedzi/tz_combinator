@@ -12,8 +12,8 @@ use combinator_core::{combination_count, combinations, Count, ProductOptions};
 use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 
 use cli::{
-    Cli, OutFormat, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEM_BYTES,
-    HARD_MAX_ITEMS_PER_LIST, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
+    Cli, OutFormat, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST,
+    HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{render, render_warning, AppError};
 use input::{InputBudget, InputLimits};
@@ -65,9 +65,11 @@ fn run(cli: Cli) -> Result<(), AppError> {
     // source is argument order (clap preserves it). `--file -` reads stdin.
     let mut lists: Vec<Vec<String>> = Vec::new();
     if cli.list.len().max(cli.file.len()) > cli.max_lists {
-        return Err(AppError::runtime("TOO_MANY_LISTS", "input exceeds the maximum list count")
-            .with("observed", cli.list.len().max(cli.file.len()))
-            .with("limit", cli.max_lists));
+        return Err(
+            AppError::runtime("TOO_MANY_LISTS", "input exceeds the maximum list count")
+                .with("observed", cli.list.len().max(cli.file.len()))
+                .with("limit", cli.max_lists),
+        );
     }
     let input_limits = InputLimits {
         max_input_bytes: cli.max_input_bytes,
@@ -87,23 +89,37 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
         (false, true) => {
             for value in &cli.list {
-                lists.push(input::split_inline_bounded(value, &cli.list_delim, input_limits, &mut input_budget)?);
+                lists.push(input::split_inline_bounded(
+                    value,
+                    &cli.list_delim,
+                    input_limits,
+                    &mut input_budget,
+                )?);
             }
         }
         (true, false) => {
             for path in &cli.file {
-                lists.push(input::read_file_list_bounded(path, input_limits, &mut input_budget)?);
+                lists.push(input::read_file_list_bounded(
+                    path,
+                    input_limits,
+                    &mut input_budget,
+                )?);
             }
         }
     }
 
-    let total_items: usize = lists.iter().map(Vec::len).try_fold(0usize, |acc, n| acc.checked_add(n)).ok_or_else(|| {
-        AppError::runtime("TOO_MANY_ITEMS", "total item count overflowed")
-    })?;
+    let total_items: usize = lists
+        .iter()
+        .map(Vec::len)
+        .try_fold(0usize, |acc, n| acc.checked_add(n))
+        .ok_or_else(|| AppError::runtime("TOO_MANY_ITEMS", "total item count overflowed"))?;
     if total_items > cli.max_total_items {
-        return Err(AppError::runtime("TOO_MANY_ITEMS", "input exceeds the maximum total item count")
-            .with("observed", total_items)
-            .with("limit", cli.max_total_items));
+        return Err(AppError::runtime(
+            "TOO_MANY_ITEMS",
+            "input exceeds the maximum total item count",
+        )
+        .with("observed", total_items)
+        .with("limit", cli.max_total_items));
     }
 
     let json_out = matches!(cli.format, OutFormat::Jsonl);
@@ -164,11 +180,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
         if !cli.no_preflight {
             let estimate = bounded_size_estimate(&cli, &lists, json_out);
             let available = available_space(path)?;
-            preflight::check_capacity(
-                estimate,
-                available,
-                effective_output_limit(&cli),
-            )?;
+            preflight::check_capacity(estimate, available, effective_output_limit(&cli))?;
         }
     }
 
@@ -177,13 +189,37 @@ fn run(cli: Cli) -> Result<(), AppError> {
 
 fn validate_resource_limits(cli: &Cli) -> Result<(), AppError> {
     let checks = [
-        ("max-output-bytes", cli.max_output_bytes as u128, HARD_MAX_OUTPUT_BYTES as u128),
-        ("max-input-bytes", cli.max_input_bytes as u128, HARD_MAX_INPUT_BYTES as u128),
-        ("max-item-bytes", cli.max_item_bytes as u128, HARD_MAX_ITEM_BYTES as u128),
-        ("max-items-per-list", cli.max_items_per_list as u128, HARD_MAX_ITEMS_PER_LIST as u128),
+        (
+            "max-output-bytes",
+            cli.max_output_bytes as u128,
+            HARD_MAX_OUTPUT_BYTES as u128,
+        ),
+        (
+            "max-input-bytes",
+            cli.max_input_bytes as u128,
+            HARD_MAX_INPUT_BYTES as u128,
+        ),
+        (
+            "max-item-bytes",
+            cli.max_item_bytes as u128,
+            HARD_MAX_ITEM_BYTES as u128,
+        ),
+        (
+            "max-items-per-list",
+            cli.max_items_per_list as u128,
+            HARD_MAX_ITEMS_PER_LIST as u128,
+        ),
         ("max-lists", cli.max_lists as u128, HARD_MAX_LISTS as u128),
-        ("max-total-items", cli.max_total_items as u128, HARD_MAX_TOTAL_ITEMS as u128),
-        ("max-combinations", cli.max_combinations, HARD_MAX_COMBINATIONS),
+        (
+            "max-total-items",
+            cli.max_total_items as u128,
+            HARD_MAX_TOTAL_ITEMS as u128,
+        ),
+        (
+            "max-combinations",
+            cli.max_combinations,
+            HARD_MAX_COMBINATIONS,
+        ),
     ];
     for (flag, requested, hard) in checks {
         if requested > hard {
@@ -241,7 +277,11 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
     };
 
     // Per-record upper bound: format the longest-possible record once.
-    let format = if json_out { Format::Jsonl } else { Format::Text };
+    let format = if json_out {
+        Format::Jsonl
+    } else {
+        Format::Text
+    };
     let bounded: Option<u128> = count.and_then(|c| {
         let max_items: Vec<&str> = lists
             .iter()
@@ -249,7 +289,9 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
                 l.iter()
                     .max_by_key(|s| {
                         if json_out {
-                            serde_json::to_string(s).map(|v| v.len()).unwrap_or(usize::MAX)
+                            serde_json::to_string(s)
+                                .map(|v| v.len())
+                                .unwrap_or(usize::MAX)
                         } else {
                             s.len()
                         }
@@ -259,9 +301,15 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
             })
             .collect();
         let max_index = cli.offset.saturating_add(c.saturating_sub(1));
-        let per_record =
-            format_record(&max_items, max_index, &cli.sep, &cli.rec_sep, format, cli.lean_output)
-                .len() as u128;
+        let per_record = format_record(
+            &max_items,
+            max_index,
+            &cli.sep,
+            &cli.rec_sep,
+            format,
+            cli.lean_output,
+        )
+        .len() as u128;
         c.checked_mul(per_record)
     });
 
@@ -280,7 +328,11 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
         offset: cli.offset,
         limit: cli.limit,
     };
-    let format = if json_out { Format::Jsonl } else { Format::Text };
+    let format = if json_out {
+        Format::Jsonl
+    } else {
+        Format::Text
+    };
 
     let mut output_file = cli
         .output
@@ -301,9 +353,19 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
             .enumerate()
             .map(|(list_i, &item_i)| lists[list_i][item_i].as_str())
             .collect();
-        let record = format_record(&items, index, &cli.sep, &cli.rec_sep, format, cli.lean_output);
+        let record = format_record(
+            &items,
+            index,
+            &cli.sep,
+            &cli.rec_sep,
+            format,
+            cli.lean_output,
+        );
         let record_bytes = u64::try_from(record.len()).map_err(|_| {
-            AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output record is too large to write")
+            AppError::runtime(
+                "OUTPUT_LIMIT_EXCEEDED",
+                "output record is too large to write",
+            )
         })?;
         if let Some(limit) = output_limit {
             let next = written.checked_add(record_bytes).ok_or_else(|| {
@@ -350,7 +412,10 @@ fn available_space(path: &str) -> Result<u64, AppError> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     fs2::available_space(&dir).map_err(|e| {
-        AppError::runtime("CAPACITY_UNKNOWN", format!("could not determine available disk space: {e}"))
-            .with("path", dir.display())
+        AppError::runtime(
+            "CAPACITY_UNKNOWN",
+            format!("could not determine available disk space: {e}"),
+        )
+        .with("path", dir.display())
     })
 }

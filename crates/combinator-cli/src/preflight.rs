@@ -6,10 +6,11 @@ use combinator_core::SizeEstimate;
 /// Fails if the output file exists and overwrite was not requested.
 pub fn check_output_path(path: &str, overwrite: bool) -> Result<(), AppError> {
     if !overwrite && std::path::Path::new(path).exists() {
-        return Err(
-            AppError::runtime("OUTPUT_EXISTS", "output file already exists; pass --overwrite to replace it")
-                .with("path", path),
-        );
+        return Err(AppError::runtime(
+            "OUTPUT_EXISTS",
+            "output file already exists; pass --overwrite to replace it",
+        )
+        .with("path", path));
     }
     Ok(())
 }
@@ -86,8 +87,12 @@ mod tests {
 
     #[test]
     fn fs_max_exceeded_errors() {
-        let e = check_capacity(SizeEstimate::Bytes(5_000_000_000), u64::MAX, Some(4_294_967_296))
-            .unwrap_err();
+        let e = check_capacity(
+            SizeEstimate::Bytes(5_000_000_000),
+            u64::MAX,
+            Some(4_294_967_296),
+        )
+        .unwrap_err();
         assert_eq!(e.code, "FILE_SIZE_LIMIT");
     }
 
