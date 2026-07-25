@@ -72,9 +72,12 @@ CI must additionally run the pinned dependency audit. The final master worktree 
 
 | Area | Branch | Commit |
 |---|---|---|
-| Follow-up plan | `security/13-followup-plan` | pending |
-| Hard resource ceilings | `security/14-hard-resource-ceilings` | pending |
-| Aggregate ingestion budgets | `security/15-aggregate-input-budgets` | pending |
-| Secure temporary names | `security/16-secure-temp-names` | pending |
-| Pinned CI supply chain | `security/17-pinned-ci-supply-chain` | pending |
-| Identity-safe cleanup | `security/18-identity-safe-cleanup` | pending |
+| Follow-up plan | `security/13-followup-plan` | `13a55d9` |
+| Hard resource ceilings | `security/14-hard-resource-ceilings` | `7dd6a81` |
+| Aggregate ingestion budgets | `security/15-aggregate-input-budgets` | `62a75d1` |
+| Secure temporary names | `security/16-secure-temp-names` | `0ffdbbf` |
+| Pinned CI supply chain | `security/17-pinned-ci-supply-chain` | `9e8fbf9` |
+| Identity-safe cleanup | `security/18-identity-safe-cleanup` | `5ec7fa0` |
+| Follow-up documentation | `security/19-followup-documentation` | pending |
+
+All five follow-up implementation branches were merged into local `master` in sequence before the next implementation branch was created.
