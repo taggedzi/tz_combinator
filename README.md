@@ -132,7 +132,7 @@ definition and keep stdout free of diagnostics.
 
 ## Operation modes
 
-`combinator` supports three operations. The bare invocation with no
+`combinator` supports four operations. The bare invocation with no
 subcommand — everything shown above — means `product`, and behaves
 identically to `combinator product ...`:
 
@@ -141,6 +141,7 @@ combinator [OPTIONS]           # product (default)
 combinator product [OPTIONS]   # same as above, explicit
 combinator zip [OPTIONS]       # positional pairing
 combinator concat [OPTIONS]    # sequential concatenation
+combinator join [OPTIONS]      # keyed relational join
 ```
 
 - **`product`** — the ordered Cartesian product described throughout this
@@ -175,8 +176,26 @@ Flags that only make sense for one mode are rejected at parse time (exit 2)
 under the others: `--reverse-fields` only exists under `product`,
 `--on-unequal` only exists under `zip`, and `--sep` does not exist under
 `concat`. `--reverse`, `--offset`, `--limit`, `--count-only`, and every
-output/format/resource-limit flag in the table above apply to all three
-modes.
+output/format/resource-limit flag in the table above apply to the list-based
+modes; join uses its own `--left` and `--right` sources.
+
+### Keyed joins
+
+`join` is distinct from the Cartesian product: it combines structured records
+from two files by named keys. CSV/TSV inputs use their first row as headers;
+JSONL inputs must contain one object of string fields per line. Join output is
+JSONL and preserves left-file order, with duplicate keys expanded in right-file
+order. Empty keys do not match, and colliding right-hand fields receive a
+`_right` suffix.
+
+```text
+combinator join --left users.csv --right accounts.csv \
+  --left-key user_id --right-key user_id --type left --format jsonl
+```
+
+`--type` accepts `inner`, `left`, `full`, and `anti`. `--max-combinations`
+also bounds the complete join result before output begins; input byte, item,
+and output byte limits apply as usual.
 
 ## Templates and named fields
 
@@ -443,6 +462,10 @@ as a runtime error with exit **1**.
 | `TOO_MANY_LISTS` | 1 | The invocation exceeds the maximum list count. |
 | `COMBINATION_LIMIT_EXCEEDED` | 1 | Generation would exceed the configured combination limit. |
 | `ZIP_LENGTH_MISMATCH` | 1 | `zip` with `--on-unequal error` (the default) and input lists of different lengths. |
+| `JOIN_LIMIT_EXCEEDED` | 1 | The bounded join result exceeds `--max-combinations`. |
+| `JOIN_FORMAT_INVALID` | 2 | Join output must use `--format jsonl`. |
+| `JSONL_MALFORMED` | 2 | A JSONL join record is malformed. |
+| `JOIN_SCHEMA_INVALID` | 2 | Structured join headers or rows are invalid. |
 | `OUTPUT_LIMIT_EXCEEDED` | 1 | The generated output would exceed the configured byte limit. |
 | `CAPACITY_UNKNOWN` | 1 | Available disk capacity could not be determined during pre-flight. |
 | `UNSAFE_OUTPUT_PATH` | 1 | The output path is a symbolic link or otherwise unsafe to overwrite. |

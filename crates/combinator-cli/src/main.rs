@@ -7,7 +7,7 @@ mod output_file;
 mod preflight;
 mod sharding;
 
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 
 use clap::{CommandFactory, Parser};
 use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
@@ -17,9 +17,9 @@ use combinator_core::{
 };
 
 use cli::{
-    Cli, CommonArgs, ConcatArgs, InputFormat, Mode, OutFormat, ProductArgs, ZipArgs,
-    HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES,
-    HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
+    Cli, CommonArgs, ConcatArgs, InputFormat, JoinArgs, JoinFormat, JoinTypeArg, Mode, OutFormat,
+    ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST,
+    HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{exit_code, render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
@@ -69,6 +69,13 @@ fn main() {
                 }
                 return;
             }
+            Mode::Join(args) => {
+                if let Err(e) = run_join(args) {
+                    eprintln!("{}", render(&e, false));
+                    std::process::exit(exit_code(&e));
+                }
+                return;
+            }
             Mode::Product(_) | Mode::Zip(_) | Mode::Concat(_) => {}
         }
     }
@@ -80,6 +87,248 @@ fn main() {
     }
 }
 
+fn run_join(args: &JoinArgs) -> Result<(), AppError> {
+    let common = &args.common;
+    validate_resource_limits(common)?;
+    if !common.list.is_empty() || !common.file.is_empty() {
+        return Err(AppError::usage(
+            "JOIN_SOURCE_INVALID",
+            "join uses --left and --right instead of --list or --file",
+        ));
+    }
+    if common.format != OutFormat::Jsonl {
+        return Err(AppError::usage(
+            "JOIN_FORMAT_INVALID",
+            "joins require --format jsonl",
+        ));
+    }
+    if args.left_key.is_empty() || args.right_key.is_empty() {
+        return Err(AppError::usage(
+            "JOIN_KEY_INVALID",
+            "join keys must not be empty",
+        ));
+    }
+    let mut budget = InputBudget::new(
+        common.max_input_bytes.saturating_mul(2),
+        common.max_total_items,
+    );
+    let limits = InputLimits {
+        max_input_bytes: common.max_input_bytes,
+        max_item_bytes: common.max_item_bytes,
+        max_items_per_list: common.max_items_per_list,
+    };
+    let left = read_join_records(&args.left, args.join_format, limits, &mut budget)?;
+    let right = read_join_records(&args.right, args.join_format, limits, &mut budget)?;
+    let kind = match args.join_type {
+        JoinTypeArg::Inner => combinator_core::JoinType::Inner,
+        JoinTypeArg::Left => combinator_core::JoinType::Left,
+        JoinTypeArg::Full => combinator_core::JoinType::Full,
+        JoinTypeArg::Anti => combinator_core::JoinType::Anti,
+    };
+    let records = combinator_core::join(
+        &left,
+        &right,
+        &args.left_key,
+        &args.right_key,
+        kind,
+        common.max_combinations,
+    )?;
+    if common.count_only {
+        println!("{}", records.len());
+        return Ok(());
+    }
+    let start = usize::try_from(common.offset.min(records.len() as u128)).unwrap_or(records.len());
+    let end = common
+        .limit
+        .map(|n| start.saturating_add(usize::try_from(n).unwrap_or(usize::MAX)))
+        .unwrap_or(records.len())
+        .min(records.len());
+    let mut output_file = common
+        .output
+        .as_deref()
+        .map(|path| OutputFile::open(path, common.overwrite))
+        .transpose()?;
+    let mut writer = match output_file.as_mut() {
+        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
+        None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
+    };
+    let mut bytes = 0u64;
+    for record in &records[start..end] {
+        let object = record
+            .fields
+            .iter()
+            .map(|(key, value)| (key, value))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let line = serde_json::to_string(&object)
+            .map_err(|e| AppError::runtime("JOIN_OUTPUT_INVALID", e.to_string()))?;
+        let size = u64::try_from(line.len() + 1).map_err(|_| {
+            AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+        })?;
+        bytes = bytes.checked_add(size).ok_or_else(|| {
+            AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+        })?;
+        if bytes > common.max_output_bytes {
+            return Err(AppError::runtime(
+                "OUTPUT_LIMIT_EXCEEDED",
+                "output exceeds the configured byte limit",
+            ));
+        }
+        writeln!(writer, "{line}").map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
+    }
+    writer
+        .flush()
+        .map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
+    drop(writer);
+    if let Some(file) = output_file {
+        file.commit()?;
+    }
+    Ok(())
+}
+
+fn read_join_records(
+    path: &str,
+    format: JoinFormat,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<combinator_core::Record>, AppError> {
+    let mut bytes = Vec::new();
+    if path == "-" {
+        std::io::stdin()
+            .read_to_end(&mut bytes)
+            .map_err(|e| AppError::runtime("FILE_UNREADABLE", e.to_string()))?;
+    } else {
+        std::fs::File::open(path)
+            .map_err(|e| AppError::runtime("FILE_UNREADABLE", e.to_string()).with("path", path))?
+            .take((limits.max_input_bytes as u64).saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|e| AppError::runtime("FILE_UNREADABLE", e.to_string()).with("path", path))?;
+    }
+    if bytes.len() > limits.max_input_bytes {
+        return Err(AppError::runtime(
+            "INPUT_TOO_LARGE",
+            "join input exceeds the input byte limit",
+        )
+        .with("path", path));
+    }
+    budget.consume_bytes(bytes.len(), path)?;
+    match format {
+        JoinFormat::Jsonl => parse_join_jsonl(&bytes, path, limits, budget),
+        JoinFormat::Csv | JoinFormat::Tsv => parse_join_csv(&bytes, path, format, limits, budget),
+    }
+}
+
+fn parse_join_jsonl(
+    bytes: &[u8],
+    path: &str,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<combinator_core::Record>, AppError> {
+    let mut out = Vec::new();
+    for (line_no, line) in bytes.split(|b| *b == b'\n').enumerate() {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_slice(line).map_err(|e| {
+            AppError::usage("JSONL_MALFORMED", e.to_string())
+                .with("path", path)
+                .with("line", line_no + 1)
+        })?;
+        let object = value.as_object().ok_or_else(|| {
+            AppError::usage("JOIN_RECORD_INVALID", "JSONL join records must be objects")
+                .with("path", path)
+                .with("line", line_no + 1)
+        })?;
+        let mut fields = Vec::new();
+        for (key, value) in object {
+            let value = value.as_str().ok_or_else(|| {
+                AppError::usage("JOIN_FIELD_INVALID", "join fields must be JSON strings")
+                    .with("path", path)
+                    .with("field", key)
+            })?;
+            if key.len() > limits.max_item_bytes || value.len() > limits.max_item_bytes {
+                return Err(AppError::runtime(
+                    "ITEM_TOO_LARGE",
+                    "join field exceeds the item byte limit",
+                )
+                .with("path", path));
+            }
+            fields.push((key.clone(), value.to_string()));
+        }
+        if out.len() >= limits.max_items_per_list {
+            return Err(
+                AppError::runtime("TOO_MANY_ITEMS", "join input exceeds the item limit")
+                    .with("path", path),
+            );
+        }
+        budget.consume_item(path)?;
+        out.push(combinator_core::Record { fields });
+    }
+    Ok(out)
+}
+
+fn parse_join_csv(
+    bytes: &[u8],
+    path: &str,
+    format: JoinFormat,
+    limits: InputLimits,
+    budget: &mut InputBudget,
+) -> Result<Vec<combinator_core::Record>, AppError> {
+    let delimiter = if format == JoinFormat::Tsv {
+        b'\t'
+    } else {
+        b','
+    };
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .from_reader(bytes);
+    let headers = reader
+        .headers()
+        .map_err(|e| AppError::usage("CSV_MALFORMED", e.to_string()).with("path", path))?
+        .clone();
+    if headers.is_empty() || headers.iter().any(|h| h.is_empty()) {
+        return Err(
+            AppError::usage("JOIN_SCHEMA_INVALID", "join headers must be non-empty")
+                .with("path", path),
+        );
+    }
+    let mut out = Vec::new();
+    for result in reader.records() {
+        let record = result
+            .map_err(|e| AppError::usage("CSV_MALFORMED", e.to_string()).with("path", path))?;
+        if record.len() != headers.len() {
+            return Err(AppError::usage(
+                "JOIN_SCHEMA_INVALID",
+                "join row does not match the header",
+            )
+            .with("path", path));
+        }
+        let fields = headers
+            .iter()
+            .zip(record.iter())
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<Vec<_>>();
+        if fields.iter().any(|(key, value)| {
+            key.len() > limits.max_item_bytes || value.len() > limits.max_item_bytes
+        }) {
+            return Err(AppError::runtime(
+                "ITEM_TOO_LARGE",
+                "join field exceeds the item byte limit",
+            )
+            .with("path", path));
+        }
+        if out.len() >= limits.max_items_per_list {
+            return Err(
+                AppError::runtime("TOO_MANY_ITEMS", "join input exceeds the item limit")
+                    .with("path", path),
+            );
+        }
+        budget.consume_item(path)?;
+        out.push(combinator_core::Record { fields });
+    }
+    Ok(out)
+}
+
 /// Reduces the parsed `Cli` (an explicit subcommand, or the legacy bare
 /// invocation) to a clap-free `(CommonArgs, String, Operation)` triple
 /// (`sep` is CLI-only — not every mode has one, so it isn't part of any
@@ -89,6 +338,7 @@ fn resolve(cli: Cli) -> (CommonArgs, String, Operation) {
         Some(Mode::Product(args)) => product_operation(args),
         Some(Mode::Zip(args)) => zip_operation(args),
         Some(Mode::Concat(args)) => concat_operation(args),
+        Some(Mode::Join(_)) => unreachable!("handled in main"),
         Some(Mode::Completions { .. } | Mode::Man) => unreachable!("handled in main"),
         None => product_operation(cli.product),
     }
