@@ -49,15 +49,30 @@ fn render_line(code: &str, message: &str, context: &[(String, String)], json: bo
         });
         obj.to_string()
     } else if context.is_empty() {
-        format!("error[{code}]: {message}")
+        format!("error[{}]: {}", escape_text(code), escape_text(message))
     } else {
         let ctx = context
             .iter()
-            .map(|(k, v)| format!("{k}={v}"))
+            .map(|(k, v)| format!("{}={}", escape_text(k), escape_text(v)))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("error[{code}]: {message} ({ctx})")
+        format!("error[{}]: {} ({ctx})", escape_text(code), escape_text(message))
     }
+}
+
+fn escape_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c.is_control() => escaped.push_str(&format!("\\u{{{:04x}}}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -96,5 +111,14 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["error"]["code"], "INSUFFICIENT_SPACE");
         assert_eq!(v["error"]["context"]["needed"], "100");
+    }
+
+    #[test]
+    fn text_render_escapes_control_characters() {
+        let e = AppError::runtime("WRITE_FAILED", "bad\npath\u{1b}[31m")
+            .with("path", "line\r\nnext");
+        let rendered = render(&e, false);
+        assert_eq!(rendered, r"error[WRITE_FAILED]: bad\npath\u{001b}[31m (path=line\r\nnext)");
+        assert!(!rendered.contains('\n'));
     }
 }
