@@ -9,7 +9,7 @@ use std::io::{BufWriter, Write};
 
 use clap::Parser;
 use combinator_core::{
-    combinations, estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput,
+    combinations, estimate_jsonl_size, estimate_text_size, zip_records, SizeEstimate, SizeInput,
 };
 use combinator_core::{operation_count, Count, Operation, ProductOptions};
 
@@ -79,12 +79,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     validate_resource_limits(&common)?;
     input::validate_delims(&sep, &common.rec_sep, &common.list_delim)?;
 
-    let Operation::Product(product_opts) = &op;
-    if product_opts.reverse && product_opts.reverse_fields {
-        return Err(AppError::usage(
-            "REVERSE_CONFLICT",
-            "use either --reverse or --reverse-fields, not both",
-        ));
+    if let Operation::Product(product_opts) = &op {
+        if product_opts.reverse && product_opts.reverse_fields {
+            return Err(AppError::usage(
+                "REVERSE_CONFLICT",
+                "use either --reverse or --reverse-fields, not both",
+            ));
+        }
     }
 
     // Input is either --list or --file, never both. Order within the chosen
@@ -167,20 +168,35 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
 
     if common.count_only {
         match operation_count(&op, &lists) {
-            Count::Exact(n) => {
+            Ok(Count::Exact(n)) => {
                 println!("{n}");
                 return Ok(());
             }
-            Count::Overflow => {
+            Ok(Count::Overflow) => {
                 return Err(AppError::runtime(
                     "COUNT_OVERFLOW",
                     "the total is too large to count exactly",
                 ));
             }
+            Err(combinator_core::ZipLengthMismatch) => {
+                return Err(AppError::runtime(
+                    "ZIP_LENGTH_MISMATCH",
+                    "zip inputs have unequal lengths; pass --on-unequal truncate or cycle",
+                ));
+            }
         }
     }
 
-    match operation_count(&op, &lists) {
+    let total_for_limits = match operation_count(&op, &lists) {
+        Ok(c) => c,
+        Err(combinator_core::ZipLengthMismatch) => {
+            return Err(AppError::runtime(
+                "ZIP_LENGTH_MISMATCH",
+                "zip inputs have unequal lengths; pass --on-unequal truncate or cycle",
+            ));
+        }
+    };
+    match total_for_limits {
         Count::Exact(total) if common.limit.unwrap_or(total) > common.max_combinations => {
             return Err(AppError::runtime(
                 "COMBINATION_LIMIT_EXCEEDED",
@@ -298,14 +314,15 @@ fn bounded_size_estimate(
 
     // How many records will actually be written.
     let count: Option<u128> = match operation_count(op, lists) {
-        Count::Exact(total) => {
+        Ok(Count::Exact(total)) => {
             let remaining = total.saturating_sub(common.offset);
             Some(match common.limit {
                 Some(l) => remaining.min(l),
                 None => remaining,
             })
         }
-        Count::Overflow => common.limit,
+        Ok(Count::Overflow) => common.limit,
+        Err(combinator_core::ZipLengthMismatch) => None,
     };
 
     // Per-record upper bound: format the longest-possible record once.
@@ -379,8 +396,16 @@ fn stream(
     let mut index: u128 = common.offset;
     let output_limit = effective_output_limit(common);
     let mut written: u64 = 0;
-    let Operation::Product(opts) = op;
-    for indices in combinations(lists, opts.clone()) {
+    let index_source: Box<dyn Iterator<Item = Vec<usize>>> = match op {
+        Operation::Product(opts) => Box::new(combinations(lists, opts.clone())),
+        Operation::Zip(opts) => Box::new(zip_records(lists, opts.clone()).map_err(|_| {
+            AppError::runtime(
+                "ZIP_LENGTH_MISMATCH",
+                "zip inputs have unequal lengths; pass --on-unequal truncate or cycle",
+            )
+        })?),
+    };
+    for indices in index_source {
         let items: Vec<&str> = indices
             .iter()
             .enumerate()
