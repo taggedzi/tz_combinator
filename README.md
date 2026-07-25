@@ -87,6 +87,8 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--offset <N>` | `0` | Skip this many leading combinations before emitting. |
 | `--limit <N>` | unlimited | Emit at most this many combinations. |
 | `--count-only` | off | Print only the total combination count and exit; generates nothing. |
+| `--explain` | off | Print a validated execution summary and generate nothing. Use `--format json` for JSON. |
+| `--dry-run` | off | Validate the request and print a summary without generating records or creating output files. |
 | `--format <text\|jsonl>` | `text` | Output format. |
 | `--lean-output` | off | In `jsonl` format, emit only the value as a bare JSON string per line, instead of the full `{"i":...,"value":...,"fields":[...]}` object. |
 | `-o, --output <PATH>` | stdout | Write output to this file instead of stdout. |
@@ -279,6 +281,23 @@ $ combinator --list "a,b" --list "c,d,e" --count-only
 6
 ```
 
+## Dry-run and explain
+
+Use `--dry-run` to validate inputs, limits, counts, and estimates without
+creating an output file or generating records. It prints a human-readable
+summary. Use `--explain --format json` for a versioned machine-readable plan:
+
+```
+$ combinator --list "a,b" --list "c,d,e" --limit 2 --explain --format json
+{"schema_version":1,"operation":"product", ...}
+```
+
+The JSON summary reports input list sizes, total combinations, effective
+offset/limit, records to emit, a conservative output-byte estimate, the
+selected output destination (`stdout` or `file`), and effective resource
+limits. It never includes input values or creates the requested output file.
+`--format json` is valid only with `--explain` or `--dry-run`.
+
 ## Security and resource behavior
 
 Inputs are bounded by default. Files and stdin are read incrementally rather
@@ -337,6 +356,8 @@ zero combinations).
 | `TEMPLATE_INVALID_NAME` | 2 | A field name is not a valid identifier. |
 | `TEMPLATE_TOO_LARGE` | 2 | The template exceeds its 1 MiB security ceiling or configured input limit. |
 | `TEMPLATE_FILE_UNREADABLE` | 2 | The template file could not be read or is not valid UTF-8. |
+| `FORMAT_UNSUPPORTED` | 2 | `--format json` was used without `--explain` or `--dry-run`. |
+| `MODE_CONFLICT` | 2 | Mutually exclusive generation-summary modes were combined. |
 | `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
 | `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |
