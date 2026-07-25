@@ -1,7 +1,7 @@
 //! Lazy ordered Cartesian product as an index-tuple iterator.
 
 /// Options controlling iteration order and windowing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ProductOptions {
     /// When true, the leftmost list varies fastest (default: rightmost fastest).
     pub reverse: bool,
@@ -9,12 +9,6 @@ pub struct ProductOptions {
     pub offset: u128,
     /// Maximum number of combinations to emit.
     pub limit: Option<u128>,
-}
-
-impl Default for ProductOptions {
-    fn default() -> Self {
-        Self { reverse: false, offset: 0, limit: None }
-    }
 }
 
 /// Lazy iterator over index tuples of the ordered Cartesian product.
@@ -39,7 +33,7 @@ pub fn combinations(lists: &[Vec<String>], opts: ProductOptions) -> Product {
         (0..k).rev().collect()
     };
 
-    let mut exhausted = k == 0 || lens.iter().any(|&n| n == 0);
+    let mut exhausted = k == 0 || lens.contains(&0);
     let mut digits = vec![0usize; k];
 
     if !exhausted {
