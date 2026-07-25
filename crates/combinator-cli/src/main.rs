@@ -8,12 +8,15 @@ mod preflight;
 use std::io::{BufWriter, Write};
 
 use clap::Parser;
-use combinator_core::{combination_count, combinations, Count, ProductOptions};
-use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
+use combinator_core::{
+    combinations, estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput,
+};
+use combinator_core::{operation_count, Count, Operation, ProductOptions};
 
 use cli::{
-    Cli, OutFormat, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST,
-    HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
+    Cli, CommonArgs, Mode, OutFormat, ProductArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES,
+    HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES,
+    HARD_MAX_TOTAL_ITEMS,
 };
 use error::{render, render_warning, AppError};
 use input::{InputBudget, InputLimits};
@@ -43,18 +46,41 @@ impl Write for OutputWriter<'_> {
 
 fn main() {
     let cli = Cli::parse();
-    let json_errors = matches!(cli.format, OutFormat::Jsonl);
-    if let Err(e) = run(cli) {
+    let (common, sep, op) = resolve(cli);
+    let json_errors = matches!(common.format, OutFormat::Jsonl);
+    if let Err(e) = run(common, sep, op) {
         eprintln!("{}", render(&e, json_errors));
         std::process::exit(e.exit);
     }
 }
 
-fn run(cli: Cli) -> Result<(), AppError> {
-    validate_resource_limits(&cli)?;
-    input::validate_delims(&cli.sep, &cli.rec_sep, &cli.list_delim)?;
+/// Reduces the parsed `Cli` (an explicit subcommand, or the legacy bare
+/// invocation) to a clap-free `(CommonArgs, String, Operation)` triple
+/// (`sep` is CLI-only — not every mode has one, so it isn't part of any
+/// engine's options type). Everything past this point is clap-agnostic.
+fn resolve(cli: Cli) -> (CommonArgs, String, Operation) {
+    match cli.command {
+        Some(Mode::Product(args)) => product_operation(args),
+        None => product_operation(cli.product),
+    }
+}
 
-    if cli.reverse && cli.reverse_fields {
+fn product_operation(args: ProductArgs) -> (CommonArgs, String, Operation) {
+    let opts = ProductOptions {
+        reverse: args.common.reverse,
+        reverse_fields: args.reverse_fields,
+        offset: args.common.offset,
+        limit: args.common.limit,
+    };
+    (args.common, args.sep, Operation::Product(opts))
+}
+
+fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
+    validate_resource_limits(&common)?;
+    input::validate_delims(&sep, &common.rec_sep, &common.list_delim)?;
+
+    let Operation::Product(product_opts) = &op;
+    if product_opts.reverse && product_opts.reverse_fields {
         return Err(AppError::usage(
             "REVERSE_CONFLICT",
             "use either --reverse or --reverse-fields, not both",
@@ -64,20 +90,20 @@ fn run(cli: Cli) -> Result<(), AppError> {
     // Input is either --list or --file, never both. Order within the chosen
     // source is argument order (clap preserves it). `--file -` reads stdin.
     let mut lists: Vec<Vec<String>> = Vec::new();
-    if cli.list.len().max(cli.file.len()) > cli.max_lists {
+    if common.list.len().max(common.file.len()) > common.max_lists {
         return Err(
             AppError::runtime("TOO_MANY_LISTS", "input exceeds the maximum list count")
-                .with("observed", cli.list.len().max(cli.file.len()))
-                .with("limit", cli.max_lists),
+                .with("observed", common.list.len().max(common.file.len()))
+                .with("limit", common.max_lists),
         );
     }
     let input_limits = InputLimits {
-        max_input_bytes: cli.max_input_bytes,
-        max_item_bytes: cli.max_item_bytes,
-        max_items_per_list: cli.max_items_per_list,
+        max_input_bytes: common.max_input_bytes,
+        max_item_bytes: common.max_item_bytes,
+        max_items_per_list: common.max_items_per_list,
     };
-    let mut input_budget = InputBudget::new(cli.max_input_bytes, cli.max_total_items);
-    match (cli.list.is_empty(), cli.file.is_empty()) {
+    let mut input_budget = InputBudget::new(common.max_input_bytes, common.max_total_items);
+    match (common.list.is_empty(), common.file.is_empty()) {
         (false, false) => {
             return Err(AppError::usage(
                 "SOURCE_CONFLICT",
@@ -88,17 +114,17 @@ fn run(cli: Cli) -> Result<(), AppError> {
             return Err(AppError::usage("NO_LISTS", "no input lists were provided"));
         }
         (false, true) => {
-            for value in &cli.list {
+            for value in &common.list {
                 lists.push(input::split_inline_bounded(
                     value,
-                    &cli.list_delim,
+                    &common.list_delim,
                     input_limits,
                     &mut input_budget,
                 )?);
             }
         }
         (true, false) => {
-            for path in &cli.file {
+            for path in &common.file {
                 lists.push(input::read_file_list_bounded(
                     path,
                     input_limits,
@@ -113,16 +139,16 @@ fn run(cli: Cli) -> Result<(), AppError> {
         .map(Vec::len)
         .try_fold(0usize, |acc, n| acc.checked_add(n))
         .ok_or_else(|| AppError::runtime("TOO_MANY_ITEMS", "total item count overflowed"))?;
-    if total_items > cli.max_total_items {
+    if total_items > common.max_total_items {
         return Err(AppError::runtime(
             "TOO_MANY_ITEMS",
             "input exceeds the maximum total item count",
         )
         .with("observed", total_items)
-        .with("limit", cli.max_total_items));
+        .with("limit", common.max_total_items));
     }
 
-    let json_out = matches!(cli.format, OutFormat::Jsonl);
+    let json_out = matches!(common.format, OutFormat::Jsonl);
 
     // Warn on any empty list (result will be empty, exit 0).
     for (i, l) in lists.iter().enumerate() {
@@ -139,9 +165,8 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
     }
 
-    if cli.count_only {
-        let lens: Vec<usize> = lists.iter().map(|l| l.len()).collect();
-        match combination_count(&lens) {
+    if common.count_only {
+        match operation_count(&op, &lists) {
             Count::Exact(n) => {
                 println!("{n}");
                 return Ok(());
@@ -155,69 +180,74 @@ fn run(cli: Cli) -> Result<(), AppError> {
         }
     }
 
-    let lens: Vec<usize> = lists.iter().map(|l| l.len()).collect();
-    match combination_count(&lens) {
-        Count::Exact(total) if cli.limit.unwrap_or(total) > cli.max_combinations => {
+    match operation_count(&op, &lists) {
+        Count::Exact(total) if common.limit.unwrap_or(total) > common.max_combinations => {
             return Err(AppError::runtime(
                 "COMBINATION_LIMIT_EXCEEDED",
                 "requested combinations exceed the configured generation limit",
             )
-            .with("limit", cli.max_combinations));
+            .with("limit", common.max_combinations));
         }
-        Count::Overflow if cli.limit.is_none() || cli.limit.unwrap_or(0) > cli.max_combinations => {
+        Count::Overflow
+            if common.limit.is_none() || common.limit.unwrap_or(0) > common.max_combinations =>
+        {
             return Err(AppError::runtime(
                 "COMBINATION_LIMIT_EXCEEDED",
                 "the product is too large without an explicit safe limit",
             )
-            .with("limit", cli.max_combinations));
+            .with("limit", common.max_combinations));
         }
         _ => {}
     }
 
     // Pre-flight for file output.
-    if let Some(path) = &cli.output {
-        preflight::check_output_path(path, cli.overwrite)?;
-        if !cli.no_preflight {
-            let estimate = bounded_size_estimate(&cli, &lists, json_out);
+    if let Some(path) = &common.output {
+        preflight::check_output_path(path, common.overwrite)?;
+        if !common.no_preflight {
+            let estimate = bounded_size_estimate(&common, &sep, &op, &lists, json_out);
             let available = available_space(path)?;
-            preflight::check_capacity(estimate, available, effective_output_limit(&cli))?;
+            preflight::check_capacity(estimate, available, effective_output_limit(&common))?;
         }
     }
 
-    stream(&cli, &lists, json_out)
+    stream(&common, &sep, &op, &lists, json_out)
 }
 
-fn validate_resource_limits(cli: &Cli) -> Result<(), AppError> {
+fn validate_resource_limits(common: &CommonArgs) -> Result<(), AppError> {
     let checks = [
         (
             "max-output-bytes",
-            cli.max_output_bytes as u128,
+            common.max_output_bytes as u128,
             HARD_MAX_OUTPUT_BYTES as u128,
         ),
         (
             "max-input-bytes",
-            cli.max_input_bytes as u128,
+            common.max_input_bytes as u128,
             HARD_MAX_INPUT_BYTES as u128,
         ),
         (
             "max-item-bytes",
-            cli.max_item_bytes as u128,
+            common.max_item_bytes as u128,
             HARD_MAX_ITEM_BYTES as u128,
         ),
         (
             "max-items-per-list",
-            cli.max_items_per_list as u128,
+            common.max_items_per_list as u128,
             HARD_MAX_ITEMS_PER_LIST as u128,
         ),
-        ("max-lists", cli.max_lists as u128, HARD_MAX_LISTS as u128),
+        (
+            "max-lists",
+            common.max_lists as u128,
+            HARD_MAX_LISTS as u128,
+        ),
         (
             "max-total-items",
-            cli.max_total_items as u128,
+            common.max_total_items as u128,
             HARD_MAX_TOTAL_ITEMS as u128,
         ),
         (
             "max-combinations",
-            cli.max_combinations,
+            common.max_combinations,
             HARD_MAX_COMBINATIONS,
         ),
     ];
@@ -232,7 +262,7 @@ fn validate_resource_limits(cli: &Cli) -> Result<(), AppError> {
             .with("hard_limit", hard));
         }
     }
-    if let Some(file_limit) = cli.max_file_size {
+    if let Some(file_limit) = common.max_file_size {
         if file_limit > HARD_MAX_OUTPUT_BYTES {
             return Err(AppError::usage(
                 "RESOURCE_LIMIT_TOO_HIGH",
@@ -247,33 +277,35 @@ fn validate_resource_limits(cli: &Cli) -> Result<(), AppError> {
 }
 
 /// Estimates output size accounting for --offset/--limit, so a bounded write is
-/// not rejected on the size of the full product. Returns a safe upper bound: the
-/// smaller of the full-product estimate and (records_to_write * max_record_bytes),
-/// where max_record_bytes formats the longest item from each list once.
-fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> SizeEstimate {
+/// not rejected on the size of the full result. Returns a safe upper bound.
+fn bounded_size_estimate(
+    common: &CommonArgs,
+    sep: &str,
+    op: &Operation,
+    lists: &[Vec<String>],
+    json_out: bool,
+) -> SizeEstimate {
     let input = SizeInput {
         lists,
-        field_sep_bytes: cli.sep.len() as u64,
-        rec_sep_bytes: cli.rec_sep.len() as u64,
+        field_sep_bytes: sep.len() as u64,
+        rec_sep_bytes: common.rec_sep.len() as u64,
     };
     let full = if json_out {
-        estimate_jsonl_size(&input, cli.lean_output)
+        estimate_jsonl_size(&input, common.lean_output)
     } else {
         estimate_text_size(&input)
     };
 
     // How many records will actually be written.
-    let lens: Vec<usize> = lists.iter().map(|l| l.len()).collect();
-    let count: Option<u128> = match combination_count(&lens) {
+    let count: Option<u128> = match operation_count(op, lists) {
         Count::Exact(total) => {
-            let remaining = total.saturating_sub(cli.offset);
-            Some(match cli.limit {
+            let remaining = total.saturating_sub(common.offset);
+            Some(match common.limit {
                 Some(l) => remaining.min(l),
                 None => remaining,
             })
         }
-        // Unbounded product is only bounded if --limit caps it.
-        Count::Overflow => cli.limit,
+        Count::Overflow => common.limit,
     };
 
     // Per-record upper bound: format the longest-possible record once.
@@ -300,14 +332,14 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
                     .unwrap_or("")
             })
             .collect();
-        let max_index = cli.offset.saturating_add(c.saturating_sub(1));
+        let max_index = common.offset.saturating_add(c.saturating_sub(1));
         let per_record = format_record(
             &max_items,
             max_index,
-            &cli.sep,
-            &cli.rec_sep,
+            sep,
+            &common.rec_sep,
             format,
-            cli.lean_output,
+            common.lean_output,
         )
         .len() as u128;
         c.checked_mul(per_record)
@@ -321,33 +353,34 @@ fn bounded_size_estimate(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Si
     }
 }
 
-fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppError> {
-    let opts = ProductOptions {
-        reverse: cli.reverse,
-        reverse_fields: cli.reverse_fields,
-        offset: cli.offset,
-        limit: cli.limit,
-    };
+fn stream(
+    common: &CommonArgs,
+    sep: &str,
+    op: &Operation,
+    lists: &[Vec<String>],
+    json_out: bool,
+) -> Result<(), AppError> {
     let format = if json_out {
         Format::Jsonl
     } else {
         Format::Text
     };
 
-    let mut output_file = cli
+    let mut output_file = common
         .output
         .as_deref()
-        .map(|path| OutputFile::open(path, cli.overwrite))
+        .map(|path| OutputFile::open(path, common.overwrite))
         .transpose()?;
     let mut writer = match output_file.as_mut() {
         Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
 
-    let mut index: u128 = cli.offset;
-    let output_limit = effective_output_limit(cli);
+    let mut index: u128 = common.offset;
+    let output_limit = effective_output_limit(common);
     let mut written: u64 = 0;
-    for indices in combinations(lists, opts) {
+    let Operation::Product(opts) = op;
+    for indices in combinations(lists, opts.clone()) {
         let items: Vec<&str> = indices
             .iter()
             .enumerate()
@@ -356,10 +389,10 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
         let record = format_record(
             &items,
             index,
-            &cli.sep,
-            &cli.rec_sep,
+            sep,
+            &common.rec_sep,
             format,
-            cli.lean_output,
+            common.lean_output,
         );
         let record_bytes = u64::try_from(record.len()).map_err(|_| {
             AppError::runtime(
@@ -393,9 +426,9 @@ fn stream(cli: &Cli, lists: &[Vec<String>], json_out: bool) -> Result<(), AppErr
     Ok(())
 }
 
-fn effective_output_limit(cli: &Cli) -> Option<u64> {
-    let configured = Some(cli.max_output_bytes);
-    match (&cli.output, cli.max_file_size) {
+fn effective_output_limit(common: &CommonArgs) -> Option<u64> {
+    let configured = Some(common.max_output_bytes);
+    match (&common.output, common.max_file_size) {
         (Some(_), Some(file_limit)) => configured.map(|limit| limit.min(file_limit)),
         _ => configured,
     }
