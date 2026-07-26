@@ -13,6 +13,7 @@ pub const HARD_MAX_ITEMS_PER_LIST: usize = 1_000_000;
 pub const HARD_MAX_LISTS: usize = DEFAULT_MAX_LISTS;
 pub const HARD_MAX_TOTAL_ITEMS: usize = DEFAULT_MAX_TOTAL_ITEMS;
 pub const HARD_MAX_COMBINATIONS: u128 = DEFAULT_MAX_COMBINATIONS;
+pub const HARD_MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutFormat {
@@ -222,6 +223,10 @@ pub struct CommonArgs {
     /// Print a one-line record/byte summary to stderr after successful output.
     #[arg(long)]
     pub summary: bool,
+
+    /// Cancel execution after this many milliseconds.
+    #[arg(long = "timeout-ms")]
+    pub timeout_ms: Option<u64>,
 }
 
 /// Ordered Cartesian product of the input lists (the default operation).

@@ -32,11 +32,49 @@ pub fn join(
     kind: JoinType,
     max_output_records: u128,
 ) -> Result<Vec<JoinedRecord>, CoreError> {
-    if left_key.is_empty() || right_key.is_empty() {
-        return Err(CoreError::usage(
-            "JOIN_KEY_INVALID",
-            "join keys must not be empty",
-        ));
+    let mut output = Vec::new();
+    join_each(
+        left,
+        right,
+        left_key,
+        right_key,
+        kind,
+        0,
+        None,
+        max_output_records,
+        None,
+        |record| {
+            output.push(record);
+            Ok(())
+        },
+    )?;
+    Ok(output)
+}
+
+/// Streams joined records without retaining the complete result set.
+///
+/// `max_output_records` applies to the complete logical join before paging;
+/// `offset` and `limit` only control which records are passed to `callback`.
+/// The callback is responsible for serialization and byte limits.
+#[allow(clippy::too_many_arguments)]
+pub fn join_each<F>(
+    left: &[Record],
+    right: &[Record],
+    left_key: &str,
+    right_key: &str,
+    kind: JoinType,
+    offset: u128,
+    limit: Option<u128>,
+    max_output_records: u128,
+    cancel: Option<&dyn Fn() -> bool>,
+    mut callback: F,
+) -> Result<u128, CoreError>
+where
+    F: FnMut(JoinedRecord) -> Result<(), CoreError>,
+{
+    validate_keys(left_key, right_key)?;
+    if limit == Some(0) {
+        return Ok(0);
     }
     let mut index: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, record) in right.iter().enumerate() {
@@ -45,69 +83,148 @@ pub fn join(
         }
     }
     let mut matched_right = HashSet::new();
-    let mut output = Vec::new();
+    let mut produced = 0u128;
+    let mut selected = 0u128;
+    let mut emit = |record: JoinedRecord| -> Result<bool, CoreError> {
+        produced = produced.checked_add(1).ok_or_else(|| {
+            CoreError::runtime("JOIN_LIMIT_EXCEEDED", "join output count overflowed")
+        })?;
+        if produced > max_output_records {
+            return Err(CoreError::runtime(
+                "JOIN_LIMIT_EXCEEDED",
+                "join output exceeds the configured record limit",
+            )
+            .with("observed", produced)
+            .with("limit", max_output_records));
+        }
+        let in_page = produced > offset
+            && limit
+                .map(|page_limit| selected < page_limit)
+                .unwrap_or(true);
+        if in_page {
+            callback(record)?;
+            selected = selected.checked_add(1).ok_or_else(|| {
+                CoreError::runtime("JOIN_LIMIT_EXCEEDED", "join page count overflowed")
+            })?;
+        }
+        Ok(page_complete(selected, limit))
+    };
     for left_record in left {
+        check_cancel(cancel)?;
         let matches = field(left_record, left_key)
             .filter(|value| !value.is_empty())
             .and_then(|key| index.get(key));
         match (kind, matches) {
             (JoinType::Anti, Some(_)) => continue,
             (JoinType::Anti, None) => {
-                push(&mut output, combine_left(left_record), max_output_records)?
+                if emit(combine_left(left_record))? {
+                    return Ok(selected);
+                }
             }
             (_, Some(indices)) => {
                 for &right_index in indices {
                     matched_right.insert(right_index);
-                    push(
-                        &mut output,
-                        combine(left_record, Some(right_index), right, right_key),
-                        max_output_records,
-                    )?;
+                    if emit(combine(left_record, Some(right_index), right, right_key))? {
+                        return Ok(selected);
+                    }
                 }
             }
             (JoinType::Left | JoinType::Full, None) => {
-                push(
-                    &mut output,
-                    combine(left_record, None, right, right_key),
-                    max_output_records,
-                )?;
+                if emit(combine(left_record, None, right, right_key))? {
+                    return Ok(selected);
+                }
             }
             (JoinType::Inner, None) => {}
         }
     }
     if kind == JoinType::Full {
         for (i, right_record) in right.iter().enumerate() {
-            if !matched_right.contains(&i) {
-                push(
-                    &mut output,
-                    combine_right(right_record, left),
-                    max_output_records,
-                )?;
+            check_cancel(cancel)?;
+            if !matched_right.contains(&i) && emit(combine_right(right_record, left))? {
+                return Ok(selected);
             }
         }
     }
-    Ok(output)
+    Ok(selected)
 }
 
-fn push(
-    output: &mut Vec<JoinedRecord>,
-    record: JoinedRecord,
-    limit: u128,
-) -> Result<(), CoreError> {
-    let next = u128::try_from(output.len())
-        .ok()
-        .and_then(|n| n.checked_add(1))
-        .unwrap_or(u128::MAX);
-    if next > limit {
-        return Err(CoreError::runtime(
-            "JOIN_LIMIT_EXCEEDED",
-            "join output exceeds the configured record limit",
-        )
-        .with("observed", next)
-        .with("limit", limit));
+fn page_complete(selected: u128, limit: Option<u128>) -> bool {
+    limit.is_some_and(|limit| selected >= limit)
+}
+
+/// Counts a join without constructing joined records.
+pub fn join_count(
+    left: &[Record],
+    right: &[Record],
+    left_key: &str,
+    right_key: &str,
+    kind: JoinType,
+    max_output_records: u128,
+) -> Result<u128, CoreError> {
+    validate_keys(left_key, right_key)?;
+    let mut index: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, record) in right.iter().enumerate() {
+        if let Some(key) = field(record, right_key).filter(|value| !value.is_empty()) {
+            index.entry(key).or_default().push(i);
+        }
     }
-    output.push(record);
+    let mut matched_right = HashSet::new();
+    let mut count = 0u128;
+    let mut add = |amount: u128| -> Result<(), CoreError> {
+        count = count.checked_add(amount).ok_or_else(|| {
+            CoreError::runtime("JOIN_LIMIT_EXCEEDED", "join output count overflowed")
+        })?;
+        if count > max_output_records {
+            return Err(CoreError::runtime(
+                "JOIN_LIMIT_EXCEEDED",
+                "join output exceeds the configured record limit",
+            )
+            .with("observed", count)
+            .with("limit", max_output_records));
+        }
+        Ok(())
+    };
+    for left_record in left {
+        let matches = field(left_record, left_key)
+            .filter(|value| !value.is_empty())
+            .and_then(|key| index.get(key));
+        match (kind, matches) {
+            (JoinType::Anti, Some(_)) | (JoinType::Inner, None) => {}
+            (JoinType::Anti, None) | (JoinType::Left | JoinType::Full, None) => add(1)?,
+            (_, Some(indices)) => {
+                for &right_index in indices {
+                    matched_right.insert(right_index);
+                }
+                add(indices.len() as u128)?;
+            }
+        }
+    }
+    if kind == JoinType::Full {
+        for (i, _) in right.iter().enumerate() {
+            if !matched_right.contains(&i) {
+                add(1)?;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn validate_keys(left_key: &str, right_key: &str) -> Result<(), CoreError> {
+    if left_key.is_empty() || right_key.is_empty() {
+        return Err(CoreError::usage(
+            "JOIN_KEY_INVALID",
+            "join keys must not be empty",
+        ));
+    }
     Ok(())
+}
+
+fn check_cancel(cancel: Option<&dyn Fn() -> bool>) -> Result<(), CoreError> {
+    if cancel.is_some_and(|cancel| cancel()) {
+        Err(CoreError::runtime("CANCELLED", "execution was cancelled"))
+    } else {
+        Ok(())
+    }
 }
 
 fn field<'a>(record: &'a Record, name: &str) -> Option<&'a str> {
@@ -248,5 +365,40 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "JOIN_LIMIT_EXCEEDED");
+    }
+
+    #[test]
+    fn streaming_join_pages_without_materializing_the_prefix() {
+        let left = [r(&[("id", "1")])];
+        let right = [r(&[("id", "1"), ("v", "a")]), r(&[("id", "1"), ("v", "b")])];
+        let mut values = Vec::new();
+        let selected = join_each(
+            &left,
+            &right,
+            "id",
+            "id",
+            JoinType::Inner,
+            1,
+            Some(1),
+            2,
+            None,
+            |record| {
+                values.push(record.fields[2].1.clone());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(selected, 1);
+        assert_eq!(values, [Some("b".into())]);
+    }
+
+    #[test]
+    fn join_count_does_not_require_joined_records() {
+        let left = [r(&[("id", "1")])];
+        let right = [r(&[("id", "1")]), r(&[("id", "1")])];
+        assert_eq!(
+            join_count(&left, &right, "id", "id", JoinType::Inner, 2).unwrap(),
+            2
+        );
     }
 }

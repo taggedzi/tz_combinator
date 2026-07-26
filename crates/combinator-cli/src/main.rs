@@ -8,6 +8,7 @@ mod preflight;
 mod sharding;
 
 use std::io::{BufWriter, Read, Write};
+use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
@@ -19,7 +20,8 @@ use combinator_core::{
 use cli::{
     Cli, CommonArgs, ConcatArgs, InputFormat, JoinArgs, JoinFormat, JoinTypeArg, Mode, OutFormat,
     ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST,
-    HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TOTAL_ITEMS,
+    HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS,
+    HARD_MAX_TOTAL_ITEMS,
 };
 use error::{exit_code, render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
@@ -90,6 +92,7 @@ fn main() {
 fn run_join(args: &JoinArgs) -> Result<(), AppError> {
     let common = &args.common;
     validate_resource_limits(common)?;
+    let deadline = execution_deadline(common.timeout_ms)?;
     if !common.list.is_empty() || !common.file.is_empty() {
         return Err(AppError::usage(
             "JOIN_SOURCE_INVALID",
@@ -125,24 +128,18 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         JoinTypeArg::Full => combinator_core::JoinType::Full,
         JoinTypeArg::Anti => combinator_core::JoinType::Anti,
     };
-    let records = combinator_core::join(
-        &left,
-        &right,
-        &args.left_key,
-        &args.right_key,
-        kind,
-        common.max_combinations,
-    )?;
     if common.count_only {
-        println!("{}", records.len());
+        let count = combinator_core::join_count(
+            &left,
+            &right,
+            &args.left_key,
+            &args.right_key,
+            kind,
+            common.max_combinations,
+        )?;
+        println!("{count}");
         return Ok(());
     }
-    let start = usize::try_from(common.offset.min(records.len() as u128)).unwrap_or(records.len());
-    let end = common
-        .limit
-        .map(|n| start.saturating_add(usize::try_from(n).unwrap_or(usize::MAX)))
-        .unwrap_or(records.len())
-        .min(records.len());
     let mut output_file = common
         .output
         .as_deref()
@@ -153,28 +150,41 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let mut bytes = 0u64;
-    for record in &records[start..end] {
-        let object = record
-            .fields
-            .iter()
-            .map(|(key, value)| (key, value))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let line = serde_json::to_string(&object)
-            .map_err(|e| AppError::runtime("JOIN_OUTPUT_INVALID", e.to_string()))?;
-        let size = u64::try_from(line.len() + 1).map_err(|_| {
-            AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
-        })?;
-        bytes = bytes.checked_add(size).ok_or_else(|| {
-            AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
-        })?;
-        if bytes > common.max_output_bytes {
-            return Err(AppError::runtime(
-                "OUTPUT_LIMIT_EXCEEDED",
-                "output exceeds the configured byte limit",
-            ));
-        }
-        writeln!(writer, "{line}").map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
-    }
+    combinator_core::join_each(
+        &left,
+        &right,
+        &args.left_key,
+        &args.right_key,
+        kind,
+        common.offset,
+        common.limit,
+        common.max_combinations,
+        Some(&|| deadline_expired(deadline)),
+        |record| {
+            let object = record
+                .fields
+                .iter()
+                .map(|(key, value)| (key, value))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let line = serde_json::to_string(&object)
+                .map_err(|e| AppError::runtime("JOIN_OUTPUT_INVALID", e.to_string()))?;
+            let size = u64::try_from(line.len() + 1).map_err(|_| {
+                AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+            })?;
+            bytes = bytes.checked_add(size).ok_or_else(|| {
+                AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+            })?;
+            if bytes > common.max_output_bytes {
+                return Err(AppError::runtime(
+                    "OUTPUT_LIMIT_EXCEEDED",
+                    "output exceeds the configured byte limit",
+                ));
+            }
+            writeln!(writer, "{line}")
+                .map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
+            Ok(())
+        },
+    )?;
     writer
         .flush()
         .map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
@@ -194,6 +204,7 @@ fn read_join_records(
     let mut bytes = Vec::new();
     if path == "-" {
         std::io::stdin()
+            .take((limits.max_input_bytes as u64).saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|e| AppError::runtime("FILE_UNREADABLE", e.to_string()))?;
     } else {
@@ -375,6 +386,8 @@ fn concat_operation(args: ConcatArgs) -> (CommonArgs, String, Operation) {
 
 fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     validate_resource_limits(&common)?;
+    let deadline = execution_deadline(common.timeout_ms)?;
+    check_deadline(deadline)?;
     validate_shard_args(&common)?;
     if matches!(common.format, OutFormat::Json) && !(common.explain || common.dry_run) {
         return Err(AppError::usage(
@@ -531,6 +544,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         .map(Vec::len)
         .try_fold(0usize, |acc, n| acc.checked_add(n))
         .ok_or_else(|| AppError::runtime("TOO_MANY_ITEMS", "total item count overflowed"))?;
+    check_deadline(deadline)?;
     if total_items > common.max_total_items {
         return Err(AppError::runtime(
             "TOO_MANY_ITEMS",
@@ -546,6 +560,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         common.max_item_bytes,
         common.max_total_items,
     )?;
+    check_deadline(deadline)?;
 
     let empty_template = Template::parse("").expect("empty template is valid");
     let template_for_validation = template.as_ref().unwrap_or(&empty_template);
@@ -648,7 +663,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     }
 
     emit_warnings(&common, &warnings, json_out)?;
-    stream_core(&common, &sep, &op, &lists, template.as_ref())
+    stream_core(&common, &sep, &op, &lists, template.as_ref(), deadline)
 }
 
 fn stream_core(
@@ -657,6 +672,7 @@ fn stream_core(
     op: &Operation,
     lists: &[Vec<String>],
     template: Option<&Template>,
+    deadline: Option<Instant>,
 ) -> Result<(), AppError> {
     let mut output_file = common
         .output
@@ -667,6 +683,7 @@ fn stream_core(
         Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
+    let cancel = || deadline_expired(deadline);
     let result = combinator_core::execute(
         combinator_core::ExecutionRequest {
             operation: op,
@@ -679,7 +696,7 @@ fn stream_core(
             names: &common.names,
             max_output_bytes: effective_output_limit(common).unwrap_or(u64::MAX),
             max_combinations: common.max_combinations,
-            cancel: None,
+            cancel: Some(&cancel),
         },
         &mut writer,
     );
@@ -1064,7 +1081,42 @@ fn validate_resource_limits(common: &CommonArgs) -> Result<(), AppError> {
             .with("hard_limit", HARD_MAX_OUTPUT_BYTES));
         }
     }
+    if let Some(timeout) = common.timeout_ms {
+        if timeout > HARD_MAX_TIMEOUT_MS {
+            return Err(AppError::usage(
+                "RESOURCE_LIMIT_TOO_HIGH",
+                "timeout-ms exceeds the hard security ceiling",
+            )
+            .with("flag", "timeout-ms")
+            .with("requested", timeout)
+            .with("hard_limit", HARD_MAX_TIMEOUT_MS));
+        }
+    }
     Ok(())
+}
+
+fn execution_deadline(timeout_ms: Option<u64>) -> Result<Option<Instant>, AppError> {
+    timeout_ms
+        .map(|milliseconds| {
+            Instant::now()
+                .checked_add(Duration::from_millis(milliseconds))
+                .ok_or_else(|| {
+                    AppError::runtime("TIMEOUT_INVALID", "execution deadline overflowed")
+                })
+        })
+        .transpose()
+}
+
+fn deadline_expired(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+fn check_deadline(deadline: Option<Instant>) -> Result<(), AppError> {
+    if deadline_expired(deadline) {
+        Err(AppError::runtime("CANCELLED", "execution was cancelled"))
+    } else {
+        Ok(())
+    }
 }
 
 /// Estimates output size accounting for --offset/--limit, so a bounded write is

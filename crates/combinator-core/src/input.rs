@@ -102,20 +102,23 @@ pub fn split_escaped_inline(
         )
         .with("observed", value.len()));
     }
-    let chars: Vec<char> = value.chars().collect();
-    let delim_chars: Vec<char> = delim.chars().collect();
     let mut items = Vec::new();
     let mut current = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\\' {
-            i += 1;
-            let escaped = *chars.get(i).ok_or_else(|| {
+    let mut byte_pos = 0;
+    while byte_pos < value.len() {
+        let ch = value[byte_pos..]
+            .chars()
+            .next()
+            .expect("byte position is a UTF-8 character boundary");
+        if ch == '\\' {
+            byte_pos += ch.len_utf8();
+            let escaped = value[byte_pos..].chars().next().ok_or_else(|| {
                 CoreError::usage(
                     "INLINE_ESCAPE_INVALID",
                     "inline input ends with an incomplete escape",
                 )
             })?;
+            byte_pos += escaped.len_utf8();
             match escaped {
                 'n' => current.push('\n'),
                 'r' => current.push('\r'),
@@ -123,24 +126,26 @@ pub fn split_escaped_inline(
                 '0' => current.push('\0'),
                 '\\' => current.push('\\'),
                 'x' => {
-                    let hi = *chars.get(i + 1).ok_or_else(|| {
+                    let hi = value[byte_pos..].chars().next().ok_or_else(|| {
                         CoreError::usage("INLINE_ESCAPE_INVALID", "inline hex escape is incomplete")
                     })?;
-                    let lo = *chars.get(i + 2).ok_or_else(|| {
+                    byte_pos += hi.len_utf8();
+                    let lo = value[byte_pos..].chars().next().ok_or_else(|| {
                         CoreError::usage("INLINE_ESCAPE_INVALID", "inline hex escape is incomplete")
                     })?;
                     let byte = u8::from_str_radix(&format!("{hi}{lo}"), 16).map_err(|_| {
                         CoreError::usage("INLINE_ESCAPE_INVALID", "inline hex escape is invalid")
                     })?;
                     current.push(char::from(byte));
-                    i += 2;
+                    byte_pos += lo.len_utf8();
                 }
-                other => current.push(other),
+                other => {
+                    current.push(other);
+                }
             }
-            i += 1;
             continue;
         }
-        if !delim_chars.is_empty() && chars[i..].starts_with(&delim_chars) {
+        if !delim.is_empty() && value[byte_pos..].starts_with(delim) {
             add_item(
                 &mut items,
                 std::mem::take(&mut current),
@@ -148,10 +153,10 @@ pub fn split_escaped_inline(
                 budget,
                 "inline",
             )?;
-            i += delim_chars.len();
+            byte_pos += delim.len();
         } else {
-            current.push(chars[i]);
-            i += 1;
+            current.push(ch);
+            byte_pos += ch.len_utf8();
         }
     }
     add_item(&mut items, current, limits, budget, "inline")?;
@@ -264,14 +269,15 @@ fn parse_separated(
     budget: &mut InputBudget,
 ) -> Result<Vec<String>, CoreError> {
     let mut out = Vec::new();
-    let chunks: Vec<&[u8]> = bytes.split(|b| *b == sep).collect();
-    for (i, raw) in chunks.iter().enumerate() {
+    let mut chunks = bytes.split(|b| *b == sep).peekable();
+    while let Some(raw) = chunks.next() {
+        let is_last = chunks.peek().is_none();
         let raw = if sep == b'\n' {
             raw.strip_suffix(b"\r").unwrap_or(raw)
         } else {
             raw
         };
-        if raw.is_empty() && (bytes.is_empty() || i + 1 == chunks.len()) {
+        if raw.is_empty() && (bytes.is_empty() || is_last) {
             continue;
         }
         let s = String::from_utf8(raw.to_vec()).map_err(|_| {

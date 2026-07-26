@@ -24,7 +24,7 @@ pub use count::{combination_count, Count};
 pub use error::{CoreError, ErrorKind};
 pub use estimate::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 pub use execute::{execute, ExecutionRequest, ExecutionResult};
-pub use join::{join, JoinType, JoinedRecord, Record};
+pub use join::{join, join_count, join_each, JoinType, JoinedRecord, Record};
 pub use operation::{count as operation_count, Operation};
 pub use output::{format_record, format_record_with, Format};
 pub use product::{combinations, Product, ProductOptions};

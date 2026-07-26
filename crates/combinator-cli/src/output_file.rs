@@ -21,15 +21,23 @@ impl OutputFile {
     /// sibling temporary file for atomic replacement.
     pub fn open(path: &str, overwrite: bool) -> Result<Self, AppError> {
         let destination = PathBuf::from(path);
-        if overwrite {
-            if let Ok(metadata) = fs::symlink_metadata(&destination) {
-                if is_unsafe_target(&metadata) {
-                    return Err(AppError::runtime(
-                        "UNSAFE_OUTPUT_PATH",
-                        "refusing to overwrite a symbolic link or reparse point",
-                    )
-                    .with("path", path));
-                }
+        if let Ok(metadata) = fs::symlink_metadata(&destination) {
+            if is_unsafe_target(&metadata) {
+                return Err(AppError::runtime(
+                    "UNSAFE_OUTPUT_PATH",
+                    "refusing to use a symbolic link or reparse point as output",
+                )
+                .with("path", path));
+            }
+        }
+        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        if let Ok(metadata) = fs::symlink_metadata(parent) {
+            if is_unsafe_target(&metadata) {
+                return Err(AppError::runtime(
+                    "UNSAFE_OUTPUT_PATH",
+                    "refusing to use a symbolic-link or reparse-point output directory",
+                )
+                .with("path", parent.display()));
             }
         }
 

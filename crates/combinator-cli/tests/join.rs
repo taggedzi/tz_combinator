@@ -80,3 +80,40 @@ fn malformed_jsonl_is_rejected_before_output() {
     let _ = fs::remove_file(left);
     let _ = fs::remove_file(right);
 }
+
+#[test]
+fn join_stdin_respects_input_limit() {
+    use std::io::Write;
+
+    let (left, right) = paths("stdin_limit");
+    fs::write(&left, "id\n1\n").unwrap();
+    fs::write(&right, "id\n1\n").unwrap();
+    let mut child = bin()
+        .args([
+            "join",
+            "--left",
+            "-",
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--join-format",
+            "csv",
+            "--format",
+            "jsonl",
+            "--max-input-bytes",
+            "4",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"id\n1\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("INPUT_TOO_LARGE"));
+    let _ = fs::remove_file(left);
+    let _ = fs::remove_file(right);
+}

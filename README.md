@@ -467,6 +467,7 @@ as a runtime error with exit **1**.
 | `JSONL_MALFORMED` | 2 | A JSONL join record is malformed. |
 | `JOIN_SCHEMA_INVALID` | 2 | Structured join headers or rows are invalid. |
 | `OUTPUT_LIMIT_EXCEEDED` | 1 | The generated output would exceed the configured byte limit. |
+| `CANCELLED` | 1 | Execution reached `--timeout-ms` or was cancelled by an embedding caller. |
 | `CAPACITY_UNKNOWN` | 1 | Available disk capacity could not be determined during pre-flight. |
 | `UNSAFE_OUTPUT_PATH` | 1 | The output path is a symbolic link or otherwise unsafe to overwrite. |
 | `WRITE_FAILED` | 1 | Creating or writing to the output file failed. |
@@ -520,3 +521,30 @@ etc.):
 This keeps the contract narrow and stable: one binary, two channels (stdout
 for data, stderr for diagnostics), one exit-code convention, and one JSON
 shape.
+
+## Public-service deployment
+
+The CLI has bounded defaults and a compiled one-hour maximum for
+`--timeout-ms`, but the compiled ceilings are intentionally too large to be a
+complete multi-tenant service policy. A network-facing wrapper should impose
+smaller per-request limits and enforce them outside the process as well.
+
+At minimum, a public wrapper should:
+
+- authenticate and authorize requests before accepting filesystem paths or
+  output destinations;
+- restrict input and output paths to an application-owned directory, or avoid
+  arbitrary paths entirely;
+- set a finite `--timeout-ms` and also enforce wall-clock, CPU, memory,
+  concurrency, input-rate, output-rate, and disk quotas with the supervisor;
+- run each request with a low-privilege identity and, where possible, process
+  or container isolation;
+- apply per-client and global concurrency limits;
+- keep runtime output limits enabled even when `--no-preflight` is used;
+- treat pre-flight capacity checks as advisory because they do not reserve
+  disk space.
+
+Join requests are streamed during result generation, but the right-side hash
+index and both parsed inputs remain in memory. Set service-specific input,
+item, record, and output limits below the CLI hard ceilings when handling
+untrusted clients.
