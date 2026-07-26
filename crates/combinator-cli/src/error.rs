@@ -2,6 +2,19 @@
 
 pub use combinator_core::CoreError as AppError;
 
+pub fn from_codec(error: combinator_codecs::CodecError) -> AppError {
+    let kind = match error.kind {
+        combinator_codecs::ErrorKind::Usage => combinator_core::ErrorKind::Usage,
+        combinator_codecs::ErrorKind::Runtime => combinator_core::ErrorKind::Runtime,
+    };
+    AppError {
+        code: error.code,
+        message: error.message,
+        context: error.context,
+        kind,
+    }
+}
+
 pub fn exit_code(error: &AppError) -> i32 {
     match error.kind {
         combinator_core::ErrorKind::Usage => 2,

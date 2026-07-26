@@ -4,6 +4,123 @@ use crate::error::CoreError;
 use std::collections::HashSet;
 
 pub const MAX_TRANSFORMS: usize = 64;
+
+/// Interface-neutral, validated list transformation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transform {
+    Trim,
+    SkipEmpty,
+    Deduplicate,
+    RejectDuplicates,
+    Sort,
+    Lowercase,
+    Uppercase,
+    FilterGlob(String),
+    Replace { from: String, to: String },
+    Prefix(String),
+    Suffix(String),
+}
+
+/// Applies typed transformations in order with checked resource limits.
+pub fn normalize_typed(
+    lists: &mut [Vec<String>],
+    transforms: &[Transform],
+    max_item_bytes: usize,
+    max_total_items: usize,
+) -> Result<(), CoreError> {
+    if transforms.len() > MAX_TRANSFORMS {
+        return Err(CoreError::usage(
+            "TRANSFORM_LIMIT",
+            "the number of transforms exceeds the security limit",
+        ));
+    }
+    for transform in transforms {
+        for (list_index, list) in lists.iter_mut().enumerate() {
+            apply_typed(list, transform).map_err(|error| error.with("list_index", list_index))?;
+            for item in list.iter() {
+                if item.len() > max_item_bytes {
+                    return Err(CoreError::runtime(
+                        "ITEM_TOO_LARGE",
+                        "a transformed item exceeds the maximum item byte limit",
+                    )
+                    .with("list_index", list_index)
+                    .with("observed", item.len())
+                    .with("limit", max_item_bytes));
+                }
+            }
+        }
+    }
+    let total = lists
+        .iter()
+        .try_fold(0usize, |total, list| total.checked_add(list.len()))
+        .ok_or_else(|| CoreError::runtime("TOO_MANY_ITEMS", "total item count overflowed"))?;
+    if total > max_total_items {
+        return Err(CoreError::runtime(
+            "TOO_MANY_ITEMS",
+            "transformed input exceeds the maximum total item count",
+        )
+        .with("observed", total)
+        .with("limit", max_total_items));
+    }
+    Ok(())
+}
+
+fn apply_typed(list: &mut Vec<String>, transform: &Transform) -> Result<(), CoreError> {
+    match transform {
+        Transform::Trim => list
+            .iter_mut()
+            .for_each(|value| *value = value.trim().to_string()),
+        Transform::SkipEmpty => list.retain(|value| !value.is_empty()),
+        Transform::Deduplicate => {
+            let mut seen = HashSet::new();
+            list.retain(|value| seen.insert(value.clone()));
+        }
+        Transform::RejectDuplicates => {
+            let mut seen = HashSet::new();
+            for value in list.iter() {
+                if !seen.insert(value) {
+                    return Err(CoreError::runtime(
+                        "DUPLICATE_ITEM",
+                        "a list contains a duplicate item",
+                    ));
+                }
+            }
+        }
+        Transform::Sort => list.sort(),
+        Transform::Lowercase => list
+            .iter_mut()
+            .for_each(|value| *value = value.chars().flat_map(char::to_lowercase).collect()),
+        Transform::Uppercase => list
+            .iter_mut()
+            .for_each(|value| *value = value.chars().flat_map(char::to_uppercase).collect()),
+        Transform::FilterGlob(pattern) => {
+            if pattern.len() > 4096 || pattern.contains(['[', ']']) {
+                return Err(CoreError::usage(
+                    "TRANSFORM_INVALID",
+                    "invalid transform glob",
+                ));
+            }
+            list.retain(|value| glob(pattern, value));
+        }
+        Transform::Replace { from, to } => {
+            if !from.is_empty() {
+                list.iter_mut()
+                    .for_each(|value| *value = value.replace(from, to));
+            }
+        }
+        Transform::Prefix(prefix) => list.iter_mut().for_each(|value| {
+            if let Some(stripped) = value.strip_prefix(prefix) {
+                *value = stripped.to_string();
+            }
+        }),
+        Transform::Suffix(suffix) => list.iter_mut().for_each(|value| {
+            if let Some(stripped) = value.strip_suffix(suffix) {
+                *value = stripped.to_string();
+            }
+        }),
+    }
+    Ok(())
+}
 pub fn normalize_lists(
     lists: &mut [Vec<String>],
     expressions: &[String],

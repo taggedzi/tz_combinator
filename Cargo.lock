@@ -124,6 +124,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "clap_mangen",
+ "combinator-codecs",
  "combinator-core",
  "csv",
  "fs2",
@@ -132,12 +133,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "combinator-core"
+name = "combinator-codecs"
 version = "0.1.0"
 dependencies = [
+ "combinator-core",
  "csv",
  "serde_json",
 ]
+
+[[package]]
+name = "combinator-core"
+version = "0.1.0"
 
 [[package]]
 name = "csv"

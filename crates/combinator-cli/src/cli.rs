@@ -25,7 +25,7 @@ pub enum OutFormat {
     Nul,
 }
 
-impl From<OutFormat> for combinator_core::Format {
+impl From<OutFormat> for combinator_codecs::Format {
     fn from(value: OutFormat) -> Self {
         match value {
             OutFormat::Text | OutFormat::Json => Self::Text,

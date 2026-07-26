@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["crates/combinator-core", "crates/combinator-cli"]
+members = ["crates/combinator-core", "crates/combinator-codecs", "crates/combinator-cli"]

@@ -11,10 +11,11 @@ use std::io::{BufWriter, Read, Write};
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
-use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
+use combinator_codecs::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
+use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
-    operation_count, ConcatOptions, Constraint, Count, Operation, ProductOptions, SelectionOptions,
-    Template, TemplateError, ZipOptions,
+    generate_with, operation_count, ConcatOptions, Constraint, Count, GenerationLimits,
+    GenerationRequest, Operation, ProductOptions, SelectionOptions, ZipOptions,
 };
 
 use cli::{
@@ -226,7 +227,9 @@ fn read_join_records(
         )
         .with("path", path));
     }
-    budget.consume_bytes(bytes.len(), path)?;
+    budget
+        .consume_bytes(bytes.len(), path)
+        .map_err(crate::error::from_codec)?;
     match format {
         JoinFormat::Jsonl => parse_join_jsonl(&bytes, path, limits, budget),
         JoinFormat::Csv | JoinFormat::Tsv => parse_join_csv(&bytes, path, format, limits, budget),
@@ -277,7 +280,9 @@ fn parse_join_jsonl(
                     .with("path", path),
             );
         }
-        budget.consume_item(path)?;
+        budget
+            .consume_item(path)
+            .map_err(crate::error::from_codec)?;
         out.push(combinator_core::Record { fields });
     }
     Ok(out)
@@ -339,7 +344,9 @@ fn parse_join_csv(
                     .with("path", path),
             );
         }
-        budget.consume_item(path)?;
+        budget
+            .consume_item(path)
+            .map_err(crate::error::from_codec)?;
         out.push(combinator_core::Record { fields });
     }
     Ok(out)
@@ -814,6 +821,12 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     )
 }
 
+#[derive(Debug, Default)]
+struct OutputSummary {
+    records: u128,
+    bytes: u64,
+}
+
 fn stream_core(
     common: &CommonArgs,
     sep: &str,
@@ -833,29 +846,71 @@ fn stream_core(
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let cancel = || deadline_expired(deadline);
-    let result = combinator_core::execute(
-        combinator_core::ExecutionRequest {
+    let mut summary = OutputSummary {
+        records: 0,
+        bytes: 0,
+    };
+    let generation = generate_with(
+        GenerationRequest {
             operation: op,
             lists,
-            format: common.format.into(),
-            field_sep: sep,
-            record_sep: &common.rec_sep,
-            lean: common.lean_output,
-            template,
-            names: &common.names,
-            max_output_bytes: effective_output_limit(common).unwrap_or(u64::MAX),
-            max_combinations: common.max_combinations,
-            cancel: Some(&cancel),
             constraints,
+            limits: GenerationLimits {
+                max_combinations: common.max_combinations,
+            },
+            cancel: Some(&cancel),
         },
-        &mut writer,
+        |record| {
+            let items: Vec<&str> = record
+                .fields
+                .iter()
+                .map(|(list, item)| lists[*list][*item].as_str())
+                .collect();
+            let line = format_record_with(
+                &items,
+                record.ordinal,
+                sep,
+                &common.rec_sep,
+                common.format.into(),
+                common.lean_output,
+                template,
+                &common.names,
+            )
+            .map_err(|_| AppError::runtime("TEMPLATE_INVALID", "template rendering failed"))?;
+            let size = u64::try_from(line.len()).map_err(|_| {
+                AppError::runtime(
+                    "OUTPUT_LIMIT_EXCEEDED",
+                    "output record is too large to write",
+                )
+            })?;
+            let next = summary.bytes.checked_add(size).ok_or_else(|| {
+                AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
+            })?;
+            let output_limit = effective_output_limit(common).unwrap_or(u64::MAX);
+            if next > output_limit {
+                return Err(AppError::runtime(
+                    "OUTPUT_LIMIT_EXCEEDED",
+                    "output exceeds the configured byte limit",
+                )
+                .with("written_bytes", summary.bytes)
+                .with("record_bytes", size)
+                .with("limit_bytes", output_limit));
+            }
+            writer.write_all(line.as_bytes()).map_err(write_err)?;
+            summary.records = summary.records.checked_add(1).ok_or_else(|| {
+                AppError::runtime("COUNT_OVERFLOW", "written record count overflowed")
+            })?;
+            summary.bytes = next;
+            Ok(())
+        },
     );
-    let result = match result {
+    match generation {
         Err(error) if common.output.is_none() && error.message.contains("os error 232") => {
             return Ok(())
         }
-        other => other?,
-    };
+        Ok(_) => {}
+        Err(error) => return Err(error),
+    }
     match writer.flush() {
         Ok(()) => {}
         Err(error) if common.output.is_none() && is_broken_pipe(&error) => return Ok(()),
@@ -869,8 +924,8 @@ fn stream_core(
         let _ = writeln!(
             std::io::stderr(),
             "summary[OUTPUT]: records={}, bytes={}",
-            result.records,
-            result.bytes
+            summary.records,
+            summary.bytes
         );
     }
     Ok(())

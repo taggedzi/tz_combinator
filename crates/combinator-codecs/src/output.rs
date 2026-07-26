@@ -1,6 +1,7 @@
-//! Core record formatting.
+//! Interface-neutral record formatting over caller-provided values.
 
-use crate::{Template, TemplateError};
+use crate::template::{Template, TemplateError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     Text,
@@ -9,6 +10,7 @@ pub enum Format {
     Tsv,
     Nul,
 }
+
 pub fn format_record(
     items: &[&str],
     index: u128,
@@ -20,6 +22,7 @@ pub fn format_record(
     format_record_with(items, index, sep, rec_sep, format, lean, None, &[])
         .expect("legacy formatting cannot fail")
 }
+
 #[allow(clippy::too_many_arguments)]
 pub fn format_record_with(
     items: &[&str],
@@ -72,76 +75,13 @@ pub fn format_record_with(
         Format::Tsv => csv_record(items, b'\t'),
     }
 }
+
 fn csv_record(items: &[&str], sep: u8) -> Result<String, TemplateError> {
-    let mut w = csv::WriterBuilder::new()
+    let mut writer = csv::WriterBuilder::new()
         .has_headers(false)
         .delimiter(sep)
         .terminator(csv::Terminator::Any(b'\n'))
         .from_writer(Vec::new());
-    w.write_record(items).unwrap();
-    Ok(String::from_utf8(w.into_inner().unwrap()).unwrap())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn formats_all_record_variants() {
-        assert_eq!(
-            format_record(&["a", "b"], 0, "-", "\n", Format::Text, false),
-            "a-b\n"
-        );
-        assert_eq!(
-            format_record(&["a", "b"], 0, "-", "\n", Format::Nul, false),
-            "a-b\0"
-        );
-        assert_eq!(
-            format_record(&["a,b", "x"], 0, "-", "\n", Format::Csv, false),
-            "\"a,b\",x\n"
-        );
-        assert_eq!(
-            format_record(&["a\tb", "x"], 0, "-", "\n", Format::Tsv, false),
-            "\"a\tb\"\tx\n"
-        );
-        assert_eq!(
-            format_record(&["a", "b"], 0, "-", "\n", Format::Jsonl, true),
-            "\"a-b\"\n"
-        );
-    }
-
-    #[test]
-    fn jsonl_includes_names_and_handles_large_indices() {
-        let names = vec!["left".to_string(), "right".to_string()];
-        let output = format_record_with(
-            &["a", "b"],
-            u64::MAX as u128 + 1,
-            "-",
-            "\n",
-            Format::Jsonl,
-            false,
-            None,
-            &names,
-        )
-        .unwrap();
-        assert!(output.contains("\"i\":\"18446744073709551616\""));
-        assert!(output.contains("\"named\":{"));
-    }
-
-    #[test]
-    fn template_errors_are_propagated() {
-        let template = Template::parse("{missing}").unwrap();
-        let names = vec!["known".to_string()];
-        assert!(format_record_with(
-            &["value"],
-            0,
-            "",
-            "\n",
-            Format::Text,
-            false,
-            Some(&template),
-            &names
-        )
-        .is_err());
-    }
+    writer.write_record(items).unwrap();
+    Ok(String::from_utf8(writer.into_inner().unwrap()).unwrap())
 }

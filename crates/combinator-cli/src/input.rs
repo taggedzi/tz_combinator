@@ -1,12 +1,12 @@
 //! CLI filesystem adapter for core's generic bounded readers.
 
 use crate::cli::InputFormat;
-use crate::error::AppError;
+use crate::error::{from_codec, AppError};
 use std::io::Read;
 
 pub const MAX_DELIM_BYTES: usize = 4096;
 pub const MAX_TEMPLATE_BYTES: usize = 1024 * 1024;
-pub use combinator_core::input::{InputBudget, InputLimits};
+pub use combinator_codecs::input::{InputBudget, InputLimits};
 
 pub fn validate_delims(field_sep: &str, rec_sep: &str, list_delim: &str) -> Result<(), AppError> {
     for (name, d) in [
@@ -37,7 +37,7 @@ pub fn split_inline_bounded(
     l: InputLimits,
     b: &mut InputBudget,
 ) -> Result<Vec<String>, AppError> {
-    combinator_core::input::split_inline(v, d, l, b)
+    combinator_codecs::input::split_inline(v, d, l, b).map_err(from_codec)
 }
 pub fn split_escaped_inline_bounded(
     v: &str,
@@ -45,7 +45,7 @@ pub fn split_escaped_inline_bounded(
     l: InputLimits,
     b: &mut InputBudget,
 ) -> Result<Vec<String>, AppError> {
-    combinator_core::input::split_escaped_inline(v, d, l, b)
+    combinator_codecs::input::split_escaped_inline(v, d, l, b).map_err(from_codec)
 }
 pub fn read_file_list_bounded(
     path: &str,
@@ -53,13 +53,14 @@ pub fn read_file_list_bounded(
     b: &mut InputBudget,
 ) -> Result<Vec<String>, AppError> {
     if path == "-" {
-        combinator_core::input::read_lines(std::io::stdin().lock(), path, l, b)
+        combinator_codecs::input::read_lines(std::io::stdin().lock(), path, l, b)
+            .map_err(from_codec)
     } else {
         let f = std::fs::File::open(path).map_err(|e| {
             AppError::runtime("FILE_UNREADABLE", format!("could not read list file: {e}"))
                 .with("path", path)
         })?;
-        combinator_core::input::read_lines(f, path, l, b)
+        combinator_codecs::input::read_lines(f, path, l, b).map_err(from_codec)
     }
 }
 pub fn read_file_list_format_bounded(
@@ -85,7 +86,7 @@ pub fn read_file_list_format_bounded(
                 .with("path", path)
         })?)
     };
-    combinator_core::input::read_formatted(f, path, format.into(), l, b)
+    combinator_codecs::input::read_formatted(f, path, format.into(), l, b).map_err(from_codec)
 }
 pub fn read_template_bounded(path: &str, max: usize) -> Result<String, AppError> {
     let f = std::fs::File::open(path).map_err(|e| {
@@ -123,7 +124,7 @@ pub fn read_template_bounded(path: &str, max: usize) -> Result<String, AppError>
     })
 }
 
-impl From<InputFormat> for combinator_core::input::InputFormat {
+impl From<InputFormat> for combinator_codecs::input::InputFormat {
     fn from(v: InputFormat) -> Self {
         match v {
             InputFormat::Lines => Self::Lines,

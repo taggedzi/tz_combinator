@@ -1,7 +1,7 @@
 //! Pure pre-flight validation for file output.
 
 use crate::error::AppError;
-use combinator_core::SizeEstimate;
+use combinator_codecs::SizeEstimate;
 
 /// Fails if the output file exists and overwrite was not requested.
 pub fn check_output_path(path: &str, overwrite: bool) -> Result<(), AppError> {
@@ -56,7 +56,7 @@ pub fn check_capacity(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use combinator_core::SizeEstimate;
+    use combinator_codecs::SizeEstimate;
 
     #[test]
     fn missing_path_is_ok() {

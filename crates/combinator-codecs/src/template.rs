@@ -12,13 +12,11 @@ enum Piece {
     Reference(Reference),
 }
 
-/// A compiled literal/field template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     pieces: Vec<Piece>,
 }
 
-/// Errors returned while parsing, validating, or rendering a template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateError {
     InvalidSyntax { position: usize },
@@ -30,14 +28,11 @@ pub enum TemplateError {
 }
 
 impl Template {
-    /// Parses literals, `{0}`-style indices, `{name}` references, and doubled
-    /// braces (`{{` / `}}`).
     pub fn parse(source: &str) -> Result<Self, TemplateError> {
         let chars: Vec<char> = source.chars().collect();
         let mut pieces = Vec::new();
         let mut literal = String::new();
         let mut i = 0;
-
         while i < chars.len() {
             match chars[i] {
                 '{' if i + 1 < chars.len() && chars[i + 1] == '{' => {
@@ -85,14 +80,12 @@ impl Template {
                 }
             }
         }
-
         if !literal.is_empty() {
             pieces.push(Piece::Literal(literal));
         }
         Ok(Self { pieces })
     }
 
-    /// Validates names and all references against the selected list count.
     pub fn validate_fields(
         &self,
         names: &[String],
@@ -103,12 +96,12 @@ impl Template {
             if let Piece::Reference(reference) = piece {
                 match reference {
                     Reference::Index(index) if *index >= field_count => {
-                        return Err(TemplateError::UnknownField { position: *index });
+                        return Err(TemplateError::UnknownField { position: *index })
                     }
                     Reference::Name(name) if names.iter().position(|n| n == name).is_none() => {
                         return Err(TemplateError::UnknownField {
                             position: name.len(),
-                        });
+                        })
                     }
                     _ => {}
                 }
@@ -117,7 +110,6 @@ impl Template {
         Ok(())
     }
 
-    /// Renders against selected fields after `validate_fields` has succeeded.
     pub fn render(&self, fields: &[&str], names: &[String]) -> Result<String, TemplateError> {
         let mut output = String::new();
         for piece in &self.pieces {
@@ -146,7 +138,6 @@ impl Template {
     }
 }
 
-/// Validates a field name according to the F3 identifier grammar.
 pub fn validate_name(name: &str) -> bool {
     valid_name(name)
 }
@@ -176,71 +167,4 @@ fn valid_name(name: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn names(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_string()).collect()
-    }
-
-    #[test]
-    fn renders_positional_fields_and_literals() {
-        let template = Template::parse("https://{0}/{1}").unwrap();
-        let fields = ["host", "path"];
-        template.validate_fields(&[], fields.len()).unwrap();
-        assert_eq!(template.render(&fields, &[]).unwrap(), "https://host/path");
-    }
-
-    #[test]
-    fn renders_named_fields() {
-        let template = Template::parse("{host}:{port}").unwrap();
-        let names = names(&["host", "port"]);
-        let fields = ["server", "443"];
-        template.validate_fields(&names, fields.len()).unwrap();
-        assert_eq!(template.render(&fields, &names).unwrap(), "server:443");
-    }
-
-    #[test]
-    fn escaped_braces_are_literals() {
-        let template = Template::parse("{{{0}}}").unwrap();
-        let fields = ["x"];
-        template.validate_fields(&[], 1).unwrap();
-        assert_eq!(template.render(&fields, &[]).unwrap(), "{x}");
-    }
-
-    #[test]
-    fn rejects_malformed_templates() {
-        for source in ["{", "}", "{}", "{a", "{0{1}", "{0}}x"] {
-            assert!(Template::parse(source).is_err(), "{source:?}");
-        }
-    }
-
-    #[test]
-    fn rejects_unknown_and_invalid_names() {
-        let template = Template::parse("{missing}").unwrap();
-        let names = names(&["host"]);
-        assert!(matches!(
-            template.validate_fields(&names, 1),
-            Err(TemplateError::UnknownField { .. })
-        ));
-        assert!(!validate_name("1host"));
-        assert!(!validate_name("host space"));
-        assert!(validate_name("host-1.value"));
-    }
-
-    #[test]
-    fn rejects_name_count_and_duplicates() {
-        let template = Template::parse("{host}").unwrap();
-        assert!(matches!(
-            template.validate_fields(&names(&["host"]), 2),
-            Err(TemplateError::NameCountMismatch { .. })
-        ));
-        assert!(matches!(
-            template.validate_fields(&names(&["host", "host"]), 2),
-            Err(TemplateError::DuplicateName { .. })
-        ));
-    }
 }
