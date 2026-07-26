@@ -21,8 +21,8 @@ use combinator_core::{
 use cli::{
     Cli, CommonArgs, ConcatArgs, InputFormat, JoinArgs, JoinFormat, JoinTypeArg, Mode, OutFormat,
     ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST,
-    HARD_MAX_ITEM_BYTES, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS,
-    HARD_MAX_TOTAL_ITEMS,
+    HARD_MAX_ITEM_BYTES, HARD_MAX_JOIN_KEY_FANOUT, HARD_MAX_JOIN_RECORDS, HARD_MAX_LISTS,
+    HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{exit_code, render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
@@ -98,6 +98,14 @@ fn main() {
 fn run_join(args: &JoinArgs) -> Result<(), AppError> {
     let common = &args.common;
     validate_resource_limits(common)?;
+    if args.max_join_records > HARD_MAX_JOIN_RECORDS
+        || args.max_join_key_fanout > HARD_MAX_JOIN_KEY_FANOUT
+    {
+        return Err(AppError::usage(
+            "RESOURCE_LIMIT_TOO_HIGH",
+            "join resource limit exceeds the compiled security ceiling",
+        ));
+    }
     let deadline = execution_deadline(common.timeout_ms)?;
     if !common.list.is_empty() || !common.file.is_empty() {
         return Err(AppError::usage(
@@ -119,12 +127,14 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
     }
     let mut budget = InputBudget::new(
         common.max_input_bytes.saturating_mul(2),
-        common.max_total_items,
+        common
+            .max_total_items
+            .min(args.max_join_records.saturating_mul(2)),
     );
     let limits = InputLimits {
         max_input_bytes: common.max_input_bytes,
         max_item_bytes: common.max_item_bytes,
-        max_items_per_list: common.max_items_per_list,
+        max_items_per_list: common.max_items_per_list.min(args.max_join_records),
     };
     let left = read_join_records(&args.left, args.join_format, limits, &mut budget)?;
     let right = read_join_records(&args.right, args.join_format, limits, &mut budget)?;
@@ -135,13 +145,14 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         JoinTypeArg::Anti => combinator_core::JoinType::Anti,
     };
     if common.count_only {
-        let count = combinator_core::join_count(
+        let count = combinator_core::join_count_with_fanout(
             &left,
             &right,
             &args.left_key,
             &args.right_key,
             kind,
             common.max_combinations,
+            args.max_join_key_fanout,
         )?;
         println!("{count}");
         return Ok(());
@@ -156,7 +167,7 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let mut bytes = 0u64;
-    combinator_core::join_each(
+    combinator_core::join_each_with_fanout(
         &left,
         &right,
         &args.left_key,
@@ -165,6 +176,7 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         common.offset,
         common.limit,
         common.max_combinations,
+        args.max_join_key_fanout,
         Some(&|| deadline_expired(deadline)),
         |record| {
             let object = record

@@ -21,7 +21,10 @@ pub use concat::{concat_count, concat_records, Concat, ConcatOptions};
 pub use constraint::Constraint;
 pub use count::{combination_count, Count};
 pub use error::{CoreError, ErrorKind};
-pub use join::{join, join_count, join_each, JoinType, JoinedRecord, Record};
+pub use join::{
+    join, join_count, join_count_with_fanout, join_each, join_each_with_fanout, JoinType,
+    JoinedRecord, Record,
+};
 pub use normalize::{normalize_typed, Transform};
 pub use operation::{count as operation_count, validate as validate_operation, Operation};
 pub use product::{combinations, Product, ProductOptions};

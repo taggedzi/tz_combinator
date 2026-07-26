@@ -925,10 +925,7 @@ fn closed_stdout_is_a_clean_cancellation() {
     let mut child = bin()
         .args([
             "--list",
-            &std::iter::repeat("x")
-                .take(10_000)
-                .collect::<Vec<_>>()
-                .join(","),
+            &(0..10_000).map(|_| "x").collect::<Vec<_>>().join(","),
         ])
         .stdout(Stdio::piped())
         .spawn()

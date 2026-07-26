@@ -6,6 +6,8 @@ pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_073_741_824;
 pub const DEFAULT_MAX_LISTS: usize = 128;
 pub const DEFAULT_MAX_TOTAL_ITEMS: usize = 5_000_000;
 pub const DEFAULT_MAX_COMBINATIONS: u128 = 10_000_000;
+pub const DEFAULT_MAX_JOIN_RECORDS: usize = 100_000;
+pub const DEFAULT_MAX_JOIN_KEY_FANOUT: u128 = 10_000;
 pub const HARD_MAX_OUTPUT_BYTES: u64 = DEFAULT_MAX_OUTPUT_BYTES;
 pub const HARD_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 pub const HARD_MAX_ITEM_BYTES: usize = 1024 * 1024;
@@ -13,6 +15,8 @@ pub const HARD_MAX_ITEMS_PER_LIST: usize = 1_000_000;
 pub const HARD_MAX_LISTS: usize = DEFAULT_MAX_LISTS;
 pub const HARD_MAX_TOTAL_ITEMS: usize = DEFAULT_MAX_TOTAL_ITEMS;
 pub const HARD_MAX_COMBINATIONS: u128 = DEFAULT_MAX_COMBINATIONS;
+pub const HARD_MAX_JOIN_RECORDS: usize = 250_000;
+pub const HARD_MAX_JOIN_KEY_FANOUT: u128 = 100_000;
 pub const HARD_MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -310,6 +314,12 @@ pub struct JoinArgs {
     pub join_type: JoinTypeArg,
     #[arg(long = "join-format", value_enum, default_value_t = JoinFormat::Csv)]
     pub join_format: JoinFormat,
+    /// Maximum records read from either join input.
+    #[arg(long = "max-join-records", default_value_t = DEFAULT_MAX_JOIN_RECORDS)]
+    pub max_join_records: usize,
+    /// Maximum duplicate-key expansion for one matching key.
+    #[arg(long = "max-join-key-fanout", default_value_t = DEFAULT_MAX_JOIN_KEY_FANOUT)]
+    pub max_join_key_fanout: u128,
 }
 
 #[derive(Debug, Subcommand)]

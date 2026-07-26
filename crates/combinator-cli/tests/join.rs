@@ -312,3 +312,53 @@ fn join_offset_and_zero_limit_emit_nothing() {
     let _ = fs::remove_file(left);
     let _ = fs::remove_file(right);
 }
+
+#[test]
+fn join_limits_records_and_duplicate_key_expansion() {
+    let (left, right) = paths("resource_limits");
+    fs::write(&left, "id\n1\n1\n").unwrap();
+    fs::write(&right, "id\n1\n1\n").unwrap();
+    let output = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--format",
+            "jsonl",
+            "--max-join-key-fanout",
+            "3",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("JOIN_FANOUT_LIMIT_EXCEEDED"));
+
+    let output = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--format",
+            "jsonl",
+            "--max-join-records",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("TOO_MANY_ITEMS"));
+    let _ = fs::remove_file(left);
+    let _ = fs::remove_file(right);
+}

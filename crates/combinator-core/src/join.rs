@@ -67,6 +67,40 @@ pub fn join_each<F>(
     limit: Option<u128>,
     max_output_records: u128,
     cancel: Option<&dyn Fn() -> bool>,
+    callback: F,
+) -> Result<u128, CoreError>
+where
+    F: FnMut(JoinedRecord) -> Result<(), CoreError>,
+{
+    join_each_with_fanout(
+        left,
+        right,
+        left_key,
+        right_key,
+        kind,
+        offset,
+        limit,
+        max_output_records,
+        u128::MAX,
+        cancel,
+        callback,
+    )
+}
+
+/// Like [`join_each`], but also rejects a single duplicate-key expansion
+/// before constructing the right-side index or emitting output.
+#[allow(clippy::too_many_arguments)]
+pub fn join_each_with_fanout<F>(
+    left: &[Record],
+    right: &[Record],
+    left_key: &str,
+    right_key: &str,
+    kind: JoinType,
+    offset: u128,
+    limit: Option<u128>,
+    max_output_records: u128,
+    max_key_fanout: u128,
+    cancel: Option<&dyn Fn() -> bool>,
     mut callback: F,
 ) -> Result<u128, CoreError>
 where
@@ -76,6 +110,7 @@ where
     if limit == Some(0) {
         return Ok(0);
     }
+    validate_key_fanout(left, right, left_key, right_key, kind, max_key_fanout)?;
     let mut index: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, record) in right.iter().enumerate() {
         if let Some(key) = field(record, right_key).filter(|value| !value.is_empty()) {
@@ -161,7 +196,29 @@ pub fn join_count(
     kind: JoinType,
     max_output_records: u128,
 ) -> Result<u128, CoreError> {
+    join_count_with_fanout(
+        left,
+        right,
+        left_key,
+        right_key,
+        kind,
+        max_output_records,
+        u128::MAX,
+    )
+}
+
+/// Counts a join with a bound on duplicate-key expansion.
+pub fn join_count_with_fanout(
+    left: &[Record],
+    right: &[Record],
+    left_key: &str,
+    right_key: &str,
+    kind: JoinType,
+    max_output_records: u128,
+    max_key_fanout: u128,
+) -> Result<u128, CoreError> {
     validate_keys(left_key, right_key)?;
+    validate_key_fanout(left, right, left_key, right_key, kind, max_key_fanout)?;
     let mut index: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, record) in right.iter().enumerate() {
         if let Some(key) = field(record, right_key).filter(|value| !value.is_empty()) {
@@ -207,6 +264,53 @@ pub fn join_count(
         }
     }
     Ok(count)
+}
+
+fn validate_key_fanout(
+    left: &[Record],
+    right: &[Record],
+    left_key: &str,
+    right_key: &str,
+    kind: JoinType,
+    max_key_fanout: u128,
+) -> Result<(), CoreError> {
+    if matches!(kind, JoinType::Anti) {
+        return Ok(());
+    }
+    let mut left_counts: HashMap<&str, u128> = HashMap::new();
+    let mut right_counts: HashMap<&str, u128> = HashMap::new();
+    for record in left {
+        if let Some(key) = field(record, left_key).filter(|value| !value.is_empty()) {
+            let count = left_counts.entry(key).or_default();
+            *count = count.checked_add(1).ok_or_else(|| {
+                CoreError::runtime("JOIN_FANOUT_LIMIT_EXCEEDED", "join key count overflowed")
+            })?;
+        }
+    }
+    for record in right {
+        if let Some(key) = field(record, right_key).filter(|value| !value.is_empty()) {
+            let count = right_counts.entry(key).or_default();
+            *count = count.checked_add(1).ok_or_else(|| {
+                CoreError::runtime("JOIN_FANOUT_LIMIT_EXCEEDED", "join key count overflowed")
+            })?;
+        }
+    }
+    for (key, right_count) in right_counts {
+        if let Some(left_count) = left_counts.get(key) {
+            let fanout = left_count.checked_mul(right_count).ok_or_else(|| {
+                CoreError::runtime("JOIN_FANOUT_LIMIT_EXCEEDED", "join key fanout overflowed")
+            })?;
+            if fanout > max_key_fanout {
+                return Err(CoreError::runtime(
+                    "JOIN_FANOUT_LIMIT_EXCEEDED",
+                    "duplicate-key join expansion exceeds the configured limit",
+                )
+                .with("observed", fanout)
+                .with("limit", max_key_fanout));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_keys(left_key: &str, right_key: &str) -> Result<(), CoreError> {
@@ -473,5 +577,26 @@ mod tests {
             join_count(&left, &right, "id", "id", JoinType::Inner, 2).unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn duplicate_key_fanout_is_rejected_before_output() {
+        let left = [r(&[("id", "1")]), r(&[("id", "1")])];
+        let right = [r(&[("id", "1")]), r(&[("id", "1")])];
+        let err = join_each_with_fanout(
+            &left,
+            &right,
+            "id",
+            "id",
+            JoinType::Inner,
+            0,
+            None,
+            100,
+            3,
+            None,
+            |_| panic!("fanout must be checked before output"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "JOIN_FANOUT_LIMIT_EXCEEDED");
     }
 }

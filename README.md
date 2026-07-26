@@ -118,6 +118,8 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--max-lists <N>` | `128` | Maximum number of lists accepted. |
 | `--max-total-items <N>` | `5000000` | Maximum total items across all lists. |
 | `--max-combinations <N>` | `10000000` | Maximum combinations generated unless `--count-only` is used. |
+| `--max-join-records <N>` | `100000` | Join-only maximum records read from either side; compiled ceiling `250000`. |
+| `--max-join-key-fanout <N>` | `10000` | Join-only maximum duplicate-key expansion for one matching key; checked before output. |
 | `--no-preflight` | off | Skip pre-flight validation for file output. Runtime output limits still apply. |
 | `--quiet` | off | Suppress non-fatal warnings; fatal diagnostics are unaffected. |
 | `--warnings-as-errors` | off | Convert the first non-fatal warning into a runtime error. Takes precedence over `--quiet`. |
@@ -195,7 +197,11 @@ combinator join --left users.csv --right accounts.csv \
 
 `--type` accepts `inner`, `left`, `full`, and `anti`. `--max-combinations`
 also bounds the complete join result before output begins; input byte, item,
-and output byte limits apply as usual.
+and output byte limits apply as usual. Joins additionally cap records per
+input and check each duplicate-key Cartesian expansion before building the
+right-side index or emitting output. These defaults are intentionally lower
+than the general list-operation ceilings; a public wrapper should still set
+smaller per-request limits and enforce process memory and concurrency quotas.
 
 ## Templates and named fields
 
@@ -463,6 +469,7 @@ as a runtime error with exit **1**.
 | `COMBINATION_LIMIT_EXCEEDED` | 1 | Generation would exceed the configured combination limit. |
 | `ZIP_LENGTH_MISMATCH` | 1 | `zip` with `--on-unequal error` (the default) and input lists of different lengths. |
 | `JOIN_LIMIT_EXCEEDED` | 1 | The bounded join result exceeds `--max-combinations`. |
+| `JOIN_FANOUT_LIMIT_EXCEEDED` | 1 | A duplicate-key join expansion exceeds `--max-join-key-fanout`. |
 | `JOIN_FORMAT_INVALID` | 2 | Join output must use `--format jsonl`. |
 | `JSONL_MALFORMED` | 2 | A JSONL join record is malformed. |
 | `JOIN_SCHEMA_INVALID` | 2 | Structured join headers or rows are invalid. |
