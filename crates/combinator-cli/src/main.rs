@@ -1502,11 +1502,39 @@ fn write_err(e: std::io::Error) -> AppError {
 }
 
 fn available_space(path: &str) -> Result<u64, AppError> {
-    let dir = std::path::Path::new(path)
+    // Treat Windows drive-qualified paths consistently when tests or callers
+    // pass them to a build running on another host OS. On Unix, `Z:\\...`
+    // would otherwise be treated as an ordinary relative filename and the
+    // current directory would yield an incorrect capacity result.
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+    {
+        return Err(AppError::runtime(
+            "CAPACITY_UNKNOWN",
+            format!("could not determine available space for output path {path}"),
+        ));
+    }
+    let parent = std::path::Path::new(path)
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::path::PathBuf::from("."));
+    // `fs2::available_space` may report the drive's capacity for a path whose
+    // intermediate directories do not exist (notably on Windows). Walk to an
+    // existing ancestor first so a missing drive or root is reported as an
+    // unknown capacity instead of being mistaken for a valid destination.
+    let dir = parent
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| {
+            AppError::runtime(
+                "CAPACITY_UNKNOWN",
+                format!("could not determine available space for output path {path}"),
+            )
+        })?;
     fs2::available_space(&dir).map_err(|e| {
         AppError::runtime(
             "CAPACITY_UNKNOWN",
