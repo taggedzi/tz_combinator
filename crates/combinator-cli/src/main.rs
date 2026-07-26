@@ -908,7 +908,9 @@ fn stream_core(
                 .with("record_bytes", size)
                 .with("limit_bytes", output_limit));
             }
-            writer.write_all(line.as_bytes()).map_err(write_err)?;
+            writer
+                .write_all(line.as_bytes())
+                .map_err(|error| output_write_err(error, common.output.is_none()))?;
             summary.records = summary.records.checked_add(1).ok_or_else(|| {
                 AppError::runtime("COUNT_OVERFLOW", "written record count overflowed")
             })?;
@@ -917,9 +919,7 @@ fn stream_core(
         },
     );
     match generation {
-        Err(error) if common.output.is_none() && error.message.contains("os error 232") => {
-            return Ok(())
-        }
+        Err(error) if error.code == "STDOUT_CLOSED" => return Ok(()),
         Ok(_) => {}
         Err(error) => return Err(error),
     }
@@ -945,6 +945,14 @@ fn stream_core(
 
 fn is_broken_pipe(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::BrokenPipe || error.raw_os_error() == Some(232)
+}
+
+fn output_write_err(error: std::io::Error, stdout: bool) -> AppError {
+    if stdout && is_broken_pipe(&error) {
+        AppError::runtime("STDOUT_CLOSED", "stdout was closed while writing")
+    } else {
+        write_err(error)
+    }
 }
 
 fn emit_warnings(common: &CommonArgs, warnings: &[Warning], json: bool) -> Result<(), AppError> {
@@ -1506,7 +1514,9 @@ fn available_space(path: &str) -> Result<u64, AppError> {
     // pass them to a build running on another host OS. On Unix, `Z:\\...`
     // would otherwise be treated as an ordinary relative filename and the
     // current directory would yield an incorrect capacity result.
+    #[cfg(not(windows))]
     let bytes = path.as_bytes();
+    #[cfg(not(windows))]
     if bytes.len() >= 3
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
