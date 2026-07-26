@@ -2,7 +2,7 @@
 name = "combinator-codecs"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.94.1"
 license = "MIT"
 description = "Bounded, interface-neutral text and record codecs for tz_combinator"
 readme = "../../README.md"
