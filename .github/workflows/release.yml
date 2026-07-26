@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned Rust toolchain
         shell: bash
@@ -73,18 +73,20 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
+          archive_version="${version//\//-}"
           mkdir -p dist
           cp target/release/combinator dist/combinator
-          tar -C dist -czf "combinator-${version}-linux-x86_64.tar.gz" combinator
+          tar -C dist -czf "combinator-${archive_version}-linux-x86_64.tar.gz" combinator
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $archiveVersion = $version -replace '[\\/]', '-'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/release/combinator.exe dist/combinator.exe
-          Compress-Archive -Path dist/combinator.exe -DestinationPath "combinator-$version-windows-x86_64.zip"
+          Compress-Archive -Path dist/combinator.exe -DestinationPath "combinator-$archiveVersion-windows-x86_64.zip"
 
       - name: Upload release archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -100,7 +102,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned Rust toolchain
         shell: bash
@@ -120,7 +122,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned Rust toolchain
         shell: bash
@@ -151,7 +153,7 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download release archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -169,7 +171,8 @@ jobs:
           grep -q "^version = \"$version\"" crates/combinator-cli/Cargo.toml
           grep -q "^version = \"$version\"" crates/combinator-core/Cargo.toml
           grep -q "^version = \"$version\"" crates/combinator-codecs/Cargo.toml
-          archives=(dist/combinator-"$version"-linux-x86_64.tar.gz dist/combinator-"$version"-windows-x86_64.zip)
+          archive_version="${version//\//-}"
+          archives=(dist/combinator-"$archive_version"-linux-x86_64.tar.gz dist/combinator-"$archive_version"-windows-x86_64.zip)
           for archive in "${archives[@]}"; do test -f "$archive"; done
           tar -tzf "${archives[0]}" | grep -Fxq combinator
           test "$(tar -tzf "${archives[0]}" | wc -l)" -eq 1
