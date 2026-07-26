@@ -134,3 +134,51 @@ impl From<InputFormat> for combinator_core::input::InputFormat {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_delimiter_limits_and_empty_list_delimiter() {
+        assert!(validate_delims("-", "\n", ",").is_ok());
+        assert_eq!(
+            validate_delims("-", "\n", "").unwrap_err().code,
+            "BAD_DELIMITER"
+        );
+        assert_eq!(
+            validate_delims(&"x".repeat(MAX_DELIM_BYTES + 1), "\n", ",")
+                .unwrap_err()
+                .code,
+            "BAD_DELIMITER"
+        );
+    }
+
+    #[test]
+    fn rejects_inline_file_format_and_missing_sources() {
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_file_list_format_bounded(
+                "missing",
+                InputFormat::Inline,
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "INPUT_FORMAT_INVALID"
+        );
+        assert_eq!(
+            read_file_list_bounded("missing", InputLimits::default(), &mut budget)
+                .unwrap_err()
+                .code,
+            "FILE_UNREADABLE"
+        );
+        assert_eq!(
+            read_template_bounded("missing", MAX_TEMPLATE_BYTES)
+                .unwrap_err()
+                .code,
+            "TEMPLATE_FILE_UNREADABLE"
+        );
+    }
+}

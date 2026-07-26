@@ -384,4 +384,132 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, "CSV_MULTIPLE_FIELDS");
     }
+
+    #[test]
+    fn escaped_inline_supports_escapes_and_rejects_invalid_hex() {
+        let mut budget = InputBudget::new(64, 10);
+        let values =
+            split_escaped_inline(r"a\n,b\x21,c\\d", ",", InputLimits::default(), &mut budget)
+                .unwrap();
+        assert_eq!(values, ["a\n", "b!", "c\\d"]);
+
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            split_escaped_inline(r"bad\xG0", ",", InputLimits::default(), &mut budget)
+                .unwrap_err()
+                .code,
+            "INLINE_ESCAPE_INVALID"
+        );
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            split_escaped_inline("trailing\\", ",", InputLimits::default(), &mut budget)
+                .unwrap_err()
+                .code,
+            "INLINE_ESCAPE_INVALID"
+        );
+    }
+
+    #[test]
+    fn parses_nul_tsv_utf8_and_item_limits() {
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_formatted(
+                Cursor::new(b"a\0b\0"),
+                "memory",
+                InputFormat::Nul,
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap(),
+            ["a", "b"]
+        );
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_formatted(
+                Cursor::new("a\tb\n"),
+                "memory",
+                InputFormat::Tsv,
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "CSV_MULTIPLE_FIELDS"
+        );
+        let mut budget = InputBudget::new(64, 1);
+        assert_eq!(
+            read_lines(
+                Cursor::new("a\nb\n"),
+                "memory",
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "TOO_MANY_ITEMS"
+        );
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_lines(
+                Cursor::new(vec![0xff]),
+                "memory",
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "INPUT_NOT_UTF8"
+        );
+    }
+
+    #[test]
+    fn handles_crlf_blank_lines_and_exact_boundaries() {
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_lines(
+                Cursor::new("a\r\n\r\n"),
+                "memory",
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap(),
+            ["a", ""]
+        );
+
+        let limits = InputLimits {
+            max_input_bytes: 3,
+            ..Default::default()
+        };
+        let mut budget = InputBudget::new(3, 10);
+        assert_eq!(
+            read_lines(Cursor::new("a\nb"), "memory", limits, &mut budget).unwrap(),
+            ["a", "b"]
+        );
+
+        let limits = InputLimits {
+            max_input_bytes: 2,
+            ..Default::default()
+        };
+        let mut budget = InputBudget::new(2, 10);
+        assert_eq!(
+            read_lines(Cursor::new("a\nb"), "memory", limits, &mut budget)
+                .unwrap_err()
+                .code,
+            "INPUT_TOO_LARGE"
+        );
+    }
+
+    #[test]
+    fn empty_delimiter_and_empty_items_are_deterministic() {
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            split_inline("", ",", InputLimits::default(), &mut budget).unwrap(),
+            [""]
+        );
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            split_inline("a,,b", ",", InputLimits::default(), &mut budget).unwrap(),
+            ["a", "", "b"]
+        );
+    }
 }

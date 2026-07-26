@@ -59,3 +59,28 @@ fn escape_text(value: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_text_with_escaped_context() {
+        let error = AppError::usage("BAD\nCODE", "bad\tmessage").with("path", "a\\b\n");
+        assert_eq!(exit_code(&error), 2);
+        assert_eq!(
+            render(&error, false),
+            "error[BAD\\nCODE]: bad\\tmessage (path=a\\\\b\\n)"
+        );
+    }
+
+    #[test]
+    fn renders_json_and_runtime_exit_code() {
+        let error = AppError::runtime("FAILED", "message").with("item", "x");
+        assert_eq!(exit_code(&error), 1);
+        let json: serde_json::Value = serde_json::from_str(&render(&error, true)).unwrap();
+        assert_eq!(json["error"]["code"], "FAILED");
+        assert_eq!(json["error"]["context"]["item"], "x");
+        assert!(render_warning("WARN", "careful", &[], false).starts_with("error[WARN]"));
+    }
+}

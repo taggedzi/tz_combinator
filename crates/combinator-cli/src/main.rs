@@ -1273,3 +1273,501 @@ fn available_space(path: &str) -> Result<u64, AppError> {
         .with("path", dir.display())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn common() -> CommonArgs {
+        Cli::parse_from(["combinator", "--list", "a,b"])
+            .product
+            .common
+    }
+
+    fn lists() -> Vec<Vec<String>> {
+        vec![vec!["a".into(), "bb".into()], vec!["x".into(), "y".into()]]
+    }
+
+    #[test]
+    fn resolves_all_operation_modes_and_order_names() {
+        let (_, sep, product) = resolve(Cli::parse_from([
+            "combinator",
+            "--list",
+            "a",
+            "--sep",
+            "-",
+            "--reverse-fields",
+        ]));
+        assert_eq!(sep, "-");
+        assert_eq!(operation_name(&product), "product");
+        assert_eq!(ordering_name(&product), "reverse-fields");
+
+        let cli = Cli::parse_from([
+            "combinator",
+            "zip",
+            "--list",
+            "a",
+            "--list",
+            "b",
+            "--reverse",
+        ]);
+        let (_, _, zip) = resolve(cli);
+        assert_eq!(operation_name(&zip), "zip");
+        assert_eq!(ordering_name(&zip), "reverse");
+
+        let cli = Cli::parse_from(["combinator", "concat", "--list", "a", "--reverse"]);
+        let (_, _, concat) = resolve(cli);
+        assert_eq!(operation_name(&concat), "concat");
+        assert_eq!(ordering_name(&concat), "reverse");
+
+        let (_, _, forward) = resolve(Cli::parse_from(["combinator", "--list", "a"]));
+        assert_eq!(ordering_name(&forward), "forward");
+    }
+
+    #[test]
+    fn validates_all_shard_argument_shapes_and_applies_each_operation() {
+        let mut missing = common();
+        missing.shard_index = Some(0);
+        assert_eq!(
+            validate_shard_args(&missing).unwrap_err().code,
+            "SHARD_ARGUMENTS_INCOMPLETE"
+        );
+
+        let mut zero = common();
+        zero.shard_index = Some(0);
+        zero.shard_count = Some(0);
+        assert_eq!(
+            validate_shard_args(&zero).unwrap_err().code,
+            "SHARD_COUNT_INVALID"
+        );
+
+        let mut out_of_range = common();
+        out_of_range.shard_index = Some(2);
+        out_of_range.shard_count = Some(2);
+        assert_eq!(
+            validate_shard_args(&out_of_range).unwrap_err().code,
+            "SHARD_INDEX_INVALID"
+        );
+
+        for operation in [
+            Operation::Product(ProductOptions::default()),
+            Operation::Zip(ZipOptions::default()),
+            Operation::Concat(ConcatOptions::default()),
+        ] {
+            let mut args = common();
+            args.shard_index = Some(1);
+            args.shard_count = Some(2);
+            let range = apply_shard(&mut args, &mut operation.clone(), Count::Exact(6)).unwrap();
+            assert_eq!(range.unwrap().start, 3);
+            assert_eq!(args.offset, 3);
+            assert_eq!(args.limit, Some(3));
+        }
+
+        let mut args = common();
+        args.shard_index = Some(0);
+        args.shard_count = Some(2);
+        let mut operation = Operation::Product(ProductOptions::default());
+        assert_eq!(
+            apply_shard(&mut args, &mut operation, Count::Overflow)
+                .unwrap_err()
+                .code,
+            "SHARD_COUNT_OVERFLOW"
+        );
+    }
+
+    #[test]
+    fn parses_join_jsonl_csv_and_tsv_records() {
+        let limits = InputLimits::default();
+        let mut budget = InputBudget::new(256, 10);
+        let json = parse_join_jsonl(
+            b"\r\n{\"id\":\"1\",\"name\":\"A\"}\r\n",
+            "memory",
+            limits,
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0].fields[0].0, "id");
+
+        let mut budget = InputBudget::new(256, 10);
+        let csv = parse_join_csv(
+            b"id,name\n1,A\n",
+            "memory",
+            JoinFormat::Csv,
+            limits,
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(
+            csv[0].fields,
+            [("id".into(), "1".into()), ("name".into(), "A".into())]
+        );
+
+        let mut budget = InputBudget::new(256, 10);
+        let tsv = parse_join_csv(
+            b"id\tname\n1\tA\n",
+            "memory",
+            JoinFormat::Tsv,
+            limits,
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(tsv.len(), 1);
+    }
+
+    #[test]
+    fn template_loading_and_error_mapping_are_stable() {
+        let args = common();
+        assert!(load_template(&args, "").unwrap().is_none());
+
+        let mut conflict = common();
+        conflict.template = Some("{0}".into());
+        conflict.template_file = Some("unused".into());
+        assert_eq!(
+            load_template(&conflict, "").unwrap_err().code,
+            "TEMPLATE_CONFLICT"
+        );
+
+        let mut separator = common();
+        separator.template = Some("{0}".into());
+        assert_eq!(
+            load_template(&separator, "-").unwrap_err().code,
+            "TEMPLATE_SEPARATOR_CONFLICT"
+        );
+
+        let mut too_large = common();
+        too_large.max_input_bytes = 2;
+        too_large.template = Some("{0}".into());
+        assert_eq!(
+            load_template(&too_large, "").unwrap_err().code,
+            "TEMPLATE_TOO_LARGE"
+        );
+
+        for error in [
+            TemplateError::InvalidSyntax { position: 1 },
+            TemplateError::InvalidReference { position: 2 },
+            TemplateError::InvalidName { position: 3 },
+            TemplateError::DuplicateName { position: 4 },
+            TemplateError::UnknownField { position: 5 },
+        ] {
+            assert!(template_error(error)
+                .context
+                .iter()
+                .any(|(key, _)| key == "position"));
+        }
+        let mismatch = template_error(TemplateError::NameCountMismatch {
+            expected: 2,
+            actual: 1,
+        });
+        assert_eq!(mismatch.code, "TEMPLATE_NAMES_MISMATCH");
+        assert_eq!(mismatch.context.len(), 2);
+    }
+
+    #[test]
+    fn validates_resource_limits_and_deadline_boundaries() {
+        let mut args = common();
+        args.max_output_bytes = HARD_MAX_OUTPUT_BYTES + 1;
+        assert_eq!(
+            validate_resource_limits(&args).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
+
+        let mut args = common();
+        args.max_file_size = Some(HARD_MAX_OUTPUT_BYTES + 1);
+        assert_eq!(
+            validate_resource_limits(&args).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
+
+        let mut args = common();
+        args.timeout_ms = Some(HARD_MAX_TIMEOUT_MS + 1);
+        assert_eq!(
+            validate_resource_limits(&args).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
+
+        assert!(execution_deadline(None).unwrap().is_none());
+        assert!(execution_deadline(Some(1)).unwrap().is_some());
+        assert!(!deadline_expired(None));
+        assert!(check_deadline(Some(Instant::now() - Duration::from_secs(1))).is_err());
+        assert!(check_deadline(None).is_ok());
+    }
+
+    #[test]
+    fn bounded_estimates_cover_formats_templates_and_windows() {
+        let mut args = common();
+        args.format = OutFormat::Jsonl;
+        args.lean_output = true;
+        args.limit = Some(1);
+        let operation = Operation::Product(ProductOptions::default());
+        assert!(matches!(
+            bounded_size_estimate(&args, "-", &operation, &lists(), true, None),
+            SizeEstimate::Bytes(_)
+        ));
+
+        args.format = OutFormat::Csv;
+        args.limit = None;
+        assert!(matches!(
+            bounded_size_estimate(&args, "", &operation, &lists(), false, None),
+            SizeEstimate::Bytes(_)
+        ));
+
+        let template = Template::parse("prefix-{0}-{0}").unwrap();
+        assert!(matches!(
+            bounded_size_estimate(&args, "", &operation, &lists(), false, Some(&template)),
+            SizeEstimate::Bytes(_)
+        ));
+
+        let mut offset = common();
+        offset.offset = 99;
+        assert_eq!(
+            bounded_size_estimate(&offset, "", &operation, &lists(), false, None),
+            SizeEstimate::Bytes(0)
+        );
+
+        assert_eq!(
+            effective_output_limit(&common()),
+            Some(cli::DEFAULT_MAX_OUTPUT_BYTES)
+        );
+        let mut file_limit = common();
+        file_limit.output = Some("out".into());
+        file_limit.max_file_size = Some(7);
+        assert_eq!(effective_output_limit(&file_limit), Some(7));
+    }
+
+    #[test]
+    fn warning_and_error_helpers_preserve_contracts() {
+        let mut args = common();
+        args.warnings_as_errors = true;
+        let warnings = vec![("EMPTY_LIST", "empty", vec![("list".into(), "0".into())])];
+        assert_eq!(
+            emit_warnings(&args, &warnings, false).unwrap_err().code,
+            "EMPTY_LIST"
+        );
+
+        assert!(is_broken_pipe(&std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe"
+        )));
+        assert!(!is_broken_pipe(&std::io::Error::other("other")));
+        assert_eq!(write_err(std::io::Error::other("x")).code, "WRITE_FAILED");
+        assert!(available_space(".").unwrap() > 0);
+        assert!(available_space("Z:\\missing\\directory\\output").is_err());
+    }
+
+    #[test]
+    fn run_rejects_invalid_mode_combinations_before_touching_inputs() {
+        let cases = [
+            {
+                let mut args = common();
+                args.format = OutFormat::Json;
+                (args, String::new(), "FORMAT_UNSUPPORTED")
+            },
+            {
+                let mut args = common();
+                args.file = vec!["-".into(), "-".into()];
+                (args, String::new(), "DUPLICATE_STDIN")
+            },
+            {
+                let mut args = common();
+                args.input_format = Some(InputFormat::Inline);
+                args.file = vec!["missing".into()];
+                (args, String::new(), "INPUT_FORMAT_INVALID")
+            },
+            {
+                let mut args = common();
+                args.input_format = Some(InputFormat::Csv);
+                (args, String::new(), "INPUT_FORMAT_INVALID")
+            },
+            {
+                let mut args = common();
+                args.count_only = true;
+                args.explain = true;
+                (args, String::new(), "MODE_CONFLICT")
+            },
+            {
+                let mut args = common();
+                args.transforms = (0..=MAX_TRANSFORMS).map(|_| "trim".into()).collect();
+                (args, String::new(), "TRANSFORM_LIMIT")
+            },
+            {
+                let mut args = common();
+                args.list_delim.clear();
+                (args, String::new(), "BAD_DELIMITER")
+            },
+            {
+                let mut args = common();
+                args.max_lists = 0;
+                (args, String::new(), "TOO_MANY_LISTS")
+            },
+            {
+                let mut args = common();
+                args.file = vec!["missing".into()];
+                (args, String::new(), "SOURCE_CONFLICT")
+            },
+            {
+                let mut args = common();
+                args.list.clear();
+                (args, String::new(), "NO_LISTS")
+            },
+        ];
+        for (args, sep, code) in cases {
+            assert_eq!(
+                run(args, sep, Operation::Product(ProductOptions::default()))
+                    .unwrap_err()
+                    .code,
+                code
+            );
+        }
+
+        let mut reverse = common();
+        reverse.reverse = true;
+        let operation = Operation::Product(ProductOptions {
+            reverse: true,
+            reverse_fields: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            run(reverse, String::new(), operation).unwrap_err().code,
+            "REVERSE_CONFLICT"
+        );
+    }
+
+    #[test]
+    fn run_reads_inline_file_and_mixed_sources_in_dry_run_mode() {
+        let path = std::env::temp_dir().join(format!(
+            "combinator_main_sources_{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "x\ny\n").unwrap();
+        let mut inline = common();
+        inline.dry_run = true;
+        inline.input_format = Some(InputFormat::Inline);
+        run(
+            inline,
+            String::new(),
+            Operation::Product(ProductOptions::default()),
+        )
+        .unwrap();
+
+        let mut lines = common();
+        lines.dry_run = true;
+        lines.list.clear();
+        lines.file = vec![path.to_str().unwrap().into()];
+        lines.input_format = Some(InputFormat::Lines);
+        run(
+            lines,
+            String::new(),
+            Operation::Product(ProductOptions::default()),
+        )
+        .unwrap();
+
+        let csv_path = path.with_extension("csv");
+        std::fs::write(&csv_path, "x\ny\n").unwrap();
+        let mut csv = common();
+        csv.dry_run = true;
+        csv.list.clear();
+        csv.file = vec![csv_path.to_str().unwrap().into()];
+        csv.input_format = Some(InputFormat::Csv);
+        run(
+            csv,
+            String::new(),
+            Operation::Product(ProductOptions::default()),
+        )
+        .unwrap();
+
+        let nul_path = path.with_extension("nul");
+        std::fs::write(&nul_path, b"x\0y\0").unwrap();
+        let mut nul = common();
+        nul.dry_run = true;
+        nul.list.clear();
+        nul.file = vec![nul_path.to_str().unwrap().into()];
+        nul.input_format = Some(InputFormat::Nul);
+        run(
+            nul,
+            String::new(),
+            Operation::Product(ProductOptions::default()),
+        )
+        .unwrap();
+
+        let mut mixed = common();
+        mixed.dry_run = true;
+        mixed.allow_mixed_inputs = true;
+        mixed.file = vec![path.to_str().unwrap().into()];
+        run(
+            mixed,
+            String::new(),
+            Operation::Product(ProductOptions::default()),
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(csv_path);
+        let _ = std::fs::remove_file(nul_path);
+    }
+
+    #[test]
+    fn join_reader_reports_file_and_record_limits() {
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_join_records(
+                "missing",
+                JoinFormat::Jsonl,
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "FILE_UNREADABLE"
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "combinator_join_limits_{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(&path, "[]\n").unwrap();
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_join_records(
+                path.to_str().unwrap(),
+                JoinFormat::Jsonl,
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "JOIN_RECORD_INVALID"
+        );
+        std::fs::write(&path, "{\"id\":\"long\"}\n").unwrap();
+        let limits = InputLimits {
+            max_item_bytes: 2,
+            ..Default::default()
+        };
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_join_records(
+                path.to_str().unwrap(),
+                JoinFormat::Jsonl,
+                limits,
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "ITEM_TOO_LARGE"
+        );
+        std::fs::write(&path, ",value\n1,x\n").unwrap();
+        let mut budget = InputBudget::new(64, 10);
+        assert_eq!(
+            read_join_records(
+                path.to_str().unwrap(),
+                JoinFormat::Csv,
+                InputLimits::default(),
+                &mut budget
+            )
+            .unwrap_err()
+            .code,
+            "JOIN_SCHEMA_INVALID"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+}

@@ -81,3 +81,67 @@ fn csv_record(items: &[&str], sep: u8) -> Result<String, TemplateError> {
     w.write_record(items).unwrap();
     Ok(String::from_utf8(w.into_inner().unwrap()).unwrap())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_all_record_variants() {
+        assert_eq!(
+            format_record(&["a", "b"], 0, "-", "\n", Format::Text, false),
+            "a-b\n"
+        );
+        assert_eq!(
+            format_record(&["a", "b"], 0, "-", "\n", Format::Nul, false),
+            "a-b\0"
+        );
+        assert_eq!(
+            format_record(&["a,b", "x"], 0, "-", "\n", Format::Csv, false),
+            "\"a,b\",x\n"
+        );
+        assert_eq!(
+            format_record(&["a\tb", "x"], 0, "-", "\n", Format::Tsv, false),
+            "\"a\tb\"\tx\n"
+        );
+        assert_eq!(
+            format_record(&["a", "b"], 0, "-", "\n", Format::Jsonl, true),
+            "\"a-b\"\n"
+        );
+    }
+
+    #[test]
+    fn jsonl_includes_names_and_handles_large_indices() {
+        let names = vec!["left".to_string(), "right".to_string()];
+        let output = format_record_with(
+            &["a", "b"],
+            u64::MAX as u128 + 1,
+            "-",
+            "\n",
+            Format::Jsonl,
+            false,
+            None,
+            &names,
+        )
+        .unwrap();
+        assert!(output.contains("\"i\":\"18446744073709551616\""));
+        assert!(output.contains("\"named\":{"));
+    }
+
+    #[test]
+    fn template_errors_are_propagated() {
+        let template = Template::parse("{missing}").unwrap();
+        let names = vec!["known".to_string()];
+        assert!(format_record_with(
+            &["value"],
+            0,
+            "",
+            "\n",
+            Format::Text,
+            false,
+            Some(&template),
+            &names
+        )
+        .is_err());
+    }
+}

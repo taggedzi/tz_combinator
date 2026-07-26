@@ -237,4 +237,34 @@ mod tests {
         };
         assert!(collect(opts).is_empty());
     }
+
+    #[test]
+    fn one_list_and_exact_end_offsets_are_well_defined() {
+        let lists = vec![vec!["a".to_string(), "b".to_string()]];
+        assert_eq!(
+            combinations(&lists, ProductOptions::default()).collect::<Vec<_>>(),
+            vec![vec![0], vec![1]]
+        );
+        assert!(combinations(
+            &lists,
+            ProductOptions {
+                offset: 2,
+                ..Default::default()
+            }
+        )
+        .next()
+        .is_none());
+        assert_eq!(
+            combinations(
+                &lists,
+                ProductOptions {
+                    reverse: true,
+                    offset: 1,
+                    ..Default::default()
+                }
+            )
+            .collect::<Vec<_>>(),
+            vec![vec![0]]
+        );
+    }
 }

@@ -232,3 +232,117 @@ fn replace_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("combinator-output-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn commits_new_file_and_discards_uncommitted_file() {
+        let destination = path("commit");
+        let _ = fs::remove_file(&destination);
+        {
+            let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
+            output.file_mut().write_all(b"new").unwrap();
+            output.commit().unwrap();
+        }
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        let _ = fs::remove_file(&destination);
+
+        let destination = path("drop");
+        let _ = fs::remove_file(&destination);
+        {
+            let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
+            output.file_mut().write_all(b"discarded").unwrap();
+        }
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn overwrite_replaces_existing_file() {
+        let destination = path("overwrite");
+        let _ = fs::remove_file(&destination);
+        fs::write(&destination, b"old").unwrap();
+        let mut output = OutputFile::open(destination.to_str().unwrap(), true).unwrap();
+        output.file_mut().write_all(b"new").unwrap();
+        output.commit().unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        let _ = fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn non_overwrite_commit_rejects_destination_created_after_open() {
+        let destination = path("race");
+        let _ = fs::remove_file(&destination);
+        let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
+        output.file_mut().write_all(b"new").unwrap();
+        fs::write(&destination, b"existing").unwrap();
+        let error = output.commit().unwrap_err();
+        assert_eq!(error.code, "OUTPUT_EXISTS");
+        assert_eq!(fs::read(&destination).unwrap(), b"existing");
+        let _ = fs::remove_file(&destination);
+    }
+
+    #[test]
+    fn commit_to_directory_fails_without_replacing_it() {
+        let destination =
+            std::env::temp_dir().join(format!("combinator-output-dir-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&destination);
+        fs::create_dir(&destination).unwrap();
+        let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
+        output.file_mut().write_all(b"new").unwrap();
+        let error = output.commit().unwrap_err();
+        assert!(matches!(error.code, "OUTPUT_EXISTS" | "WRITE_FAILED"));
+        assert!(destination.is_dir());
+        let _ = fs::remove_dir_all(destination);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlink_destination_and_parent() {
+        use std::os::unix::fs::symlink;
+
+        let target = path("symlink-target");
+        let destination = path("symlink-destination");
+        let parent = path("symlink-parent");
+        let nested = parent.join("output.txt");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_file(&destination);
+        let _ = fs::remove_file(&nested);
+        let _ = fs::remove_dir(&parent);
+        fs::write(&target, b"target").unwrap();
+        symlink(&target, &destination).unwrap();
+        assert_eq!(
+            OutputFile::open(destination.to_str().unwrap(), true)
+                .err()
+                .unwrap()
+                .code,
+            "UNSAFE_OUTPUT_PATH"
+        );
+        fs::create_dir(&parent).unwrap();
+        let real_parent = path("symlink-real-parent");
+        let _ = fs::remove_dir(&real_parent);
+        fs::create_dir(&real_parent).unwrap();
+        let link_parent = path("symlink-link-parent");
+        let _ = fs::remove_file(&link_parent);
+        symlink(&real_parent, &link_parent).unwrap();
+        let linked_output = link_parent.join("output.txt");
+        assert_eq!(
+            OutputFile::open(linked_output.to_str().unwrap(), false)
+                .err()
+                .unwrap()
+                .code,
+            "UNSAFE_OUTPUT_PATH"
+        );
+        let _ = fs::remove_file(destination);
+        let _ = fs::remove_file(link_parent);
+        let _ = fs::remove_dir(real_parent);
+        let _ = fs::remove_dir(parent);
+        let _ = fs::remove_file(target);
+    }
+}

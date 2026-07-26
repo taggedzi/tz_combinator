@@ -354,6 +354,79 @@ mod tests {
     }
 
     #[test]
+    fn supports_all_join_kinds_and_empty_keys() {
+        let left = [r(&[("id", "1"), ("l", "a")]), r(&[("id", "2")])];
+        let right = [r(&[("id", "1"), ("r", "x")]), r(&[("id", "3")])];
+        assert_eq!(
+            join_count(&left, &right, "id", "id", JoinType::Inner, 8).unwrap(),
+            1
+        );
+        assert_eq!(
+            join_count(&left, &right, "id", "id", JoinType::Left, 8).unwrap(),
+            2
+        );
+        assert_eq!(
+            join_count(&left, &right, "id", "id", JoinType::Full, 8).unwrap(),
+            3
+        );
+        assert_eq!(
+            join_count(&left, &right, "id", "id", JoinType::Anti, 8).unwrap(),
+            1
+        );
+        assert_eq!(
+            join(&left, &right, "", "id", JoinType::Inner, 8)
+                .unwrap_err()
+                .code,
+            "JOIN_KEY_INVALID"
+        );
+    }
+
+    #[test]
+    fn cancellation_and_zero_page_are_honored() {
+        let left = [r(&[("id", "1")])];
+        let right = [r(&[("id", "1")])];
+        let mut called = false;
+        let cancel = || true;
+        assert_eq!(
+            join_each(
+                &left,
+                &right,
+                "id",
+                "id",
+                JoinType::Inner,
+                0,
+                None,
+                8,
+                Some(&cancel),
+                |_| {
+                    called = true;
+                    Ok(())
+                }
+            )
+            .unwrap_err()
+            .code,
+            "CANCELLED"
+        );
+        assert!(!called);
+        assert_eq!(
+            join_each(
+                &left,
+                &right,
+                "id",
+                "id",
+                JoinType::Inner,
+                0,
+                Some(0),
+                8,
+                None,
+                |_| { panic!("zero page must not invoke callback") }
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
     fn missing_keys_do_not_match_and_limit_is_fail_closed() {
         let err = join(
             &[r(&[("id", "")])],

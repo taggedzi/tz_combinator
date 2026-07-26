@@ -155,4 +155,40 @@ mod tests {
         let lens = [2usize, 1, 3];
         assert_eq!(concat_count(&lens), Count::Exact(6));
     }
+
+    #[test]
+    fn reverse_offset_at_and_past_end_is_empty_or_last_record() {
+        let lists = vec![vec!["a".into(), "b".into()]];
+        assert_eq!(
+            collect(
+                &lists,
+                ConcatOptions {
+                    reverse: true,
+                    offset: 0,
+                    ..Default::default()
+                }
+            ),
+            vec![(0, 1), (0, 0)]
+        );
+        assert_eq!(
+            collect(
+                &lists,
+                ConcatOptions {
+                    reverse: true,
+                    offset: 1,
+                    ..Default::default()
+                }
+            ),
+            vec![(0, 0)]
+        );
+        assert!(collect(
+            &lists,
+            ConcatOptions {
+                reverse: true,
+                offset: 2,
+                ..Default::default()
+            }
+        )
+        .is_empty());
+    }
 }

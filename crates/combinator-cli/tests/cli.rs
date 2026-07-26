@@ -20,6 +20,42 @@ fn basic_product_to_stdout() {
 }
 
 #[test]
+fn zero_timeout_cancels_before_output() {
+    let output = bin()
+        .args(["--list", "a,b", "--timeout-ms", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("CANCELLED"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn offset_at_end_creates_empty_output_file() {
+    let path =
+        std::env::temp_dir().join(format!("combinator_offset_end_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let output = bin()
+        .args([
+            "--list",
+            "a,b",
+            "--offset",
+            "2",
+            "--output",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(std::fs::read(&path).unwrap().is_empty());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn shards_cover_product_without_gaps_or_duplicates() {
     let all = bin()
         .args(["--list", "a,b", "--list", "1,2,3", "--sep", "-"])
@@ -577,6 +613,72 @@ fn runtime_output_limit_stops_streaming() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("OUTPUT_LIMIT_EXCEEDED"));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "a\n");
+}
+
+#[test]
+fn runtime_output_failure_does_not_commit_or_replace_output_file() {
+    let path = std::env::temp_dir().join(format!(
+        "combinator_runtime_atomic_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&path, b"old").unwrap();
+    let out = bin()
+        .args([
+            "--list",
+            "a,b",
+            "--output",
+            path.to_str().unwrap(),
+            "--overwrite",
+            "--max-output-bytes",
+            "2",
+            "--no-preflight",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("OUTPUT_LIMIT_EXCEEDED"),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"old");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn template_file_limit_and_utf8_validation_are_enforced() {
+    let oversized = std::env::temp_dir().join(format!(
+        "combinator_template_large_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&oversized, b"{0}").unwrap();
+    let out = bin()
+        .args([
+            "--list",
+            "a",
+            "--template-file",
+            oversized.to_str().unwrap(),
+            "--max-input-bytes",
+            "2",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("TEMPLATE_TOO_LARGE"));
+
+    let invalid = std::env::temp_dir().join(format!(
+        "combinator_template_utf8_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&invalid, [0xff, 0xfe]).unwrap();
+    let out = bin()
+        .args(["--list", "a", "--template-file", invalid.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("TEMPLATE_FILE_UNREADABLE"));
+    let _ = std::fs::remove_file(oversized);
+    let _ = std::fs::remove_file(invalid);
 }
 
 #[test]

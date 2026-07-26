@@ -117,3 +117,198 @@ fn join_stdin_respects_input_limit() {
     let _ = fs::remove_file(left);
     let _ = fs::remove_file(right);
 }
+
+#[test]
+fn full_and_anti_join_cover_unmatched_records() {
+    let (left, right) = paths("kinds");
+    fs::write(&left, "id,value\n1,left\n2,only-left\n").unwrap();
+    fs::write(&right, "id,value\n1,right\n3,only-right\n").unwrap();
+
+    let full = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--type",
+            "full",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        full.status.success(),
+        "{}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let full_text = String::from_utf8(full.stdout).unwrap();
+    assert!(full_text.contains("only-left"));
+    assert!(full_text.contains("only-right"));
+
+    let anti = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--type",
+            "anti",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        anti.status.success(),
+        "{}",
+        String::from_utf8_lossy(&anti.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&anti.stdout).lines().count(), 1);
+    assert!(String::from_utf8_lossy(&anti.stdout).contains("only-left"));
+    let _ = fs::remove_file(left);
+    let _ = fs::remove_file(right);
+}
+
+#[test]
+fn join_rejects_non_string_json_fields_and_bad_csv_schema() {
+    let (left, right) = paths("invalid_records");
+    fs::write(&left, "{\"id\":1}\n").unwrap();
+    fs::write(&right, "{\"id\":\"1\"}\n").unwrap();
+    let json = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--join-format",
+            "jsonl",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(!json.status.success());
+    assert!(String::from_utf8_lossy(&json.stderr).contains("JOIN_FIELD_INVALID"));
+
+    fs::write(&left, "id,,value\n1,x,y\n").unwrap();
+    fs::write(&right, "id,value\n1,z\n").unwrap();
+    let csv = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--join-format",
+            "csv",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(!csv.status.success());
+    assert!(String::from_utf8_lossy(&csv.stderr).contains("JOIN_SCHEMA_INVALID"));
+
+    fs::write(&left, "id,value\n1\n").unwrap();
+    fs::write(&right, "id,value\n1,z\n").unwrap();
+    let short_row = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--join-format",
+            "csv",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(!short_row.status.success());
+    assert!(
+        String::from_utf8_lossy(&short_row.stderr).contains("CSV_MALFORMED"),
+        "stderr: {}",
+        String::from_utf8_lossy(&short_row.stderr)
+    );
+
+    fs::write(&left, "[]\n").unwrap();
+    let scalar = bin()
+        .args([
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--join-format",
+            "jsonl",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .unwrap();
+    assert!(!scalar.status.success());
+    assert!(String::from_utf8_lossy(&scalar.stderr).contains("JOIN_RECORD_INVALID"));
+    let _ = fs::remove_file(left);
+    let _ = fs::remove_file(right);
+}
+
+#[test]
+fn join_offset_and_zero_limit_emit_nothing() {
+    let (left, right) = paths("pagination");
+    fs::write(&left, "id\n1\n2\n").unwrap();
+    fs::write(&right, "id\n1\n2\n").unwrap();
+    for args in [vec!["--offset", "9"], vec!["--limit", "0"]] {
+        let mut command = vec![
+            "join",
+            "--left",
+            left.to_str().unwrap(),
+            "--right",
+            right.to_str().unwrap(),
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--format",
+            "jsonl",
+        ];
+        command.extend(args);
+        let output = bin().args(command).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+    }
+    let _ = fs::remove_file(left);
+    let _ = fs::remove_file(right);
+}

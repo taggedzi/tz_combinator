@@ -218,4 +218,42 @@ mod tests {
         let error = execute(request(&operation, &lists), &mut FailingWriter).unwrap_err();
         assert_eq!(error.code, "WRITE_FAILED");
     }
+
+    #[test]
+    fn output_limit_allows_exact_boundary_and_rejects_one_byte_over() {
+        let lists = vec![vec!["a".into()]];
+        let operation = Operation::Product(Default::default());
+        let mut exact = request(&operation, &lists);
+        exact.max_output_bytes = 2; // "a\n"
+        let result = execute(exact, &mut Vec::new()).unwrap();
+        assert_eq!(result.bytes, 2);
+
+        let mut over = request(&operation, &lists);
+        over.max_output_bytes = 1;
+        assert_eq!(
+            execute(over, &mut Vec::new()).unwrap_err().code,
+            "OUTPUT_LIMIT_EXCEEDED"
+        );
+    }
+
+    #[test]
+    fn zip_mismatch_and_overflow_without_limit_fail_closed() {
+        let lists = vec![vec!["a".into()], vec!["b".into(), "c".into()]];
+        let operation = Operation::Zip(Default::default());
+        assert_eq!(
+            execute(request(&operation, &lists), &mut Vec::new())
+                .unwrap_err()
+                .code,
+            "ZIP_LENGTH_MISMATCH"
+        );
+
+        let lists = vec![vec!["a".into(), "b".into()]; 129];
+        let operation = Operation::Product(Default::default());
+        let mut request = request(&operation, &lists);
+        request.max_combinations = 100;
+        assert_eq!(
+            execute(request, &mut Vec::new()).unwrap_err().code,
+            "COMBINATION_LIMIT_EXCEEDED"
+        );
+    }
 }

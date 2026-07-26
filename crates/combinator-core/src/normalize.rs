@@ -161,4 +161,75 @@ mod tests {
         let error = normalize_lists(&mut lists, &["filter=[a]".into()], 16, 8).unwrap_err();
         assert_eq!(error.code, "TRANSFORM_INVALID");
     }
+
+    #[test]
+    fn supports_filter_replace_prefix_suffix_and_case_aliases() {
+        let mut lists = vec![vec![
+            "pre-Alpha-suf".into(),
+            "pre-beta-suf".into(),
+            "other".into(),
+        ]];
+        normalize_lists(
+            &mut lists,
+            &[
+                "filter=pre-*".into(),
+                "replace=pre-=>".into(),
+                "prefix=ALPHA".into(),
+                "suffix=-suf".into(),
+                "upper".into(),
+            ],
+            64,
+            10,
+        )
+        .unwrap();
+        assert_eq!(lists[0], ["ALPHA", "BETA"]);
+    }
+
+    #[test]
+    fn rejects_duplicate_transform_and_limits() {
+        let mut lists = vec![vec!["a".into(), "a".into()]];
+        assert_eq!(
+            normalize_lists(&mut lists, &["reject-duplicates".into()], 8, 8)
+                .unwrap_err()
+                .code,
+            "DUPLICATE_ITEM"
+        );
+        let mut lists = vec![vec!["a".into()]];
+        assert_eq!(
+            normalize_lists(&mut lists, &["unknown".into()], 8, 8)
+                .unwrap_err()
+                .code,
+            "TRANSFORM_INVALID"
+        );
+        let mut lists = vec![vec!["a".into(), "b".into()]];
+        assert_eq!(
+            normalize_lists(&mut lists, &[], 8, 1).unwrap_err().code,
+            "TOO_MANY_ITEMS"
+        );
+    }
+
+    #[test]
+    fn empty_patterns_and_unicode_case_changes_are_safe() {
+        let mut lists = vec![vec!["ß".into(), "".into()]];
+        normalize_lists(
+            &mut lists,
+            &[
+                "prefix=".into(),
+                "suffix=".into(),
+                "replace==>x".into(),
+                "upper".into(),
+            ],
+            8,
+            8,
+        )
+        .unwrap();
+        assert_eq!(lists[0], ["SS", ""]);
+
+        let mut lists = vec![vec!["a".into()]];
+        assert_eq!(
+            normalize_lists(&mut lists, &["filter=".into()], 8, 8).unwrap(),
+            ()
+        );
+        assert!(lists[0].is_empty());
+    }
 }
