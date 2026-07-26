@@ -1414,6 +1414,9 @@ fn bounded_size_estimate(
         OutFormat::Json => Format::Text,
     };
     let bounded: Option<u128> = count.and_then(|c| {
+        if c == 0 {
+            return Some(0);
+        }
         let longest_key = |s: &&String| {
             if json_out {
                 serde_json::to_string(s)
@@ -1458,7 +1461,7 @@ fn bounded_size_estimate(
             template,
             &common.names,
         )
-        .expect("template was validated before estimation")
+        .ok()?
         .len() as u128;
         c.checked_mul(per_record)
     });
@@ -1814,6 +1817,17 @@ mod tests {
         file_limit.output = Some("out".into());
         file_limit.max_file_size = Some(7);
         assert_eq!(effective_output_limit(&file_limit), Some(7));
+    }
+
+    #[test]
+    fn bounded_estimate_does_not_panic_for_empty_template_input() {
+        let args = common();
+        let template = Template::parse("{0}").unwrap();
+        let operation = Operation::Product(ProductOptions::default());
+        assert_eq!(
+            bounded_size_estimate(&args, "", &operation, &[Vec::new()], false, Some(&template)),
+            SizeEstimate::Bytes(0)
+        );
     }
 
     #[test]

@@ -49,3 +49,18 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn escaped_inline_consumes_aggregate_input_bytes() {
+    let mut budget = InputBudget::new(20, 64);
+    combinator_codecs::input::split_escaped_inline("aaaaaaaaaaaaaaa", ",", limits(), &mut budget)
+        .unwrap();
+    let error = combinator_codecs::input::split_escaped_inline(
+        "bbbbbbbbbbbbbbb",
+        ",",
+        limits(),
+        &mut budget,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "INPUT_TOO_LARGE");
+}

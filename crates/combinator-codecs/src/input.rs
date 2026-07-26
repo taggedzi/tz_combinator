@@ -101,6 +101,7 @@ pub fn split_escaped_inline(
         )
         .with("observed", value.len()));
     }
+    budget.consume_bytes(value.len(), "inline")?;
     let mut out = Vec::new();
     let mut current = String::new();
     let mut pos = 0;

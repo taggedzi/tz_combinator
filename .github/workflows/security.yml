@@ -28,7 +28,6 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Audit dependencies
-        run: |
-          cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit
+  dependencies:
+    name: Dependency review
+    uses: ./.github/workflows/dependency-review.yml

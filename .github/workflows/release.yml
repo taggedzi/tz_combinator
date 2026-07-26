@@ -141,10 +141,14 @@ jobs:
           expected=$'red-car\nred-bike\nblue-car\nblue-bike'
           [[ "$actual" == "$expected" ]]
 
+  dependencies:
+    name: Dependency review
+    uses: ./.github/workflows/dependency-review.yml
+
   publish:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, coverage, package]
+    needs: [build, coverage, package, dependencies]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
