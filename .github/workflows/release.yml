@@ -1,0 +1,170 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.94.1
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-24.04
+            artifact: combinator-linux-x86_64
+          - name: Windows x86_64
+            os: windows-2022
+            artifact: combinator-windows-x86_64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Build release binary
+        run: cargo build --package combinator-cli --release --locked
+
+      - name: Smoke test release binary on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          target/release/combinator --version
+          actual="$(target/release/combinator --list 'red,blue' --list 'car,bike' --sep '-')"
+          expected=$'red-car\nred-bike\nblue-car\nblue-bike'
+          [[ "$actual" == "$expected" ]]
+
+      - name: Smoke test release binary on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & target/release/combinator.exe --version
+          $actual = @(& target/release/combinator.exe --list 'red,blue' --list 'car,bike' --sep '-')
+          $expected = @('red-car', 'red-bike', 'blue-car', 'blue-bike')
+          if (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) {
+            throw "Unexpected smoke-test output: $($actual -join ', ')"
+          }
+
+      - name: Package Linux archive
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp target/release/combinator dist/combinator
+          tar -C dist -czf "combinator-${version}-linux-x86_64.tar.gz" combinator
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/combinator.exe dist/combinator.exe
+          Compress-Archive -Path dist/combinator.exe -DestinationPath "combinator-$version-windows-x86_64.zip"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: combinator-*
+          if-no-files-found: error
+          retention-days: 7
+
+  coverage:
+    name: Coverage threshold
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup component add llvm-tools-preview --toolchain "$RUST_TOOLCHAIN-x86_64-unknown-linux-gnu"
+
+      - name: Install coverage tool
+        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+
+      - name: Enforce 80% line coverage
+        run: cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 80
+
+  package:
+    name: Package and install validation
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Package workspace crates
+        run: cargo package --workspace --locked --no-verify
+
+      - name: Validate cargo install
+        shell: bash
+        run: |
+          install_root="$RUNNER_TEMP/combinator-install"
+          cargo install --path crates/combinator-cli --locked --root "$install_root"
+          "$install_root/bin/combinator" --version
+          actual="$("$install_root/bin/combinator" --list 'red,blue' --list 'car,bike' --sep '-')"
+          expected=$'red-car\nred-bike\nblue-car\nblue-bike'
+          [[ "$actual" == "$expected" ]]
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, coverage, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Download release archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum combinator-* > SHA256SUMS
+
+      - name: Copy changelog into release assets
+        run: cp CHANGELOG.md dist/CHANGELOG.md
+
+      - name: Generate signed build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ github.workspace }}/dist/combinator-*
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
