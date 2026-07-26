@@ -3,7 +3,9 @@
 use crate::concat::{concat_count, ConcatOptions};
 use crate::count::{combination_count, Count};
 use crate::product::ProductOptions;
+use crate::selection::{binomial, factorial, falling_factorial, SelectionOptions};
 use crate::zip::{zip_count, ZipLengthMismatch, ZipOptions};
+use crate::CoreError;
 
 /// The operation an invocation selects, carrying that mode's options.
 #[derive(Debug, Clone)]
@@ -11,6 +13,32 @@ pub enum Operation {
     Product(ProductOptions),
     Zip(ZipOptions),
     Concat(ConcatOptions),
+    Permutations(SelectionOptions),
+    Combinations {
+        choose: usize,
+        options: SelectionOptions,
+    },
+    Variations {
+        length: usize,
+        options: SelectionOptions,
+    },
+}
+
+/// Validates operation-specific input shape before counting or generation.
+pub fn validate(op: &Operation, lists: &[Vec<String>]) -> Result<(), CoreError> {
+    match op {
+        Operation::Permutations(_)
+        | Operation::Combinations { .. }
+        | Operation::Variations { .. }
+            if lists.len() != 1 =>
+        {
+            Err(CoreError::usage(
+                "ONE_LIST_REQUIRED",
+                "this operation requires exactly one input list",
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Counts combinations for whichever operation is selected.
@@ -22,6 +50,30 @@ pub fn count(op: &Operation, lists: &[Vec<String>]) -> Result<Count, ZipLengthMi
         Operation::Product(_opts) => Ok(combination_count(&lens)),
         Operation::Zip(opts) => zip_count(&lens, opts.on_unequal),
         Operation::Concat(_opts) => Ok(concat_count(&lens)),
+        Operation::Permutations(_) => one_pool_count(lens, factorial),
+        Operation::Combinations { choose, .. } => {
+            one_pool_count_with(lens, |n| binomial(n, *choose))
+        }
+        Operation::Variations { length, .. } => {
+            one_pool_count_with(lens, |n| falling_factorial(n, *length))
+        }
+    }
+}
+
+fn one_pool_count<F>(lens: Vec<usize>, count: F) -> Result<Count, ZipLengthMismatch>
+where
+    F: FnOnce(usize) -> Count,
+{
+    one_pool_count_with(lens, count)
+}
+fn one_pool_count_with<F>(lens: Vec<usize>, count: F) -> Result<Count, ZipLengthMismatch>
+where
+    F: FnOnce(usize) -> Count,
+{
+    if lens.len() == 1 {
+        Ok(count(lens[0]))
+    } else {
+        Err(ZipLengthMismatch)
     }
 }
 
@@ -63,5 +115,54 @@ mod tests {
     fn concat_dispatches_to_concat_count() {
         let op = Operation::Concat(ConcatOptions::default());
         assert_eq!(count(&op, &lists()).unwrap(), Count::Exact(4));
+    }
+
+    #[test]
+    fn selection_operations_require_one_pool_and_count_checked_values() {
+        let pool = vec!["a".into(), "b".into(), "c".into()];
+        assert_eq!(
+            count(
+                &Operation::Permutations(Default::default()),
+                std::slice::from_ref(&pool)
+            )
+            .unwrap(),
+            Count::Exact(6)
+        );
+        assert_eq!(
+            count(
+                &Operation::Combinations {
+                    choose: 2,
+                    options: Default::default()
+                },
+                std::slice::from_ref(&pool)
+            )
+            .unwrap(),
+            Count::Exact(3)
+        );
+        assert_eq!(
+            count(
+                &Operation::Variations {
+                    length: 2,
+                    options: Default::default()
+                },
+                std::slice::from_ref(&pool)
+            )
+            .unwrap(),
+            Count::Exact(6)
+        );
+        assert!(count(
+            &Operation::Permutations(Default::default()),
+            &[pool.clone(), pool.clone()]
+        )
+        .is_err());
+        assert_eq!(
+            validate(
+                &Operation::Permutations(Default::default()),
+                &[pool.clone(), pool]
+            )
+            .unwrap_err()
+            .code,
+            "ONE_LIST_REQUIRED"
+        );
     }
 }

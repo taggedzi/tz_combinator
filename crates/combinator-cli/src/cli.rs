@@ -128,6 +128,12 @@ pub struct CommonArgs {
     #[arg(long = "transform")]
     pub transforms: Vec<String>,
 
+    /// Typed candidate filter. Forms: eq:N=VALUE, prefix:N=VALUE,
+    /// suffix:N=VALUE, glob:N=PATTERN, length:N=MIN..MAX. Repeatable; all
+    /// filters must match.
+    #[arg(long = "filter")]
+    pub filters: Vec<String>,
+
     /// Emit combinations in reverse of the default order.
     #[arg(long)]
     pub reverse: bool,
@@ -267,6 +273,28 @@ pub struct ConcatArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct PermutationsArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct CombinationsArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    #[arg(long = "choose")]
+    pub choose: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct VariationsArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    #[arg(long = "length")]
+    pub length: usize,
+}
+
+#[derive(Debug, Args)]
 pub struct JoinArgs {
     #[command(flatten)]
     pub common: CommonArgs,
@@ -292,6 +320,12 @@ pub enum Mode {
     Zip(ZipArgs),
     /// Sequential concatenation of the input lists.
     Concat(ConcatArgs),
+    /// Generate all orderings of one input list.
+    Permutations(PermutationsArgs),
+    /// Generate unordered selections of a fixed size.
+    Combinations(CombinationsArgs),
+    /// Generate ordered selections without replacement.
+    Variations(VariationsArgs),
     /// Keyed relational join of two structured files.
     Join(JoinArgs),
     /// Generate shell completion script.

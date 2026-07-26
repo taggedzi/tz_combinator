@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT"
+description = "Library for combining text lists into ordered combinations"
+readme = "../../README.md"
+repository = "https://github.com/taggedzi/tz_combinator"
 
 [dependencies]
 csv = "1.4"

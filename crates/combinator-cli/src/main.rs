@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 use combinator_core::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 use combinator_core::{
-    operation_count, ConcatOptions, Count, Operation, ProductOptions, Template, TemplateError,
-    ZipOptions,
+    operation_count, ConcatOptions, Constraint, Count, Operation, ProductOptions, SelectionOptions,
+    Template, TemplateError, ZipOptions,
 };
 
 use cli::{
@@ -78,7 +78,12 @@ fn main() {
                 }
                 return;
             }
-            Mode::Product(_) | Mode::Zip(_) | Mode::Concat(_) => {}
+            Mode::Product(_)
+            | Mode::Zip(_)
+            | Mode::Concat(_)
+            | Mode::Permutations(_)
+            | Mode::Combinations(_)
+            | Mode::Variations(_) => {}
         }
     }
     let (common, sep, op) = resolve(cli);
@@ -349,10 +354,137 @@ fn resolve(cli: Cli) -> (CommonArgs, String, Operation) {
         Some(Mode::Product(args)) => product_operation(args),
         Some(Mode::Zip(args)) => zip_operation(args),
         Some(Mode::Concat(args)) => concat_operation(args),
+        Some(Mode::Permutations(args)) => {
+            let common = args.common;
+            let options = selection_options(&common);
+            selection_operation(common, Operation::Permutations(options), "")
+        }
+        Some(Mode::Combinations(args)) => {
+            let common = args.common;
+            let options = selection_options(&common);
+            selection_operation(
+                common,
+                Operation::Combinations {
+                    choose: args.choose,
+                    options,
+                },
+                "",
+            )
+        }
+        Some(Mode::Variations(args)) => {
+            let common = args.common;
+            let options = selection_options(&common);
+            selection_operation(
+                common,
+                Operation::Variations {
+                    length: args.length,
+                    options,
+                },
+                "",
+            )
+        }
         Some(Mode::Join(_)) => unreachable!("handled in main"),
         Some(Mode::Completions { .. } | Mode::Man) => unreachable!("handled in main"),
         None => product_operation(cli.product),
     }
+}
+
+fn selection_options(common: &CommonArgs) -> SelectionOptions {
+    SelectionOptions {
+        reverse: common.reverse,
+        offset: common.offset,
+        limit: common.limit,
+    }
+}
+
+fn selection_operation(
+    common: CommonArgs,
+    operation: Operation,
+    sep: &str,
+) -> (CommonArgs, String, Operation) {
+    (common, sep.to_string(), operation)
+}
+
+const MAX_FILTER_BYTES: usize = 4096;
+
+fn parse_filters(expressions: &[String]) -> Result<Vec<Constraint>, AppError> {
+    if expressions.len() > MAX_TRANSFORMS {
+        return Err(AppError::usage(
+            "FILTER_LIMIT",
+            "the number of filters exceeds the security limit",
+        )
+        .with("observed", expressions.len())
+        .with("limit", MAX_TRANSFORMS));
+    }
+    expressions
+        .iter()
+        .map(|expression| parse_filter(expression))
+        .collect()
+}
+
+fn parse_filter(expression: &str) -> Result<Constraint, AppError> {
+    if expression.len() > MAX_FILTER_BYTES {
+        return Err(AppError::usage(
+            "FILTER_INVALID",
+            "filter expression exceeds the byte limit",
+        ));
+    }
+    let (kind, body) = expression.split_once(':').ok_or_else(|| {
+        AppError::usage("FILTER_INVALID", "filter must use KIND:FIELD=VALUE syntax")
+    })?;
+    let (field, value) = body.split_once('=').ok_or_else(|| {
+        AppError::usage("FILTER_INVALID", "filter must use KIND:FIELD=VALUE syntax")
+    })?;
+    let field = field.parse::<usize>().map_err(|_| {
+        AppError::usage(
+            "FILTER_INVALID",
+            "filter field must be a non-negative integer",
+        )
+    })?;
+    let constraint = match kind {
+        "eq" | "equals" => Constraint::Equals {
+            field,
+            value: value.to_string(),
+        },
+        "prefix" => Constraint::Prefix {
+            field,
+            value: value.to_string(),
+        },
+        "suffix" => Constraint::Suffix {
+            field,
+            value: value.to_string(),
+        },
+        "glob" => Constraint::Glob {
+            field,
+            pattern: value.to_string(),
+        },
+        "length" => {
+            let (min, max) = value.split_once("..").ok_or_else(|| {
+                AppError::usage("FILTER_INVALID", "length filter must use MIN..MAX")
+            })?;
+            let min = min.parse::<usize>().map_err(|_| {
+                AppError::usage(
+                    "FILTER_INVALID",
+                    "length minimum must be a non-negative integer",
+                )
+            })?;
+            let max = max.parse::<usize>().map_err(|_| {
+                AppError::usage(
+                    "FILTER_INVALID",
+                    "length maximum must be a non-negative integer",
+                )
+            })?;
+            Constraint::Length { field, min, max }
+        }
+        _ => {
+            return Err(AppError::usage(
+                "FILTER_INVALID",
+                "unsupported filter kind; use eq, prefix, suffix, glob, or length",
+            ))
+        }
+    };
+    constraint.validate()?;
+    Ok(constraint)
 }
 
 fn product_operation(args: ProductArgs) -> (CommonArgs, String, Operation) {
@@ -427,6 +559,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         return Err(AppError::usage(
             "MODE_CONFLICT",
             "--count-only cannot be combined with --explain or --dry-run",
+        ));
+    }
+    let constraints = parse_filters(&common.filters)?;
+    if !constraints.is_empty() && (common.count_only || common.explain || common.dry_run) {
+        return Err(AppError::usage(
+            "FILTER_MODE_UNSUPPORTED",
+            "--filter cannot be combined with --count-only, --explain, or --dry-run",
         ));
     }
     if common.transforms.len() > MAX_TRANSFORMS {
@@ -605,6 +744,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         }
     }
 
+    combinator_core::validate_operation(&op, &lists)?;
     let total_for_limits = match operation_count(&op, &lists) {
         Ok(c) => c,
         Err(combinator_core::ZipLengthMismatch) => {
@@ -663,7 +803,15 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     }
 
     emit_warnings(&common, &warnings, json_out)?;
-    stream_core(&common, &sep, &op, &lists, template.as_ref(), deadline)
+    stream_core(
+        &common,
+        &sep,
+        &op,
+        &lists,
+        template.as_ref(),
+        deadline,
+        &constraints,
+    )
 }
 
 fn stream_core(
@@ -673,6 +821,7 @@ fn stream_core(
     lists: &[Vec<String>],
     template: Option<&Template>,
     deadline: Option<Instant>,
+    constraints: &[Constraint],
 ) -> Result<(), AppError> {
     let mut output_file = common
         .output
@@ -697,6 +846,7 @@ fn stream_core(
             max_output_bytes: effective_output_limit(common).unwrap_or(u64::MAX),
             max_combinations: common.max_combinations,
             cancel: Some(&cancel),
+            constraints,
         },
         &mut writer,
     );
@@ -861,6 +1011,9 @@ fn operation_name(op: &Operation) -> &'static str {
         Operation::Product(_) => "product",
         Operation::Zip(_) => "zip",
         Operation::Concat(_) => "concat",
+        Operation::Permutations(_) => "permutations",
+        Operation::Combinations { .. } => "combinations",
+        Operation::Variations { .. } => "variations",
     }
 }
 
@@ -873,6 +1026,12 @@ fn ordering_name(op: &Operation) -> &'static str {
         Operation::Zip(_) => "forward",
         Operation::Concat(options) if options.reverse => "reverse",
         Operation::Concat(_) => "forward",
+        Operation::Permutations(options) if options.reverse => "reverse",
+        Operation::Permutations(_) => "forward",
+        Operation::Combinations { options, .. } if options.reverse => "reverse",
+        Operation::Combinations { .. } => "forward",
+        Operation::Variations { options, .. } if options.reverse => "reverse",
+        Operation::Variations { .. } => "forward",
     }
 }
 
@@ -938,6 +1097,18 @@ fn apply_shard(
             options.limit = Some(limit);
         }
         Operation::Concat(options) => {
+            options.offset = offset;
+            options.limit = Some(limit);
+        }
+        Operation::Permutations(options) => {
+            options.offset = offset;
+            options.limit = Some(limit);
+        }
+        Operation::Combinations { options, .. } => {
+            options.offset = offset;
+            options.limit = Some(limit);
+        }
+        Operation::Variations { options, .. } => {
             options.offset = offset;
             options.limit = Some(limit);
         }
@@ -1187,7 +1358,11 @@ fn bounded_size_estimate(
                     .unwrap_or("");
                 vec![longest]
             }
-            Operation::Product(_) | Operation::Zip(_) => lists
+            Operation::Product(_)
+            | Operation::Zip(_)
+            | Operation::Permutations(_)
+            | Operation::Combinations { .. }
+            | Operation::Variations { .. } => lists
                 .iter()
                 .map(|l| {
                     l.iter()

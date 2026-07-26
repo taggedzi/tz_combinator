@@ -548,3 +548,34 @@ Join requests are streamed during result generation, but the right-side hash
 index and both parsed inputs remain in memory. Set service-specific input,
 item, record, and output limits below the CLI hard ceilings when handling
 untrusted clients.
+## New selection operations and typed filters
+
+In addition to the default Cartesian product, the CLI exposes selection
+operations over exactly one logical input pool:
+
+```text
+combinator permutations --list a,b,c
+combinator combinations --list a,b,c --choose 2
+combinator variations --list a,b,c --length 2
+```
+
+Permutations emit deterministic lexicographic order of input positions;
+combinations emit increasing index selections; variations emit lexicographic
+ordered selections without replacement. Duplicate input values remain distinct
+positions, so duplicate output values are expected. `--reverse`, `--offset`,
+`--limit`, count limits, and sharding use the same checked paging semantics as
+the existing operations. `--choose 0` emits one empty selection, while an
+invalid selection length produces zero records.
+
+Candidate filters are typed and side-effect-free. Repeat `--filter` options to
+AND predicates together:
+
+```text
+combinator permutations --list aa,ab,ba --filter prefix:0=a --filter length:0=2..2
+```
+
+Supported forms are `eq:FIELD=VALUE`, `prefix:FIELD=VALUE`,
+`suffix:FIELD=VALUE`, `glob:FIELD=PATTERN` (`*` and `?`), and
+`length:FIELD=MIN..MAX`. Filtered `--count-only`, `--explain`, and `--dry-run`
+requests are rejected because those modes must not report an unevaluated
+logical count as an accepted-record count.
