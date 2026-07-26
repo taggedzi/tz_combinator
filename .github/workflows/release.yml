@@ -73,18 +73,20 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
+          archive_version="${version//\//-}"
           mkdir -p dist
           cp target/release/combinator dist/combinator
-          tar -C dist -czf "combinator-${version}-linux-x86_64.tar.gz" combinator
+          tar -C dist -czf "combinator-${archive_version}-linux-x86_64.tar.gz" combinator
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $archiveVersion = $version -replace '[\\/]', '-'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/release/combinator.exe dist/combinator.exe
-          Compress-Archive -Path dist/combinator.exe -DestinationPath "combinator-$version-windows-x86_64.zip"
+          Compress-Archive -Path dist/combinator.exe -DestinationPath "combinator-$archiveVersion-windows-x86_64.zip"
 
       - name: Upload release archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -169,7 +171,8 @@ jobs:
           grep -q "^version = \"$version\"" crates/combinator-cli/Cargo.toml
           grep -q "^version = \"$version\"" crates/combinator-core/Cargo.toml
           grep -q "^version = \"$version\"" crates/combinator-codecs/Cargo.toml
-          archives=(dist/combinator-"$version"-linux-x86_64.tar.gz dist/combinator-"$version"-windows-x86_64.zip)
+          archive_version="${version//\//-}"
+          archives=(dist/combinator-"$archive_version"-linux-x86_64.tar.gz dist/combinator-"$archive_version"-windows-x86_64.zip)
           for archive in "${archives[@]}"; do test -f "$archive"; done
           tar -tzf "${archives[0]}" | grep -Fxq combinator
           test "$(tar -tzf "${archives[0]}" | wc -l)" -eq 1
