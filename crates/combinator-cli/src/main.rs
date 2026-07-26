@@ -1545,7 +1545,7 @@ fn available_space(path: &str) -> Result<u64, AppError> {
                 format!("could not determine available space for output path {path}"),
             )
         })?;
-    fs2::available_space(&dir).map_err(|e| {
+    fs2::available_space(dir).map_err(|e| {
         AppError::runtime(
             "CAPACITY_UNKNOWN",
             format!("could not determine available disk space: {e}"),
