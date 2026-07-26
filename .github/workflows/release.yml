@@ -52,6 +52,8 @@ jobs:
           actual="$(target/release/combinator --list 'red,blue' --list 'car,bike' --sep '-')"
           expected=$'red-car\nred-bike\nblue-car\nblue-bike'
           [[ "$actual" == "$expected" ]]
+          jsonl="$(target/release/combinator --list 'a,b' --list '1,2' --format jsonl)"
+          grep -q '"i":0' <<<"$jsonl"
 
       - name: Smoke test release binary on Windows
         if: runner.os == 'Windows'
@@ -63,6 +65,8 @@ jobs:
           if (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) {
             throw "Unexpected smoke-test output: $($actual -join ', ')"
           }
+          $jsonl = & target/release/combinator.exe --list 'a,b' --list '1,2' --format jsonl
+          if (-not ($jsonl -match '"i":0')) { throw "JSONL smoke test failed" }
 
       - name: Package Linux archive
         if: runner.os == 'Linux'
@@ -155,12 +159,34 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Verify release versions and archive contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          test "$GITHUB_REF" = "refs/tags/v$version"
+          grep -q "^## \[$version\]" CHANGELOG.md
+          grep -q "^version = \"$version\"" crates/combinator-cli/Cargo.toml
+          grep -q "^version = \"$version\"" crates/combinator-core/Cargo.toml
+          grep -q "^version = \"$version\"" crates/combinator-codecs/Cargo.toml
+          archives=(dist/combinator-"$version"-linux-x86_64.tar.gz dist/combinator-"$version"-windows-x86_64.zip)
+          for archive in "${archives[@]}"; do test -f "$archive"; done
+          tar -tzf "${archives[0]}" | grep -Fxq combinator
+          test "$(tar -tzf "${archives[0]}" | wc -l)" -eq 1
+          unzip -Z1 "${archives[1]}" | grep -Fxq combinator.exe
+          test "$(unzip -Z1 "${archives[1]}" | wc -l)" -eq 1
+          ! find dist -type f \( -name '*.tmp' -o -name '*.key' -o -name '.env' -o -name 'credentials*' \) -print -quit | grep -q .
+
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum combinator-* > SHA256SUMS
+        run: |
+          set -euo pipefail
+          find . -maxdepth 1 -type f -name 'combinator-*' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 2
+          sha256sum -c SHA256SUMS
 
       - name: Copy changelog into release assets
-        run: cp CHANGELOG.md dist/CHANGELOG.md
+        run: cp CHANGELOG.md README.md dist/
 
       - name: Generate signed build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0

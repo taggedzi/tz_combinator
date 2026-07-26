@@ -8,12 +8,14 @@ single, stable interface that downstream consumers (a future REST API, GUI,
 or web frontend) are expected to code against: spawn the binary, read its
 stdout, and you get the same contract every caller gets.
 
-This repository is a Cargo workspace with two crates:
+This repository is a Cargo workspace with three crates:
 
 - `crates/combinator-core` — the engine: counting, size estimation, and the
   lazy product iterator. No I/O.
 - `crates/combinator-cli` — the `combinator` binary: argument parsing, input
   gathering, formatting, pre-flight checks, and stdout/stderr/file output.
+- `crates/combinator-codecs` — bounded, reusable input, template, output, and
+  estimate codecs used by the CLI.
 
 ## Building / installing
 
@@ -28,7 +30,23 @@ on Windows). Run it directly, or install it onto your `PATH`:
 cargo install --path crates/combinator-cli
 ```
 
-Requires Rust edition 2021 (`rust-version = "1.74"` in `crates/combinator-cli/Cargo.toml`).
+Requires Rust edition 2021 and Rust `1.94.1` (the minimum declared by all
+workspace manifests).
+
+## Compatibility and release scope
+
+The supported integration boundary is the `combinator` CLI. GitHub binary
+releases support Linux and Windows x86_64. Within a major version, flags and
+defaults, exit-code meanings, existing error codes, stdout/stderr ownership,
+and the meanings of JSONL fields remain compatible. New JSONL fields are
+additive. The machine-readable `--explain --format json` response is versioned
+by `schema_version`; incompatible changes require a new schema version.
+
+Product ordering and sharding use version 1 deterministic algorithms, with
+stable ordering for stable inputs. `combinator-core` is an internal/future
+direction and is not a semver-stable public Rust API. Release artifacts are
+GitHub archives only; crates.io publication is not promised. See the full
+policy in [`docs/compatibility.md`](docs/compatibility.md).
 
 The workspace is MIT-licensed. Third-party dependency licensing, including the
 `csv` crate used for CSV/TSV parsing, is documented in
