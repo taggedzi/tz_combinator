@@ -17,6 +17,9 @@ This repository is a Cargo workspace with three crates:
 - `crates/combinator-codecs` — bounded, reusable input, template, output, and
   estimate codecs used by the CLI.
 
+For the durable references, see [CLI usage](docs/cli-usage.md) and
+[library usage](docs/library-usage.md).
+
 ## Building / installing
 
 ```
