@@ -2356,4 +2356,153 @@ mod tests {
         );
         assert_eq!(terminal_text("abcdef", 3), "abc…");
     }
+
+    #[test]
+    fn keyboard_editing_updates_input_and_plan() {
+        let mut app = App {
+            focus: Focus::Field(Field::ListValue),
+            ..App::default()
+        };
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        for character in ['r', 'e', 'd', ',', 'b', 'l', 'u', 'e'] {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.sources[0].value, "red,blue");
+        assert_eq!(app.request.lists[0], vec!["red", "blue"]);
+        assert_eq!(app.plan.as_ref().map(|plan| plan.records_to_emit), Some(2));
+        assert!(app.editing.is_none());
+    }
+
+    #[test]
+    fn keyboard_navigation_changes_pages_and_quits() {
+        let mut app = App::default();
+        assert!(!app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)));
+        assert_eq!(app.page, Page::Join);
+        assert_eq!(app.focus, Focus::Page(Page::Join));
+        assert!(!app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE)));
+        assert_eq!(app.page, Page::Settings);
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)));
+        assert!(app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn editing_shortcuts_clear_and_finish_fields() {
+        let mut app = App::default();
+        app.sources[0].value = "old".into();
+        app.focus = Focus::Field(Field::ListValue);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(app.sources[0].value, "");
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.editing.is_none());
+    }
+
+    #[test]
+    fn operation_controls_change_request_shape_and_visible_focus() {
+        let mut app = App {
+            operation: AppOperation::Combinations { choose: 2 },
+            choose: "3".into(),
+            ..App::default()
+        };
+        app.sync_requests();
+        assert_eq!(
+            app.request.operation,
+            AppOperation::Combinations { choose: 3 }
+        );
+        assert!(app.focus_order().contains(&Focus::Field(Field::Choose)));
+
+        app.operation = AppOperation::Variations { length: 2 };
+        app.length = "4".into();
+        app.sync_requests();
+        assert_eq!(
+            app.request.operation,
+            AppOperation::Variations { length: 4 }
+        );
+
+        app.operation = AppOperation::Zip {
+            on_unequal: UnequalPolicy::Cycle,
+        };
+        app.zip_policy = UnequalPolicy::Cycle;
+        app.sync_requests();
+        assert_eq!(app.request.operation, app.operation);
+        assert!(app.focus_order().contains(&Focus::Field(Field::ZipPolicy)));
+    }
+
+    #[test]
+    fn invalid_input_stays_fail_closed() {
+        let mut app = App {
+            focus: Focus::Field(Field::Offset),
+            ..App::default()
+        };
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(app.request.options.offset, 0);
+        assert_eq!(app.offset, "0x");
+
+        app.page = Page::Join;
+        app.refresh_plan();
+        assert!(app.join_plan.is_none());
+        assert_eq!(app.status, "Enter both paths and both keys");
+    }
+
+    #[test]
+    fn rendering_exposes_active_state_without_snapshot_lock_in() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut app = App::default();
+        app.sources[0].value = "red,blue".into();
+        app.sync_requests();
+        app.run_preview();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(text.contains("Preview"));
+        assert!(text.contains("red"));
+        assert!(text.contains("blue"));
+    }
+
+    #[test]
+    fn supported_labels_and_parsers_are_consistent() {
+        for operation in [
+            AppOperation::Product {
+                reverse_fields: false,
+            },
+            AppOperation::Zip {
+                on_unequal: UnequalPolicy::Error,
+            },
+            AppOperation::Concat,
+            AppOperation::Permutations,
+            AppOperation::Combinations { choose: 2 },
+            AppOperation::Variations { length: 2 },
+        ] {
+            assert_eq!(parse_operation(operation_label(operation), 2, 2), operation);
+        }
+        for format in [
+            Format::Text,
+            Format::Jsonl,
+            Format::Csv,
+            Format::Tsv,
+            Format::Nul,
+        ] {
+            assert_eq!(parse_format(format_label(format)), format);
+        }
+        for kind in [
+            JoinKind::Inner,
+            JoinKind::Left,
+            JoinKind::Full,
+            JoinKind::Anti,
+        ] {
+            assert_eq!(parse_join_kind(join_kind_label(kind)), kind);
+        }
+    }
 }

@@ -2206,3 +2206,225 @@ fn operation_controls(state: &CombinatorGui) -> Element<'_, Message> {
     }
     controls.into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dispatch(state: &mut CombinatorGui, message: Message) {
+        let _ = update(state, message);
+    }
+
+    #[test]
+    fn default_state_has_a_valid_empty_plan() {
+        let state = CombinatorGui::default();
+
+        assert!(!state.join_mode);
+        assert!(!state.settings_mode);
+        assert_eq!(state.sources, vec![String::new()]);
+        assert_eq!(state.status, "Ready");
+        assert_eq!(
+            state.plan.as_ref().map(|plan| plan.records_to_emit),
+            Some(1)
+        );
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn combine_messages_update_the_shared_plan() {
+        let mut state = CombinatorGui::default();
+        dispatch(&mut state, Message::SourceChanged(0, "red,blue".into()));
+        dispatch(&mut state, Message::AddList);
+        dispatch(&mut state, Message::SourceChanged(1, "car,bike".into()));
+        dispatch(&mut state, Message::SeparatorChanged("-".into()));
+
+        assert_eq!(
+            state.request.lists,
+            vec![
+                vec!["red".to_string(), "blue".to_string()],
+                vec!["car".to_string(), "bike".to_string()],
+            ]
+        );
+        assert_eq!(
+            state.plan.as_ref().map(|plan| plan.records_to_emit),
+            Some(4)
+        );
+        assert_eq!(state.status, "Ready");
+        assert!(state.error.is_none());
+
+        dispatch(&mut state, Message::Preview);
+        assert_eq!(state.records.len(), 4);
+        assert_eq!(state.records[0].value, "red-car\n");
+        assert_eq!(state.status, "Preview ready");
+    }
+
+    #[test]
+    fn template_modes_are_mutually_exclusive() {
+        let mut state = CombinatorGui::default();
+
+        dispatch(&mut state, Message::TemplateChanged("{0}:{1}".into()));
+        assert_eq!(state.request.template.as_deref(), Some("{0}:{1}"));
+        assert!(state.request.template_file.is_none());
+
+        dispatch(
+            &mut state,
+            Message::TemplateFileChanged("template.txt".into()),
+        );
+        assert!(state.request.template.is_none());
+        assert_eq!(state.request.template_file.as_deref(), Some("template.txt"));
+        assert!(state.template.is_empty());
+
+        dispatch(&mut state, Message::TemplateFileModeChanged(false));
+        assert!(state.request.template_file.is_none());
+    }
+
+    #[test]
+    fn format_and_operation_messages_preserve_invariants() {
+        let mut state = CombinatorGui::default();
+        dispatch(&mut state, Message::FormatChanged(Format::Jsonl));
+        dispatch(&mut state, Message::LeanJsonlChanged(true));
+        assert_eq!(state.request.format, Format::Jsonl);
+        assert!(state.request.lean_jsonl);
+
+        dispatch(&mut state, Message::FormatChanged(Format::Text));
+        assert!(!state.request.lean_jsonl);
+
+        dispatch(
+            &mut state,
+            Message::OperationChanged(AppOperation::Combinations { choose: 2 }),
+        );
+        dispatch(&mut state, Message::ChooseChanged("3".into()));
+        assert_eq!(
+            state.request.operation,
+            AppOperation::Combinations { choose: 3 }
+        );
+    }
+
+    #[test]
+    fn invalid_numeric_messages_are_reported_without_corrupting_requests() {
+        let mut state = CombinatorGui::default();
+        let original_offset = state.request.options.offset;
+        let original_limit = state.request.options.limit;
+
+        dispatch(&mut state, Message::OffsetChanged("not-a-number".into()));
+        assert_eq!(state.request.options.offset, original_offset);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("OFFSET_INVALID: enter a non-negative integer")
+        );
+
+        dispatch(&mut state, Message::LimitChanged("also-invalid".into()));
+        assert_eq!(state.request.options.limit, original_limit);
+        assert_eq!(
+            state.error.as_deref(),
+            Some("LIMIT_INVALID: enter a non-negative integer")
+        );
+
+        dispatch(&mut state, Message::MaxCombinationsChanged("0".into()));
+        assert_eq!(
+            state.error.as_deref(),
+            Some("LIMIT_INVALID: enter a positive integer")
+        );
+    }
+
+    #[test]
+    fn join_state_requires_inputs_and_updates_join_requests() {
+        let mut state = CombinatorGui::default();
+        dispatch(&mut state, Message::SelectJoin);
+        assert_eq!(state.status, "Enter both join input paths");
+        assert!(state.join_plan.is_none());
+
+        dispatch(&mut state, Message::JoinLeftChanged("left.csv".into()));
+        dispatch(&mut state, Message::JoinRightChanged("right.csv".into()));
+        dispatch(&mut state, Message::JoinLeftKeyChanged("id".into()));
+        dispatch(&mut state, Message::JoinRightKeyChanged("key".into()));
+        assert_eq!(state.join_request.left_path, "left.csv");
+        assert_eq!(state.join_request.right_key, "key");
+        assert!(state.error.is_some());
+
+        dispatch(&mut state, Message::SelectSettings);
+        assert!(state.settings_mode);
+        dispatch(&mut state, Message::SelectCombine);
+        assert!(!state.settings_mode);
+        assert!(!state.join_mode);
+    }
+
+    #[test]
+    fn completion_and_cancellation_messages_update_lifecycle_state() {
+        let mut state = CombinatorGui::default();
+        let token = CancellationToken::new();
+        state.running = true;
+        state.cancellation = Some(token.clone());
+        dispatch(&mut state, Message::Cancel);
+        assert!(token.is_cancelled());
+        assert_eq!(state.status, "Cancellation requested...");
+
+        dispatch(
+            &mut state,
+            Message::GenerationFinished(Ok(ProgressEvent {
+                records: 2,
+                bytes: 12,
+            })),
+        );
+        assert!(!state.running);
+        assert!(state.cancellation.is_none());
+        assert!(state.error.is_none());
+        assert!(state.status.contains("Wrote 2 records"));
+
+        dispatch(
+            &mut state,
+            Message::GenerationFinished(Err(combinator_app::AppError {
+                code: "TEST_ERROR",
+                message: "failed".into(),
+            })),
+        );
+        assert_eq!(state.error.as_deref(), Some("TEST_ERROR: failed"));
+    }
+
+    #[test]
+    fn view_builds_for_each_user_facing_mode() {
+        let mut state = CombinatorGui::default();
+        let _ = view(&state);
+
+        state.join_mode = true;
+        let _ = view(&state);
+
+        state.settings_mode = true;
+        let _ = view(&state);
+    }
+
+    #[test]
+    fn labels_and_parsers_round_trip_supported_choices() {
+        for operation in [
+            AppOperation::Product {
+                reverse_fields: false,
+            },
+            AppOperation::Zip {
+                on_unequal: UnequalPolicy::Error,
+            },
+            AppOperation::Concat,
+            AppOperation::Permutations,
+            AppOperation::Combinations { choose: 2 },
+            AppOperation::Variations { length: 2 },
+        ] {
+            assert_eq!(parse_operation(operation_label(operation), 2, 2), operation);
+        }
+        for format in [
+            Format::Text,
+            Format::Jsonl,
+            Format::Csv,
+            Format::Tsv,
+            Format::Nul,
+        ] {
+            assert_eq!(parse_format(format_label(format)), format);
+        }
+        for kind in [
+            JoinKind::Inner,
+            JoinKind::Left,
+            JoinKind::Full,
+            JoinKind::Anti,
+        ] {
+            assert_eq!(parse_join_kind(join_kind_label(kind)), kind);
+        }
+    }
+}
