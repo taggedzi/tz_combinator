@@ -5,7 +5,8 @@ use combinator_app::{
     ProductRequest, ProgressEvent, UnequalPolicy,
 };
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
+    button, checkbox, column, container, pick_list, row, scrollable, text, text_editor, text_input,
+    Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Subscription, Task};
 use std::sync::{Arc, Mutex};
@@ -49,16 +50,20 @@ struct CombinatorGui {
     list_delimiter: String,
     template: String,
     transforms: String,
+    transforms_editor: text_editor::Content,
     template_file: String,
     template_file_mode: bool,
     filters: String,
+    filters_editor: text_editor::Content,
     names: String,
+    names_editor: text_editor::Content,
     offset: String,
     limit: String,
     choose: String,
     length: String,
     plan: Option<ExecutionPlan>,
     join_plan: Option<JoinPlan>,
+    settings_mode: bool,
     records: Vec<PreviewRecord>,
     output_path: String,
     overwrite: bool,
@@ -70,7 +75,6 @@ struct CombinatorGui {
     max_total_items: String,
     max_lists: String,
     lean_jsonl: bool,
-    show_advanced: bool,
     timeout_ms: String,
     shard_index: String,
     shard_count: String,
@@ -95,16 +99,20 @@ impl Default for CombinatorGui {
             list_delimiter: ",".into(),
             template: String::new(),
             transforms: String::new(),
+            transforms_editor: text_editor::Content::new(),
             template_file: String::new(),
             template_file_mode: false,
             filters: String::new(),
+            filters_editor: text_editor::Content::new(),
             names: String::new(),
+            names_editor: text_editor::Content::new(),
             offset: "0".into(),
             limit: String::new(),
             choose: "2".into(),
             length: "2".into(),
             plan: None,
             join_plan: None,
+            settings_mode: false,
             records: Vec::new(),
             output_path: "output.txt".to_string(),
             overwrite: false,
@@ -116,7 +124,6 @@ impl Default for CombinatorGui {
             max_total_items: "5000000".into(),
             max_lists: "128".into(),
             lean_jsonl: false,
-            show_advanced: false,
             timeout_ms: String::new(),
             shard_index: String::new(),
             shard_count: String::new(),
@@ -142,17 +149,23 @@ enum Message {
     FilePathChanged(usize, String),
     BrowseFile(usize),
     FilePicked(usize, Option<String>),
+    BrowseTemplate,
+    TemplatePicked(Option<String>),
+    BrowseOutput,
+    OutputPicked(Option<String>),
     FileFormatChanged(usize, InputFormat),
     ListDelimiterChanged(String),
     SeparatorChanged(String),
     TemplateChanged(String),
-    TransformsChanged(String),
+    TransformsChanged(text_editor::Action),
     TemplateFileChanged(String),
     TemplateFileModeChanged(bool),
-    FiltersChanged(String),
-    NamesChanged(String),
-    ModeNext,
-    OperationNext,
+    FiltersChanged(text_editor::Action),
+    NamesChanged(text_editor::Action),
+    SelectCombine,
+    SelectJoin,
+    SelectSettings,
+    OperationChanged(AppOperation),
     JoinLeftChanged(String),
     JoinRightChanged(String),
     JoinLeftKeyChanged(String),
@@ -161,7 +174,7 @@ enum Message {
     JoinKindNext,
     JoinOffsetChanged(String),
     JoinLimitChanged(String),
-    FormatNext,
+    FormatChanged(Format),
     ZipPolicyNext,
     ReverseChanged(bool),
     ReverseFieldsChanged(bool),
@@ -177,7 +190,6 @@ enum Message {
     ShardIndexChanged(String),
     ShardCountChanged(String),
     LeanJsonlChanged(bool),
-    ToggleAdvanced,
     MaxInputBytesChanged(String),
     MaxItemBytesChanged(String),
     MaxItemsPerListChanged(String),
@@ -249,6 +261,41 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::BrowseTemplate => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Select template file")
+                    .pick_file()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::TemplatePicked,
+        ),
+        Message::TemplatePicked(path) => {
+            if let Some(path) = path {
+                state.template_file = path.clone();
+                state.request.template_file = Some(path);
+                state.request.template = None;
+                state.template.clear();
+                state.template_file_mode = true;
+                state.refresh_plan();
+            }
+            Task::none()
+        }
+        Message::BrowseOutput => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Select output file")
+                    .save_file()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::OutputPicked,
+        ),
+        Message::OutputPicked(path) => {
+            if let Some(path) = path {
+                state.output_path = path;
+            }
+            Task::none()
+        }
         Message::FileFormatChanged(index, selected_format) => {
             if let Some(format) = state.file_formats.get_mut(index) {
                 *format = selected_format;
@@ -276,9 +323,11 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::TransformsChanged(value) => {
-            state.transforms = value.clone();
-            state.request.transforms = value
+        Message::TransformsChanged(action) => {
+            state.transforms_editor.perform(action);
+            state.transforms = state.transforms_editor.text();
+            state.request.transforms = state
+                .transforms
                 .lines()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -311,9 +360,11 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::FiltersChanged(value) => {
-            state.filters = value.clone();
-            state.request.filters = value
+        Message::FiltersChanged(action) => {
+            state.filters_editor.perform(action);
+            state.filters = state.filters_editor.text();
+            state.request.filters = state
+                .filters
                 .lines()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -322,9 +373,11 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::NamesChanged(value) => {
-            state.names = value.clone();
-            state.request.names = value
+        Message::NamesChanged(action) => {
+            state.names_editor.perform(action);
+            state.names = state.names_editor.text();
+            state.request.names = state
+                .names
                 .lines()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -333,13 +386,24 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::ModeNext => {
-            state.join_mode = !state.join_mode;
+        Message::SelectCombine => {
+            state.settings_mode = false;
+            state.join_mode = false;
             state.refresh_plan();
             Task::none()
         }
-        Message::OperationNext => {
-            state.request.operation = next_operation(state.request.operation);
+        Message::SelectJoin => {
+            state.settings_mode = false;
+            state.join_mode = true;
+            state.refresh_plan();
+            Task::none()
+        }
+        Message::SelectSettings => {
+            state.settings_mode = true;
+            Task::none()
+        }
+        Message::OperationChanged(operation) => {
+            state.request.operation = operation;
             state.refresh_plan();
             Task::none()
         }
@@ -389,8 +453,8 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::FormatNext => {
-            state.request.format = next_format(state.request.format);
+        Message::FormatChanged(format) => {
+            state.request.format = format;
             if state.request.format != Format::Jsonl {
                 state.request.lean_jsonl = false;
             }
@@ -403,14 +467,11 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::ToggleAdvanced => {
-            state.show_advanced = !state.show_advanced;
-            Task::none()
-        }
         Message::MaxInputBytesChanged(value) => {
             state.max_input_bytes = value.clone();
             if let Ok(parsed) = value.parse() {
                 state.request.max_input_bytes = parsed;
+                state.join_request.max_input_bytes = parsed;
                 state.refresh_plan();
             }
             Task::none()
@@ -419,6 +480,7 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.max_item_bytes = value.clone();
             if let Ok(parsed) = value.parse() {
                 state.request.max_item_bytes = parsed;
+                state.join_request.max_item_bytes = parsed;
                 state.refresh_plan();
             }
             Task::none()
@@ -528,12 +590,8 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
         }
         Message::MaxOutputBytesChanged(value) => {
             state.max_output_bytes = value.clone();
-            if state.join_mode {
-                state.join_request.max_output_bytes = value.parse().unwrap_or(0);
-                state.refresh_plan();
-            } else {
-                state.update_limit(value, false);
-            }
+            state.join_request.max_output_bytes = value.parse().unwrap_or(0);
+            state.update_limit(value, false);
             Task::none()
         }
         Message::TimeoutChanged(value) => {
@@ -632,9 +690,46 @@ fn subscription(state: &CombinatorGui) -> Subscription<Message> {
 }
 
 fn view(state: &CombinatorGui) -> Element<'_, Message> {
-    if state.join_mode {
-        return join_view(state);
-    }
+    let combine_tab = if !state.join_mode && !state.settings_mode {
+        button("Combine").style(iced::widget::button::primary)
+    } else {
+        button("Combine").on_press(Message::SelectCombine)
+    };
+    let join_tab = if state.join_mode {
+        if state.settings_mode {
+            button("Join").on_press(Message::SelectJoin)
+        } else {
+            button("Join").style(iced::widget::button::primary)
+        }
+    } else {
+        button("Join").on_press(Message::SelectJoin)
+    };
+    let settings_tab = if state.settings_mode {
+        button("Settings").style(iced::widget::button::primary)
+    } else {
+        button("Settings").on_press(Message::SelectSettings)
+    };
+    let content: Element<'_, Message> = if state.settings_mode {
+        settings_view(state)
+    } else if state.join_mode {
+        join_view(state)
+    } else {
+        combine_view(state)
+    };
+    container(
+        column![
+            row![combine_tab, join_tab, settings_tab].spacing(8),
+            content
+        ]
+        .spacing(12),
+    )
+    .padding(24)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
     let inputs = state
         .sources
         .iter()
@@ -727,84 +822,6 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
     .width(Length::FillPortion(3))
     .height(Length::Fill);
 
-    let advanced_section: Element<'_, Message> = if state.show_advanced {
-        container(
-            column![
-                button("Hide advanced limits").on_press(Message::ToggleAdvanced),
-                text("Resource limits, timeouts, and sharding"),
-                labeled_text_input(
-                    "Maximum combinations",
-                    &state.max_combinations,
-                    Message::MaxCombinationsChanged,
-                ),
-                labeled_text_input(
-                    "Maximum output bytes",
-                    &state.max_output_bytes,
-                    Message::MaxOutputBytesChanged,
-                ),
-                labeled_text_input(
-                    "Maximum input bytes per source",
-                    &state.max_input_bytes,
-                    Message::MaxInputBytesChanged,
-                ),
-                row![
-                    labeled_text_input(
-                        "Max item bytes",
-                        &state.max_item_bytes,
-                        Message::MaxItemBytesChanged,
-                    ),
-                    labeled_text_input(
-                        "Max items/list",
-                        &state.max_items_per_list,
-                        Message::MaxItemsPerListChanged,
-                    ),
-                ]
-                .spacing(8)
-                .width(Length::Fill),
-                row![
-                    labeled_text_input(
-                        "Max total items",
-                        &state.max_total_items,
-                        Message::MaxTotalItemsChanged,
-                    ),
-                    labeled_text_input("Max lists", &state.max_lists, Message::MaxListsChanged),
-                ]
-                .spacing(8)
-                .width(Length::Fill),
-                labeled_text_input(
-                    "Timeout in milliseconds (optional)",
-                    &state.timeout_ms,
-                    Message::TimeoutChanged,
-                ),
-                row![
-                    labeled_text_input(
-                        "Shard index",
-                        &state.shard_index,
-                        Message::ShardIndexChanged
-                    ),
-                    labeled_text_input(
-                        "Shard count",
-                        &state.shard_count,
-                        Message::ShardCountChanged
-                    ),
-                ]
-                .spacing(8)
-                .width(Length::Fill),
-            ]
-            .spacing(8),
-        )
-        .padding(10)
-        .width(Length::Fill)
-        .into()
-    } else {
-        container(
-            button("Show advanced limits (resource limits, timeout, sharding)")
-                .on_press(Message::ToggleAdvanced),
-        )
-        .width(Length::Fill)
-        .into()
-    };
-
     let template_control: Element<'_, Message> = if state.template_file_mode {
         column![
             row![
@@ -812,11 +829,19 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
                 text("Template file"),
             ]
             .spacing(8),
-            labeled_text_input(
-                "Template file path (optional)",
-                &state.template_file,
-                Message::TemplateFileChanged,
-            ),
+            row![
+                labeled_text_input(
+                    "Template file path (optional)",
+                    &state.template_file,
+                    Message::TemplateFileChanged,
+                ),
+                button("Browse…")
+                    .on_press(Message::BrowseTemplate)
+                    .width(Length::Shrink),
+            ]
+            .spacing(8)
+            .align_y(Alignment::End)
+            .width(Length::Fill),
         ]
         .spacing(6)
         .into()
@@ -837,58 +862,113 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
         .into()
     };
 
-    let plan_content = column![
-        text("Rendering").size(20),
-        column![
-            button(text(format!(
-                "Operation: {}",
-                operation_label(state.request.operation)
-            )))
-            .on_press(Message::OperationNext),
-            button("Structured join").on_press(Message::ModeNext),
-            button(text(format!("Format: {:?}", state.request.format)))
-                .on_press(Message::FormatNext),
+    let operation_control = column![
+        text("Operation").size(13),
+        pick_list(
+            OPERATION_OPTIONS,
+            Some(operation_label(state.request.operation)),
+            move |label| {
+                Message::OperationChanged(parse_operation(
+                    label,
+                    state.choose.parse().unwrap_or(2),
+                    state.length.parse().unwrap_or(2),
+                ))
+            },
+        )
+        .width(Length::Fill),
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+
+    let format_control = column![
+        text("Output format").size(13),
+        pick_list(
+            FORMAT_OPTIONS,
+            Some(format_label(state.request.format)),
+            |label| Message::FormatChanged(parse_format(label)),
+        )
+        .width(Length::Fill),
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+
+    let lean_jsonl_control: Element<'_, Message> = if state.request.format == Format::Jsonl {
+        row![
+            checkbox(state.lean_jsonl).on_toggle(Message::LeanJsonlChanged),
+            text("Lean JSONL (omit metadata fields)"),
         ]
         .spacing(8)
-        .width(Length::Fill),
+        .into()
+    } else {
+        text("").into()
+    };
+    let names_control: Element<'_, Message> = if state.request.format == Format::Jsonl {
+        labeled_text_editor(
+            "Field names, one per line",
+            &state.names_editor,
+            Message::NamesChanged,
+        )
+    } else {
+        text("").into()
+    };
+
+    let plan_content = column![
+        text("Data Selection and pre-processing").size(20),
+        operation_control,
         operation_controls(state),
+        labeled_text_editor(
+            "Filters, one per line (eq:0=value, prefix:1=x)",
+            &state.filters_editor,
+            Message::FiltersChanged,
+        ),
+        text("Output Options").size(20),
+        row![
+            checkbox(state.request.options.reverse).on_toggle(Message::ReverseChanged),
+            text("Reverse output"),
+        ]
+        .spacing(8),
         labeled_text_input(
             "Field separator",
             &state.request.field_separator,
             Message::SeparatorChanged,
         ),
-        labeled_text_input(
-            "Output file path",
-            &state.output_path,
-            Message::OutputPathChanged
-        ),
-        advanced_section,
-        template_control,
-        labeled_text_input(
+        labeled_text_editor(
             "Transforms, one per line",
-            &state.transforms,
+            &state.transforms_editor,
             Message::TransformsChanged,
         ),
-        labeled_text_input(
-            "Filters, one per line (eq:0=value, prefix:1=x)",
-            &state.filters,
-            Message::FiltersChanged,
-        ),
-        labeled_text_input(
-            "Field names, one per line",
-            &state.names,
-            Message::NamesChanged
-        ),
+        template_control,
+        row![format_control].width(Length::Fill),
+        lean_jsonl_control,
+        names_control,
+        text("Sharding").size(16),
         row![
-            checkbox(state.overwrite).on_toggle(Message::OverwriteChanged),
-            text("Overwrite existing file"),
+            labeled_text_input(
+                "Shard index",
+                &state.shard_index,
+                Message::ShardIndexChanged
+            ),
+            labeled_text_input(
+                "Shard count",
+                &state.shard_count,
+                Message::ShardCountChanged
+            ),
         ]
-        .spacing(8),
+        .spacing(8)
+        .width(Length::Fill),
         row![
-            checkbox(state.lean_jsonl).on_toggle(Message::LeanJsonlChanged),
-            text("Lean JSONL (omit metadata fields)"),
+            labeled_text_input(
+                "Output file path",
+                &state.output_path,
+                Message::OutputPathChanged,
+            ),
+            button("Browse…")
+                .on_press(Message::BrowseOutput)
+                .width(Length::Shrink),
         ]
-        .spacing(8),
+        .spacing(8)
+        .align_y(Alignment::End)
+        .width(Length::Fill),
         status_view(state),
         preview_view(&state.records),
     ]
@@ -916,7 +996,81 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
     .height(Length::Fill);
 
     container(row![input_panel, plan_panel].spacing(24))
-        .padding(24)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+fn settings_view(state: &CombinatorGui) -> Element<'_, Message> {
+    let content = column![
+        text("Settings").size(24),
+        text("Shared execution policy and safety limits used by Combine and Join."),
+        text("Shared limits").size(18),
+        labeled_text_input(
+            "Maximum output bytes",
+            &state.max_output_bytes,
+            Message::MaxOutputBytesChanged,
+        ),
+        labeled_text_input(
+            "Maximum input bytes per source",
+            &state.max_input_bytes,
+            Message::MaxInputBytesChanged,
+        ),
+        labeled_text_input(
+            "Maximum item bytes",
+            &state.max_item_bytes,
+            Message::MaxItemBytesChanged,
+        ),
+        labeled_text_input(
+            "Timeout in milliseconds (optional)",
+            &state.timeout_ms,
+            Message::TimeoutChanged,
+        ),
+        row![
+            checkbox(state.overwrite).on_toggle(Message::OverwriteChanged),
+            text("Overwrite existing output file"),
+        ]
+        .spacing(8),
+        text("Combine limits").size(18),
+        labeled_text_input(
+            "Maximum combinations",
+            &state.max_combinations,
+            Message::MaxCombinationsChanged,
+        ),
+        row![
+            labeled_text_input(
+                "Max items/list",
+                &state.max_items_per_list,
+                Message::MaxItemsPerListChanged,
+            ),
+            labeled_text_input("Max lists", &state.max_lists, Message::MaxListsChanged),
+        ]
+        .spacing(8)
+        .width(Length::Fill),
+        labeled_text_input(
+            "Max total items",
+            &state.max_total_items,
+            Message::MaxTotalItemsChanged,
+        ),
+        text("Join limits").size(18),
+        row![
+            labeled_text_input(
+                "Max join records",
+                &state.join_max_records,
+                Message::JoinMaxRecordsChanged,
+            ),
+            labeled_text_input(
+                "Max key fanout",
+                &state.join_fanout,
+                Message::JoinFanoutChanged,
+            ),
+        ]
+        .spacing(8)
+        .width(Length::Fill),
+    ]
+    .spacing(12)
+    .width(Length::Fill);
+    container(scrollable(content).height(Length::Fill))
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
@@ -1016,6 +1170,25 @@ where
     .into()
 }
 
+fn labeled_text_editor<'a, F>(
+    label: &'static str,
+    content: &'a text_editor::Content,
+    on_action: F,
+) -> Element<'a, Message>
+where
+    F: Fn(text_editor::Action) -> Message + 'a,
+{
+    column![
+        text(label).size(13),
+        text_editor(content)
+            .on_action(on_action)
+            .height(Length::Fixed(96.0)),
+    ]
+    .spacing(4)
+    .width(Length::Fill)
+    .into()
+}
+
 fn join_plan_view(plan: Option<&JoinPlan>) -> Element<'static, Message> {
     let content: Element<'static, Message> = match plan {
         Some(plan) => column![
@@ -1042,11 +1215,7 @@ fn join_plan_view(plan: Option<&JoinPlan>) -> Element<'static, Message> {
 
 fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
     let content = column![
-        row![
-            text("Structured join").size(24),
-            button("Back to product").on_press(Message::ModeNext),
-        ]
-        .spacing(12),
+        text("Structured join").size(24),
         labeled_text_input(
             "Left CSV/TSV/JSONL path",
             &state.join_request.left_path,
@@ -1089,21 +1258,6 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
         ]
         .spacing(8)
         .width(Length::Fill),
-        row![
-            labeled_text_input(
-                "Max join records",
-                &state.join_max_records,
-                Message::JoinMaxRecordsChanged,
-            ),
-            labeled_text_input(
-                "Max key fanout",
-                &state.join_fanout,
-                Message::JoinFanoutChanged,
-            ),
-        ]
-        .spacing(8)
-        .width(Length::Fill),
-        checkbox(state.overwrite).on_toggle(Message::OverwriteChanged),
         text("Execution plan").size(18),
         join_plan_view(state.join_plan.as_ref()),
         status_view(state),
@@ -1122,7 +1276,6 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
         ]
         .spacing(12),
     )
-    .padding(24)
     .width(Length::Fill)
     .height(Length::Fill)
     .into()
@@ -1342,28 +1495,49 @@ fn operation_label(operation: AppOperation) -> &'static str {
     }
 }
 
-fn next_operation(operation: AppOperation) -> AppOperation {
-    match operation {
-        AppOperation::Product { .. } => AppOperation::Zip {
+const OPERATION_OPTIONS: &[&str] = &[
+    "Product",
+    "Zip",
+    "Concat",
+    "Permutations",
+    "Combinations",
+    "Variations",
+];
+
+fn parse_operation(label: &str, choose: usize, length: usize) -> AppOperation {
+    match label {
+        "Zip" => AppOperation::Zip {
             on_unequal: UnequalPolicy::Error,
         },
-        AppOperation::Zip { .. } => AppOperation::Concat,
-        AppOperation::Concat => AppOperation::Permutations,
-        AppOperation::Permutations => AppOperation::Combinations { choose: 2 },
-        AppOperation::Combinations { .. } => AppOperation::Variations { length: 2 },
-        AppOperation::Variations { .. } => AppOperation::Product {
+        "Concat" => AppOperation::Concat,
+        "Permutations" => AppOperation::Permutations,
+        "Combinations" => AppOperation::Combinations { choose },
+        "Variations" => AppOperation::Variations { length },
+        _ => AppOperation::Product {
             reverse_fields: false,
         },
     }
 }
 
-fn next_format(format: Format) -> Format {
+const FORMAT_OPTIONS: &[&str] = &["Text", "JSONL", "CSV", "TSV", "NUL"];
+
+fn format_label(format: Format) -> &'static str {
     match format {
-        Format::Text => Format::Jsonl,
-        Format::Jsonl => Format::Csv,
-        Format::Csv => Format::Tsv,
-        Format::Tsv => Format::Nul,
-        Format::Nul => Format::Text,
+        Format::Text => "Text",
+        Format::Jsonl => "JSONL",
+        Format::Csv => "CSV",
+        Format::Tsv => "TSV",
+        Format::Nul => "NUL",
+    }
+}
+
+fn parse_format(label: &str) -> Format {
+    match label {
+        "JSONL" => Format::Jsonl,
+        "CSV" => Format::Csv,
+        "TSV" => Format::Tsv,
+        "NUL" => Format::Nul,
+        _ => Format::Text,
     }
 }
 
@@ -1413,26 +1587,19 @@ fn next_join_kind(kind: JoinKind) -> JoinKind {
 }
 
 fn operation_controls(state: &CombinatorGui) -> Element<'_, Message> {
-    let mut controls = column![
-        row![
-            checkbox(state.request.options.reverse).on_toggle(Message::ReverseChanged),
-            text("Reverse output"),
-        ]
-        .spacing(8),
-        row![
-            labeled_text_input("Offset", &state.offset, Message::OffsetChanged),
-            labeled_text_input("Limit (optional)", &state.limit, Message::LimitChanged),
-        ]
-        .spacing(8)
-        .width(Length::Fill),
+    let mut controls = column![row![
+        labeled_text_input("Offset", &state.offset, Message::OffsetChanged),
+        labeled_text_input("Limit (optional)", &state.limit, Message::LimitChanged),
     ]
+    .spacing(8)
+    .width(Length::Fill),]
     .spacing(8)
     .width(Length::Fill);
     if let AppOperation::Product { reverse_fields } = state.request.operation {
         controls = controls.push(
             row![
                 checkbox(reverse_fields).on_toggle(Message::ReverseFieldsChanged),
-                text("Leftmost field fastest"),
+                text("Leftmost first"),
             ]
             .spacing(8),
         );
