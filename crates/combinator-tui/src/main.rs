@@ -1,73 +1,362 @@
-use std::io;
+use std::fmt::Write as _;
+use std::io::{self, Read};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use combinator_app::{
-    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
-    CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits, InputSource,
-    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, PreviewRecord,
-    ProductRequest, ProgressEvent, UnequalPolicy,
+    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppError,
+    AppOperation, CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits,
+    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
+    PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
 };
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
+use serde::{Deserialize, Serialize};
 
 const PREVIEW_LIMIT: u128 = 20;
+const PROFILE_VERSION: u32 = 1;
+const MAX_PROFILE_BYTES: u64 = 4 * 1024 * 1024;
 
-enum WorkerMessage {
-    Progress(ProgressEvent),
-    Finished(Result<ProgressEvent, combinator_app::AppError>),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
+    Combine,
+    Join,
+    Settings,
 }
 
-#[derive(Clone, Copy)]
-enum EditTarget {
-    List,
-    File,
-    Output,
-    MaxCombinations,
-    MaxOutputBytes,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Field {
+    ListValue,
+    FilePath,
+    FileMode,
+    ListDelimiter,
+    Separator,
+    Operation,
+    ZipPolicy,
+    Format,
+    InputFormat,
+    Choose,
+    Length,
     Template,
+    TemplateFileMode,
+    TemplateFile,
     Transforms,
+    Filters,
     Names,
     Offset,
     Limit,
-    Choose,
-    Length,
-    Delimiter,
-    TemplateFile,
-    Filters,
+    MaxCombinations,
+    MaxOutputBytes,
+    MaxInputBytes,
+    MaxItemBytes,
+    MaxItemsPerList,
+    MaxTotalItems,
+    MaxLists,
     Timeout,
+    Reverse,
+    ReverseFields,
+    LeanJsonl,
     ShardIndex,
     ShardCount,
-    ResourceLimits,
+    DefaultOutputDirectory,
     JoinLeft,
     JoinRight,
     JoinLeftKey,
     JoinRightKey,
+    JoinOffset,
+    JoinLimit,
+    JoinFormat,
+    JoinKind,
+    JoinMaxRecords,
     JoinFanout,
+    OutputPath,
+    ProfilePath,
+    Overwrite,
 }
 
-struct ProgressFileSink {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    AddList,
+    RemoveList,
+    Preview,
+    Generate,
+    Cancel,
+    New,
+    OpenProfile,
+    SaveProfile,
+    SaveAsProfile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Focus {
+    Page(Page),
+    Field(Field),
+    Action(Action),
+}
+
+#[derive(Clone, Debug)]
+struct Source {
+    value: String,
+    file_mode: bool,
+    file_path: String,
+    format: InputFormat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Profile {
+    version: u32,
+    active_mode: String,
+    combine: CombineProfile,
+    join: JoinProfile,
+    output_path: String,
+    overwrite: bool,
+    limits: LimitsProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct CombineProfile {
+    sources: Vec<String>,
+    file_sources: Vec<Option<String>>,
+    file_formats: Vec<String>,
+    list_delimiter: String,
+    #[serde(default)]
+    field_separator: String,
+    template: String,
+    template_file: String,
+    template_file_mode: bool,
+    transforms: String,
+    filters: String,
+    names: String,
+    offset: String,
+    limit: String,
+    choose: String,
+    length: String,
+    operation: String,
+    format: String,
+    zip_policy: String,
+    reverse: bool,
+    reverse_fields: bool,
+    lean_jsonl: bool,
+    shard_index: String,
+    shard_count: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct JoinProfile {
+    left_path: String,
+    right_path: String,
+    left_key: String,
+    right_key: String,
+    format: String,
+    kind: String,
+    offset: String,
+    limit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct LimitsProfile {
+    max_combinations: String,
+    max_output_bytes: String,
+    max_input_bytes: String,
+    max_item_bytes: String,
+    max_items_per_list: String,
+    max_total_items: String,
+    max_lists: String,
+    timeout_ms: String,
+    join_max_records: String,
+    join_fanout: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct Preferences {
+    recent_profiles: Vec<String>,
+    last_profile: Option<String>,
+    default_output_directory: Option<String>,
+}
+
+impl Default for Source {
+    fn default() -> Self {
+        Self {
+            value: String::new(),
+            file_mode: false,
+            file_path: String::new(),
+            format: InputFormat::Lines,
+        }
+    }
+}
+
+enum WorkerMessage {
+    Progress(ProgressEvent),
+    Finished(Result<ProgressEvent, AppError>),
+}
+
+struct ProgressSink {
     sink: FileSink,
     messages: Sender<WorkerMessage>,
 }
 
-impl OutputSink for ProgressFileSink {
-    fn record(&mut self, record: OutputRecord) -> Result<(), combinator_app::AppError> {
+impl OutputSink for ProgressSink {
+    fn record(&mut self, record: OutputRecord) -> Result<(), AppError> {
         self.sink.record(record)
     }
 
-    fn progress(&mut self, event: ProgressEvent) -> Result<(), combinator_app::AppError> {
+    fn progress(&mut self, event: ProgressEvent) -> Result<(), AppError> {
         self.messages
             .send(WorkerMessage::Progress(event))
-            .map_err(|error| combinator_app::AppError {
+            .map_err(|_| AppError {
                 code: "CANCELLED",
-                message: error.to_string(),
+                message: "TUI worker was disconnected".into(),
             })
+    }
+}
+
+struct App {
+    page: Page,
+    focus: Focus,
+    editing: Option<Field>,
+    sources: Vec<Source>,
+    selected_source: usize,
+    list_delimiter: String,
+    operation: AppOperation,
+    format: Format,
+    field_separator: String,
+    zip_policy: UnequalPolicy,
+    reverse_fields: bool,
+    choose: String,
+    length: String,
+    template: String,
+    template_file: String,
+    template_file_mode: bool,
+    transforms: String,
+    filters: String,
+    names: String,
+    offset: String,
+    limit: String,
+    max_combinations: String,
+    max_output_bytes: String,
+    max_input_bytes: String,
+    max_item_bytes: String,
+    max_items_per_list: String,
+    max_total_items: String,
+    max_lists: String,
+    timeout: String,
+    reverse: bool,
+    lean_jsonl: bool,
+    shard_index: String,
+    shard_count: String,
+    output_path: String,
+    profile_path: String,
+    preferences: Preferences,
+    overwrite: bool,
+    join_left: String,
+    join_right: String,
+    join_left_key: String,
+    join_right_key: String,
+    join_format: JoinFormat,
+    join_kind: JoinKind,
+    join_offset: String,
+    join_limit: String,
+    join_max_records: String,
+    join_fanout: String,
+    request: ProductRequest,
+    join_request: JoinRequest,
+    plan: Option<ExecutionPlan>,
+    join_plan: Option<JoinPlan>,
+    records: Vec<PreviewRecord>,
+    preview_scroll: u16,
+    status: String,
+    error: Option<String>,
+    running: bool,
+    cancellation: Option<CancellationToken>,
+    worker: Option<Receiver<WorkerMessage>>,
+    progress: Option<ProgressEvent>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        let preferences = load_preferences();
+        let output_path = preferences
+            .default_output_directory
+            .as_deref()
+            .map(|directory| {
+                std::path::Path::new(directory)
+                    .join("output.txt")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(|| "output.txt".into());
+        let mut app = Self {
+            page: Page::Combine,
+            focus: Focus::Page(Page::Combine),
+            editing: None,
+            sources: vec![Source::default()],
+            selected_source: 0,
+            list_delimiter: ",".into(),
+            operation: AppOperation::default(),
+            format: Format::Text,
+            field_separator: String::new(),
+            zip_policy: UnequalPolicy::Error,
+            reverse_fields: false,
+            choose: "2".into(),
+            length: "2".into(),
+            template: String::new(),
+            template_file: String::new(),
+            template_file_mode: false,
+            transforms: String::new(),
+            filters: String::new(),
+            names: String::new(),
+            offset: "0".into(),
+            limit: String::new(),
+            max_combinations: "10000000".into(),
+            max_output_bytes: "1073741824".into(),
+            max_input_bytes: "67108864".into(),
+            max_item_bytes: "1048576".into(),
+            max_items_per_list: "1000000".into(),
+            max_total_items: "5000000".into(),
+            max_lists: "128".into(),
+            timeout: String::new(),
+            reverse: false,
+            lean_jsonl: false,
+            shard_index: String::new(),
+            shard_count: String::new(),
+            output_path,
+            profile_path: "combinator-profile.json".into(),
+            preferences,
+            overwrite: false,
+            join_left: String::new(),
+            join_right: String::new(),
+            join_left_key: String::new(),
+            join_right_key: String::new(),
+            join_format: JoinFormat::Csv,
+            join_kind: JoinKind::Inner,
+            join_offset: "0".into(),
+            join_limit: String::new(),
+            join_max_records: "100000".into(),
+            join_fanout: "10000".into(),
+            request: ProductRequest::default(),
+            join_request: JoinRequest::default(),
+            plan: None,
+            join_plan: None,
+            records: Vec::new(),
+            preview_scroll: 0,
+            status: "Add values to begin".into(),
+            error: None,
+            running: false,
+            cancellation: None,
+            worker: None,
+            progress: None,
+        };
+        app.sync_requests();
+        app.refresh_plan();
+        app
     }
 }
 
@@ -76,13 +365,13 @@ fn main() -> io::Result<()> {
 }
 
 fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
-    let mut app = TuiApp::default();
+    let mut app = App::default();
     loop {
         app.poll_worker();
         terminal.draw(|frame| app.draw(frame))?;
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && app.handle_key(key.code) {
+                if key.kind == KeyEventKind::Press && app.handle_key(key) {
                     return Ok(());
                 }
             }
@@ -90,699 +379,1067 @@ fn run(terminal: &mut DefaultTerminal) -> io::Result<()> {
     }
 }
 
-struct TuiApp {
-    join_mode: bool,
-    request: ProductRequest,
-    join_request: JoinRequest,
-    sources: Vec<String>,
-    file_sources: Vec<Option<String>>,
-    file_formats: Vec<InputFormat>,
-    list_delimiter: String,
-    selected: usize,
-    editing: bool,
-    edit_target: EditTarget,
-    output_path: String,
-    overwrite: bool,
-    max_combinations: String,
-    max_output_bytes: String,
-    timeout_ms: String,
-    shard_index: String,
-    shard_count: String,
-    template: String,
-    transforms: String,
-    template_file: String,
-    filters: String,
-    names: String,
-    offset: String,
-    limit: String,
-    choose: String,
-    length: String,
-    resource_limits: String,
-    lean_jsonl: bool,
-    join_fanout: String,
-    running: bool,
-    cancellation: Option<CancellationToken>,
-    worker: Option<Receiver<WorkerMessage>>,
-    progress: Option<ProgressEvent>,
-    list_state: ListState,
-    plan: Option<ExecutionPlan>,
-    join_plan: Option<JoinPlan>,
-    records: Vec<PreviewRecord>,
-    status: String,
-    error: Option<String>,
-}
-
-impl Default for TuiApp {
-    fn default() -> Self {
-        let mut app = Self {
-            join_mode: false,
-            request: ProductRequest::default(),
-            join_request: JoinRequest::default(),
-            sources: vec![String::new()],
-            file_sources: vec![None],
-            file_formats: vec![InputFormat::Lines],
-            list_delimiter: ",".into(),
-            selected: 0,
-            editing: true,
-            edit_target: EditTarget::List,
-            output_path: "output.txt".to_string(),
-            overwrite: false,
-            max_combinations: "10000000".to_string(),
-            max_output_bytes: "1073741824".to_string(),
-            timeout_ms: String::new(),
-            shard_index: String::new(),
-            shard_count: String::new(),
-            template: String::new(),
-            transforms: String::new(),
-            template_file: String::new(),
-            filters: String::new(),
-            names: String::new(),
-            offset: "0".into(),
-            limit: String::new(),
-            choose: "2".into(),
-            length: "2".into(),
-            resource_limits: "67108864;1048576;1000000;5000000;128".into(),
-            lean_jsonl: false,
-            join_fanout: "10000".into(),
-            running: false,
-            cancellation: None,
-            worker: None,
-            progress: None,
-            list_state: ListState::default().with_selected(Some(0)),
-            plan: None,
-            join_plan: None,
-            records: Vec::new(),
-            status: "Type values into the selected list".to_string(),
-            error: None,
-        };
-        app.refresh_plan();
-        app
-    }
-}
-
-impl TuiApp {
-    fn draw(&mut self, frame: &mut Frame<'_>) {
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-            .split(frame.area());
-
-        let list_items = self.sources.iter().enumerate().map(|(index, source)| {
-            let value = self.file_sources[index]
-                .as_deref()
-                .map(|path| format!("file: {path}"))
-                .unwrap_or_else(|| format!("inline: {source}"));
-            ListItem::new(Line::from(format!("List {}: {}", index + 1, value)))
-        });
-        let inputs = List::new(list_items)
-            .block(Block::default().title(" Inputs ").borders(Borders::ALL))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▶ ");
-        frame.render_stateful_widget(inputs, layout[0], &mut self.list_state);
-
-        let right = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),
-                Constraint::Length(7),
-                Constraint::Min(5),
-                Constraint::Length(3),
-            ])
-            .split(layout[1]);
-        frame.render_widget(self.plan_widget(), right[0]);
-        frame.render_widget(self.controls_widget(), right[1]);
-        frame.render_widget(self.preview_widget(), right[2]);
-        frame.render_widget(self.status_widget(), right[3]);
-    }
-
-    fn plan_widget(&self) -> Paragraph<'static> {
-        if self.join_mode {
-            let body = match &self.join_plan {
-                Some(plan) => format!(
-                    "Left records: {}\nRight records: {}\nJoin records: {}\nSelected: {}",
-                    plan.left_records, plan.right_records, plan.total_records, plan.records_to_emit
-                ),
-                None => "No valid join plan".to_string(),
-            };
-            return Paragraph::new(body)
-                .block(Block::default().title(" Join plan ").borders(Borders::ALL));
+impl App {
+    fn draw(&self, frame: &mut Frame<'_>) {
+        if frame.area().width < 100 || frame.area().height < 28 {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "Resize the terminal to at least 100 columns × 28 rows.\nCurrent size: {} × {}\nPress q to quit.",
+                    frame.area().width,
+                    frame.area().height
+                ))
+                .block(
+                    Block::default()
+                        .title(" Combinator — terminal too small ")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: true }),
+                frame.area(),
+            );
+            return;
         }
-        let body = match &self.plan {
-            Some(plan) => format!(
-                "Lists: {}\nItems: {:?}\nCombinations: {:?}\nSelected: {}\nWarnings: {}",
-                plan.list_lengths.len(),
-                plan.list_lengths,
-                plan.total_combinations,
-                plan.records_to_emit,
-                plan.warnings.len()
-            ),
-            None => "No valid plan".to_string(),
-        };
-        Paragraph::new(body).block(Block::default().title(" Plan ").borders(Borders::ALL))
+        let page =
+            Layout::vertical([Constraint::Length(4), Constraint::Min(8)]).split(frame.area());
+        frame.render_widget(self.header(), page[0]);
+        if self.page == Page::Settings {
+            frame.render_widget(self.settings_panel(page[1].height), page[1]);
+            return;
+        }
+        let columns = Layout::horizontal([Constraint::Percentage(48), Constraint::Percentage(52)])
+            .split(page[1]);
+        let left = Layout::vertical([Constraint::Min(8), Constraint::Length(5)]).split(columns[0]);
+        let right = Layout::vertical([
+            Constraint::Min(8),
+            Constraint::Length(9),
+            Constraint::Length(7),
+        ])
+        .split(columns[1]);
+        if self.page == Page::Combine {
+            frame.render_widget(self.inputs_panel(left[0].height), left[0]);
+            frame.render_widget(self.plan_panel(left[1].width), left[1]);
+            frame.render_widget(self.options_panel(right[0].height), right[0]);
+        } else {
+            frame.render_widget(self.join_panel(left[0].height), left[0]);
+            frame.render_widget(self.plan_panel(left[1].width), left[1]);
+        }
+        frame.render_widget(self.preview_panel(), right[1]);
+        frame.render_widget(self.actions_panel(), right[2]);
     }
 
-    fn controls_widget(&self) -> Paragraph<'static> {
-        let mode = if self.editing { "EDIT" } else { "COMMAND" };
-        if self.join_mode {
-            return Paragraph::new(format!(
-                "Mode: {mode} JOIN\nLeft: {}  Right: {}\nKeys: {} / {}\nJ left  R right  K left-key  O right-key  Y format  U type  m max-records  b max-bytes  F fanout  v product  p preview  g generate  c cancel  Esc command  q quit",
-                self.join_request.left_path,
-                self.join_request.right_path,
-                self.join_request.left_key,
-                self.join_request.right_key,
-            ))
-            .block(Block::default().title(" Join controls ").borders(Borders::ALL))
-            .wrap(Wrap { trim: true });
-        }
+    fn header(&self) -> Paragraph<'static> {
+        let tab = |page: Page, label: &str| {
+            if self.focus == Focus::Page(page) {
+                format!("[▶ {label}]")
+            } else if self.page == page {
+                format!("[● {label}]")
+            } else {
+                format!("[  {label} ]")
+            }
+        };
+        let new = if self.focus == Focus::Action(Action::New) {
+            "[▶ New]"
+        } else {
+            "[  New ]"
+        };
+        let profile_button = |action: Action, label: &str| {
+            if self.focus == Focus::Action(action) {
+                format!("[▶ {label}]")
+            } else {
+                format!("[  {label} ]")
+            }
+        };
+        let active = match self.page {
+            Page::Combine => "Combine",
+            Page::Join => "Join",
+            Page::Settings => "Settings",
+        };
         Paragraph::new(format!(
-                "Mode: {mode}\nOperation: {}  Format: {:?}\nOutput: {} ({})\nEnter list  f file  o output  m combos  b bytes  t template  j template-file  x transforms  X filters  n names  e delimiter  T timeout  I shard-index  C shard-count  N resource-limits  L lean-jsonl  V join  v operation  z format  y input format  r reverse  i offset  l limit  Esc command  a add  d remove  Tab/↑↓ select  p preview  g generate  c cancel  w overwrite  q quit",
-            operation_label(self.request.operation),
-            self.request.format,
-            self.output_path,
-            if self.overwrite { "overwrite" } else { "no overwrite" }
+            "{}   {}   {}   {}   {}   {}   {}   Focus: {}\nTab navigate • Enter edit/activate • [/] list • Ctrl+O/S/N profile • 1/2/3 pages • q quit",
+            tab(Page::Combine, "Combine"),
+            tab(Page::Join, "Join"),
+            tab(Page::Settings, "Settings"),
+            new,
+            profile_button(Action::OpenProfile, "Open…"),
+            profile_button(Action::SaveProfile, "Save"),
+            profile_button(Action::SaveAsProfile, "Save as…"),
+            focus_label(self.focus)
         ))
-            .block(Block::default().title(" Controls ").borders(Borders::ALL))
-            .wrap(Wrap { trim: true })
+        .style(Style::default().fg(Color::White))
+        .block(Block::default().title(format!(" Combinator — {active} ")).borders(Borders::ALL))
     }
 
-    fn preview_widget(&self) -> Paragraph<'static> {
+    fn inputs_panel(&self, height: u16) -> Paragraph<'static> {
+        let mut lines = Vec::new();
+        lines.push(self.field_line(
+            Focus::Field(Field::ListDelimiter),
+            "Inline delimiter",
+            &self.list_delimiter,
+        ));
+        for (index, source) in self.sources.iter().enumerate() {
+            let selected = if index == self.selected_source {
+                "•"
+            } else {
+                " "
+            };
+            let mode = if source.file_mode { "file" } else { "inline" };
+            let detail = if source.file_mode {
+                source.file_path.as_str()
+            } else {
+                source.value.as_str()
+            };
+            lines.push(format!(
+                "{selected} List {} ({mode}): {}",
+                index + 1,
+                terminal_text(detail, 160)
+            ));
+        }
+        lines.push(String::new());
+        lines.push(format!("Selected list {}", self.selected_source + 1));
+        lines.push(self.field_line(
+            Focus::Field(Field::FileMode),
+            "File source",
+            checkbox(self.sources[self.selected_source].file_mode),
+        ));
+        let source = &self.sources[self.selected_source];
+        if source.file_mode {
+            lines.push(self.field_line(
+                Focus::Field(Field::InputFormat),
+                "File delimiter",
+                input_format_label(source.format),
+            ));
+            lines.push(self.field_line(
+                Focus::Field(Field::FilePath),
+                "File path",
+                &source.file_path,
+            ));
+        } else {
+            lines.push(self.field_line(
+                Focus::Field(Field::ListValue),
+                "Values separated by delimiter",
+                &source.value,
+            ));
+        }
+        lines.push(String::new());
+        lines.push(self.action_line(Action::AddList, "Add list"));
+        if self.sources.len() > 1 {
+            lines.push(self.action_line(Action::RemoveList, "Remove selected list"));
+        } else {
+            lines.push("[  Remove selected list (disabled) ]".into());
+        }
+        lines.push("File sources support bounded Lines, CSV, TSV, and NUL input.".into());
+        let scroll = panel_scroll(&lines, height);
+        Paragraph::new(lines.join("\n"))
+            .block(Block::default().title(" Inputs ").borders(Borders::ALL))
+            .wrap(Wrap { trim: true })
+            .scroll((scroll, 0))
+    }
+
+    fn join_panel(&self, height: u16) -> Paragraph<'static> {
+        let lines = vec![
+            "Structured join".into(),
+            self.field_line(
+                Focus::Field(Field::JoinLeft),
+                "Left CSV/TSV/JSONL path",
+                &self.join_left,
+            ),
+            self.field_line(
+                Focus::Field(Field::JoinRight),
+                "Right CSV/TSV/JSONL path",
+                &self.join_right,
+            ),
+            self.field_line(
+                Focus::Field(Field::JoinLeftKey),
+                "Left key",
+                &self.join_left_key,
+            ),
+            self.field_line(
+                Focus::Field(Field::JoinRightKey),
+                "Right key",
+                &self.join_right_key,
+            ),
+            self.field_line(Focus::Field(Field::JoinOffset), "Offset", &self.join_offset),
+            self.field_line(
+                Focus::Field(Field::JoinLimit),
+                "Limit (optional)",
+                &self.join_limit,
+            ),
+            self.field_line(
+                Focus::Field(Field::JoinFormat),
+                "Format",
+                join_format_label(self.join_format),
+            ),
+            self.field_line(
+                Focus::Field(Field::JoinKind),
+                "Type",
+                join_kind_label(self.join_kind),
+            ),
+            self.field_line(
+                Focus::Field(Field::OutputPath),
+                "Output file",
+                &self.output_path,
+            ),
+        ];
+        let scroll = panel_scroll(&lines, height);
+        Paragraph::new(lines.join("\n"))
+            .block(Block::default().title(" Join ").borders(Borders::ALL))
+            .wrap(Wrap { trim: true })
+            .scroll((scroll, 0))
+    }
+
+    fn options_panel(&self, height: u16) -> Paragraph<'static> {
+        let mut lines = vec![
+            "Data Selection and pre-processing".into(),
+            self.field_line(
+                Focus::Field(Field::Operation),
+                "Operation",
+                operation_label(self.operation),
+            ),
+        ];
+        if matches!(self.operation, AppOperation::Zip { .. }) {
+            lines.push(self.field_line(
+                Focus::Field(Field::ZipPolicy),
+                "Unequal list lengths",
+                zip_policy_label(self.zip_policy),
+            ));
+        }
+        lines.extend([
+            self.field_line(Focus::Field(Field::Offset), "Offset", &self.offset),
+            self.field_line(Focus::Field(Field::Limit), "Limit (optional)", &self.limit),
+        ]);
+        match self.operation {
+            AppOperation::Product { .. } => lines.push(self.field_line(
+                Focus::Field(Field::ReverseFields),
+                "Leftmost first",
+                checkbox(self.reverse_fields),
+            )),
+            AppOperation::Combinations { .. } => {
+                lines.push(self.field_line(Focus::Field(Field::Choose), "Choose", &self.choose))
+            }
+            AppOperation::Variations { .. } => {
+                lines.push(self.field_line(Focus::Field(Field::Length), "Length", &self.length))
+            }
+            _ => {}
+        }
+        lines.push(self.field_line(
+            Focus::Field(Field::Filters),
+            "Filters (semicolon-separated)",
+            &self.filters,
+        ));
+        lines.extend([
+            String::new(),
+            "Output Options".into(),
+            self.field_line(
+                Focus::Field(Field::Reverse),
+                "Reverse output",
+                checkbox(self.reverse),
+            ),
+            self.field_line(
+                Focus::Field(Field::Transforms),
+                "Transforms (semicolon-separated)",
+                &self.transforms,
+            ),
+            self.field_line(
+                Focus::Field(Field::TemplateFileMode),
+                "Template file",
+                checkbox(self.template_file_mode),
+            ),
+        ]);
+        if self.template_file_mode {
+            lines.push(self.field_line(
+                Focus::Field(Field::TemplateFile),
+                "Template file path (optional)",
+                &self.template_file,
+            ));
+        } else {
+            lines.push(self.field_line(
+                Focus::Field(Field::Template),
+                "Template (optional)",
+                &self.template,
+            ));
+        }
+        lines.push(self.field_line(
+            Focus::Field(Field::Format),
+            "Output format",
+            format_label(self.format),
+        ));
+        if format_uses_field_separator(self.format) {
+            lines.push(self.field_line(
+                Focus::Field(Field::Separator),
+                "Field separator",
+                &self.field_separator,
+            ));
+        }
+        if self.format == Format::Jsonl {
+            lines.push(self.field_line(
+                Focus::Field(Field::LeanJsonl),
+                "Lean JSONL (omit metadata)",
+                checkbox(self.lean_jsonl),
+            ));
+            lines.push(self.field_line(
+                Focus::Field(Field::Names),
+                "Field names (semicolon-separated)",
+                &self.names,
+            ));
+        }
+        lines.extend([
+            String::new(),
+            "Sharding".into(),
+            self.field_line(
+                Focus::Field(Field::ShardIndex),
+                "Shard index",
+                &self.shard_index,
+            ),
+            self.field_line(
+                Focus::Field(Field::ShardCount),
+                "Shard count",
+                &self.shard_count,
+            ),
+            self.field_line(
+                Focus::Field(Field::OutputPath),
+                "Output file path",
+                &self.output_path,
+            ),
+        ]);
+        let scroll = panel_scroll(&lines, height);
+        Paragraph::new(lines.join("\n"))
+            .block(
+                Block::default()
+                    .title(" Combine options ")
+                    .borders(Borders::ALL),
+            )
+            .wrap(Wrap { trim: true })
+            .scroll((scroll, 0))
+    }
+
+    fn action_line(&self, action: Action, label: &str) -> String {
+        if self.focus == Focus::Action(action) {
+            format!("[▶ {label}]")
+        } else {
+            format!("[  {label} ]")
+        }
+    }
+
+    fn settings_panel(&self, height: u16) -> Paragraph<'static> {
+        let mut lines = vec![
+            "Shared execution policy and safety limits used by Combine and Join.".into(),
+            String::new(),
+            "Application preferences".into(),
+            self.field_line(
+                Focus::Field(Field::DefaultOutputDirectory),
+                "Default output directory",
+                self.preferences
+                    .default_output_directory
+                    .as_deref()
+                    .unwrap_or_default(),
+            ),
+            self.field_line(
+                Focus::Field(Field::ProfilePath),
+                "Profile file path (used by Open/Save)",
+                &self.profile_path,
+            ),
+        ];
+        if self.preferences.recent_profiles.is_empty() {
+            lines.push("  Recent profiles: none saved yet".into());
+        } else {
+            lines.push("  Recent profiles:".into());
+            lines.extend(
+                self.preferences
+                    .recent_profiles
+                    .iter()
+                    .take(3)
+                    .map(|path| format!("    {}", terminal_text(path, 256))),
+            );
+        }
+        lines.extend([
+            String::new(),
+            "Shared limits".into(),
+            self.field_line(
+                Focus::Field(Field::MaxOutputBytes),
+                "Maximum output bytes",
+                &self.max_output_bytes,
+            ),
+            self.field_line(
+                Focus::Field(Field::MaxInputBytes),
+                "Maximum input bytes per source",
+                &self.max_input_bytes,
+            ),
+            self.field_line(
+                Focus::Field(Field::MaxItemBytes),
+                "Maximum item bytes",
+                &self.max_item_bytes,
+            ),
+            self.field_line(
+                Focus::Field(Field::Timeout),
+                "Timeout in milliseconds (optional)",
+                &self.timeout,
+            ),
+            self.field_line(
+                Focus::Field(Field::Overwrite),
+                "Overwrite existing output file",
+                checkbox(self.overwrite),
+            ),
+            String::new(),
+            "Combine limits".into(),
+            self.field_line(
+                Focus::Field(Field::MaxCombinations),
+                "Maximum combinations",
+                &self.max_combinations,
+            ),
+            self.field_line(
+                Focus::Field(Field::MaxItemsPerList),
+                "Max items/list",
+                &self.max_items_per_list,
+            ),
+            self.field_line(Focus::Field(Field::MaxLists), "Max lists", &self.max_lists),
+            self.field_line(
+                Focus::Field(Field::MaxTotalItems),
+                "Max total items",
+                &self.max_total_items,
+            ),
+            String::new(),
+            "Join limits".into(),
+            self.field_line(
+                Focus::Field(Field::JoinMaxRecords),
+                "Max join records",
+                &self.join_max_records,
+            ),
+            self.field_line(
+                Focus::Field(Field::JoinFanout),
+                "Max key fanout",
+                &self.join_fanout,
+            ),
+        ]);
+        let scroll = panel_scroll(&lines, height);
+        Paragraph::new(lines.join("\n"))
+            .block(Block::default().title(" Settings ").borders(Borders::ALL))
+            .wrap(Wrap { trim: true })
+            .scroll((scroll, 0))
+    }
+
+    fn field_line(&self, target: Focus, label: &str, value: &str) -> String {
+        let marker = if self.focus == target { "▶" } else { " " };
+        let editing = if self.editing == field_from_focus(target) {
+            "  (editing; Enter to finish)"
+        } else {
+            ""
+        };
+        format!("{marker} {label}: [{}]{editing}", terminal_text(value, 512))
+    }
+
+    fn plan_panel(&self, width: u16) -> Paragraph<'static> {
+        let content_width = usize::from(width.saturating_sub(2));
+        let body = if self.page == Page::Join {
+            match &self.join_plan {
+                Some(plan) => [
+                    plan_row(
+                        &[
+                            ("Left records", plan.left_records.to_string()),
+                            ("Right records", plan.right_records.to_string()),
+                        ],
+                        content_width,
+                    ),
+                    plan_row(
+                        &[
+                            ("Join records", plan.total_records.to_string()),
+                            ("Selected", plan.records_to_emit.to_string()),
+                        ],
+                        content_width,
+                    ),
+                ]
+                .join("\n"),
+                None => "Enter valid join paths and keys".into(),
+            }
+        } else {
+            match &self.plan {
+                Some(plan) => [
+                    plan_row(
+                        &[
+                            ("Lists", plan.list_lengths.len().to_string()),
+                            ("Items", format!("{:?}", plan.list_lengths)),
+                            ("Combos", format!("{:?}", plan.total_combinations)),
+                        ],
+                        content_width,
+                    ),
+                    plan_row(
+                        &[
+                            ("Selected", plan.records_to_emit.to_string()),
+                            ("Bytes", format!("{:?}", plan.estimated_output_bytes)),
+                            ("Warnings", plan.warnings.len().to_string()),
+                        ],
+                        content_width,
+                    ),
+                ]
+                .join("\n"),
+                None => "Enter at least one input value".into(),
+            }
+        };
+        Paragraph::new(body).block(
+            Block::default()
+                .title(" Execution plan ")
+                .borders(Borders::ALL),
+        )
+    }
+
+    fn preview_panel(&self) -> Paragraph<'static> {
         let body = if self.records.is_empty() {
-            "No preview records".to_string()
+            "No preview records. Focus Preview and press Enter, or press p.".into()
         } else {
             self.records
                 .iter()
-                .map(|record| format!("{}  {}", record.ordinal, record.value.trim_end()))
+                .map(|r| format!("{}  {}", r.ordinal, terminal_text(r.value.trim_end(), 512)))
                 .collect::<Vec<_>>()
                 .join("\n")
         };
         Paragraph::new(body)
-            .block(Block::default().title(" Preview ").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title(" Preview — first 20 ")
+                    .borders(Borders::ALL),
+            )
             .wrap(Wrap { trim: true })
+            .scroll((self.preview_scroll, 0))
     }
 
-    fn status_widget(&self) -> Paragraph<'static> {
-        let body = match &self.error {
-            Some(error) => format!("Error: {error}"),
-            None => self.status.clone(),
+    fn actions_panel(&self) -> Paragraph<'static> {
+        let button = |target: Focus, text: &str| {
+            if self.focus == target {
+                format!("[▶ {text}]")
+            } else {
+                format!("[  {text} ]")
+            }
         };
-        Paragraph::new(body).block(Block::default().title(" Status ").borders(Borders::ALL))
+        let status = self
+            .error
+            .as_deref()
+            .map(|e| format!("Error: {}", terminal_text(e, 512)))
+            .unwrap_or_else(|| terminal_text(&self.status, 512));
+        let generation = if self.running {
+            button(Focus::Action(Action::Cancel), "Cancel")
+        } else {
+            button(Focus::Action(Action::Generate), "Generate file")
+        };
+        let list_shortcuts = if self.page == Page::Combine {
+            "\nLists: [ previous • ] next • a add • d remove"
+        } else {
+            ""
+        };
+        Paragraph::new(format!(
+            "{}   {}\n{}{}\nEnter activate • p preview • g generate • c cancel • PgUp/PgDn preview",
+            button(Focus::Action(Action::Preview), "Preview first 20"),
+            generation,
+            status,
+            list_shortcuts,
+        ))
+        .block(Block::default().title(" Actions ").borders(Borders::ALL))
     }
 
-    fn handle_key(&mut self, code: KeyCode) -> bool {
-        if self.editing {
-            match code {
-                KeyCode::Esc | KeyCode::Enter => {
-                    self.editing = false;
+    fn focus_order(&self) -> Vec<Focus> {
+        let mut order = vec![
+            Focus::Page(Page::Combine),
+            Focus::Page(Page::Join),
+            Focus::Page(Page::Settings),
+            Focus::Action(Action::New),
+            Focus::Action(Action::OpenProfile),
+            Focus::Action(Action::SaveProfile),
+            Focus::Action(Action::SaveAsProfile),
+        ];
+        match self.page {
+            Page::Combine => {
+                order.push(Focus::Field(Field::ListDelimiter));
+                order.push(Focus::Field(Field::FileMode));
+                if self.sources[self.selected_source].file_mode {
+                    order.push(Focus::Field(Field::InputFormat));
+                    order.push(Focus::Field(Field::FilePath));
+                } else {
+                    order.push(Focus::Field(Field::ListValue));
                 }
-                KeyCode::Backspace => match self.edit_target {
-                    EditTarget::List => self.edit_selected(|source| {
-                        source.pop();
-                    }),
-                    EditTarget::File => {
-                        if let Some(Some(path)) = self.file_sources.get_mut(self.selected) {
-                            path.pop();
-                        }
-                        self.refresh_plan();
-                    }
-                    EditTarget::Output => {
-                        self.output_path.pop();
-                    }
-                    EditTarget::MaxCombinations => {
-                        self.max_combinations.pop();
-                        if self.join_mode {
-                            self.join_request.max_join_records =
-                                self.max_combinations.parse().unwrap_or(0);
-                            self.refresh_plan();
-                        } else {
-                            self.update_limit(true);
-                        }
-                    }
-                    EditTarget::MaxOutputBytes => {
-                        self.max_output_bytes.pop();
-                        if self.join_mode {
-                            self.join_request.max_output_bytes =
-                                self.max_output_bytes.parse().unwrap_or(0);
-                            self.refresh_plan();
-                        } else {
-                            self.update_limit(false);
-                        }
-                    }
-                    EditTarget::Template => {
-                        self.template.pop();
-                        self.request.template =
-                            (!self.template.is_empty()).then_some(self.template.clone());
-                        self.refresh_plan();
-                    }
-                    EditTarget::Transforms => {
-                        self.transforms.pop();
-                        self.request.transforms = self
-                            .transforms
-                            .split(';')
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(str::to_string)
-                            .collect();
-                        self.refresh_plan();
-                    }
-                    EditTarget::Names => {
-                        self.names.pop();
-                        self.update_names();
-                    }
-                    EditTarget::Offset => {
-                        self.offset.pop();
-                        self.update_paging();
-                    }
-                    EditTarget::Limit => {
-                        self.limit.pop();
-                        self.update_paging();
-                    }
-                    EditTarget::Choose => {
-                        self.choose.pop();
-                        self.update_selection();
-                    }
-                    EditTarget::Length => {
-                        self.length.pop();
-                        self.update_selection();
-                    }
-                    EditTarget::Delimiter => {
-                        self.list_delimiter.pop();
-                        self.refresh_plan();
-                    }
-                    EditTarget::TemplateFile => {
-                        self.template_file.pop();
-                        self.request.template_file =
-                            (!self.template_file.is_empty()).then_some(self.template_file.clone());
-                        self.refresh_plan();
-                    }
-                    EditTarget::Filters => {
-                        self.filters.pop();
-                        self.update_filters();
-                    }
-                    EditTarget::Timeout => {
-                        self.timeout_ms.pop();
-                        self.request.timeout_ms = self.timeout_ms.parse().ok();
-                        self.join_request.timeout_ms = self.request.timeout_ms;
-                    }
-                    EditTarget::ShardIndex => {
-                        self.shard_index.pop();
-                        self.request.shard_index = self.shard_index.parse().ok();
-                        self.refresh_plan();
-                    }
-                    EditTarget::ShardCount => {
-                        self.shard_count.pop();
-                        self.request.shard_count = self.shard_count.parse().ok();
-                        self.refresh_plan();
-                    }
-                    EditTarget::ResourceLimits => {
-                        self.resource_limits.pop();
-                        self.update_resource_limits();
-                    }
-                    EditTarget::JoinLeft => {
-                        self.join_request.left_path.pop();
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinRight => {
-                        self.join_request.right_path.pop();
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinLeftKey => {
-                        self.join_request.left_key.pop();
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinRightKey => {
-                        self.join_request.right_key.pop();
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinFanout => {
-                        self.join_fanout.pop();
-                        self.join_request.max_join_key_fanout =
-                            self.join_fanout.parse().unwrap_or(0);
-                        self.refresh_plan();
-                    }
+                order.push(Focus::Action(Action::AddList));
+                if self.sources.len() > 1 {
+                    order.push(Focus::Action(Action::RemoveList));
+                }
+                order.push(Focus::Field(Field::Operation));
+                if matches!(self.operation, AppOperation::Zip { .. }) {
+                    order.push(Focus::Field(Field::ZipPolicy));
+                }
+                order.extend([Focus::Field(Field::Offset), Focus::Field(Field::Limit)]);
+                match self.operation {
+                    AppOperation::Product { .. } => order.push(Focus::Field(Field::ReverseFields)),
+                    AppOperation::Combinations { .. } => order.push(Focus::Field(Field::Choose)),
+                    AppOperation::Variations { .. } => order.push(Focus::Field(Field::Length)),
+                    _ => {}
+                }
+                order.extend([
+                    Focus::Field(Field::Filters),
+                    Focus::Field(Field::Reverse),
+                    Focus::Field(Field::Transforms),
+                    Focus::Field(Field::TemplateFileMode),
+                ]);
+                if self.template_file_mode {
+                    order.push(Focus::Field(Field::TemplateFile));
+                } else {
+                    order.push(Focus::Field(Field::Template));
+                }
+                order.push(Focus::Field(Field::Format));
+                if format_uses_field_separator(self.format) {
+                    order.push(Focus::Field(Field::Separator));
+                }
+                if self.format == Format::Jsonl {
+                    order.extend([Focus::Field(Field::LeanJsonl), Focus::Field(Field::Names)]);
+                }
+                order.extend([
+                    Focus::Field(Field::ShardIndex),
+                    Focus::Field(Field::ShardCount),
+                    Focus::Field(Field::OutputPath),
+                    Focus::Action(Action::Preview),
+                ]);
+                order.push(if self.running {
+                    Focus::Action(Action::Cancel)
+                } else {
+                    Focus::Action(Action::Generate)
+                });
+            }
+            Page::Join => order.extend([
+                Focus::Field(Field::JoinLeft),
+                Focus::Field(Field::JoinRight),
+                Focus::Field(Field::JoinLeftKey),
+                Focus::Field(Field::JoinRightKey),
+                Focus::Field(Field::JoinOffset),
+                Focus::Field(Field::JoinLimit),
+                Focus::Field(Field::JoinFormat),
+                Focus::Field(Field::JoinKind),
+                Focus::Field(Field::OutputPath),
+                Focus::Action(Action::Preview),
+                if self.running {
+                    Focus::Action(Action::Cancel)
+                } else {
+                    Focus::Action(Action::Generate)
                 },
-                KeyCode::Char(value) => match self.edit_target {
-                    EditTarget::List => self.edit_selected(|source| source.push(value)),
-                    EditTarget::File => {
-                        if let Some(Some(path)) = self.file_sources.get_mut(self.selected) {
-                            path.push(value);
-                        }
-                        self.refresh_plan();
+            ]),
+            Page::Settings => order.extend([
+                Focus::Field(Field::DefaultOutputDirectory),
+                Focus::Field(Field::ProfilePath),
+                Focus::Field(Field::MaxOutputBytes),
+                Focus::Field(Field::MaxInputBytes),
+                Focus::Field(Field::MaxItemBytes),
+                Focus::Field(Field::Timeout),
+                Focus::Field(Field::Overwrite),
+                Focus::Field(Field::MaxCombinations),
+                Focus::Field(Field::MaxItemsPerList),
+                Focus::Field(Field::MaxLists),
+                Focus::Field(Field::MaxTotalItems),
+                Focus::Field(Field::JoinMaxRecords),
+                Focus::Field(Field::JoinFanout),
+            ]),
+        }
+        order
+    }
+
+    fn move_focus(&mut self, direction: i32) {
+        let order = self.focus_order();
+        let index = order
+            .iter()
+            .position(|target| *target == self.focus)
+            .unwrap_or(0);
+        let next = if direction < 0 {
+            (index + order.len() - 1) % order.len()
+        } else {
+            (index + 1) % order.len()
+        };
+        self.focus = order[next];
+    }
+
+    fn activate_focus(&mut self) {
+        match self.focus {
+            Focus::Page(page) => {
+                self.page = page;
+                self.focus = Focus::Page(page);
+                self.editing = None;
+                self.refresh_plan();
+            }
+            Focus::Field(field) => {
+                if is_text_field(field) {
+                    self.editing = Some(field);
+                } else {
+                    self.toggle_field(field);
+                }
+            }
+            Focus::Action(action) => match action {
+                Action::AddList => self.add_list(),
+                Action::RemoveList => self.remove_list(),
+                Action::Preview => self.run_preview(),
+                Action::Generate => self.start_generation(),
+                Action::Cancel => self.cancel_generation(),
+                Action::New => *self = Self::default(),
+                Action::OpenProfile => self.open_profile(),
+                Action::SaveProfile => self.save_profile(),
+                Action::SaveAsProfile => {
+                    self.page = Page::Settings;
+                    self.focus = Focus::Field(Field::ProfilePath);
+                    self.editing = Some(Field::ProfilePath);
+                    self.status = "Enter a new profile path, then activate Save".into();
+                }
+            },
+        }
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.cancel_generation();
+            return false;
+        }
+        if let Some(field) = self.editing {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Char('s') => {
+                        self.finish_edit(field);
+                        self.save_profile();
                     }
-                    EditTarget::Output => self.output_path.push(value),
-                    EditTarget::MaxCombinations => {
-                        self.max_combinations.push(value);
-                        if self.join_mode {
-                            self.join_request.max_join_records =
-                                self.max_combinations.parse().unwrap_or(0);
-                            self.refresh_plan();
-                        } else {
-                            self.update_limit(true);
-                        }
+                    KeyCode::Char('o') => {
+                        self.finish_edit(field);
+                        self.open_profile();
                     }
-                    EditTarget::MaxOutputBytes => {
-                        self.max_output_bytes.push(value);
-                        if self.join_mode {
-                            self.join_request.max_output_bytes =
-                                self.max_output_bytes.parse().unwrap_or(0);
-                            self.refresh_plan();
-                        } else {
-                            self.update_limit(false);
-                        }
-                    }
-                    EditTarget::Template => {
-                        self.template.push(value);
-                        self.request.template = Some(self.template.clone());
-                        self.refresh_plan();
-                    }
-                    EditTarget::Transforms => {
-                        self.transforms.push(value);
-                        self.request.transforms = self
-                            .transforms
-                            .split(';')
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(str::to_string)
-                            .collect();
-                        self.refresh_plan();
-                    }
-                    EditTarget::Names => {
-                        self.names.push(value);
-                        self.update_names();
-                    }
-                    EditTarget::Offset => {
-                        self.offset.push(value);
-                        self.update_paging();
-                    }
-                    EditTarget::Limit => {
-                        self.limit.push(value);
-                        self.update_paging();
-                    }
-                    EditTarget::Choose => {
-                        self.choose.push(value);
-                        self.update_selection();
-                    }
-                    EditTarget::Length => {
-                        self.length.push(value);
-                        self.update_selection();
-                    }
-                    EditTarget::Delimiter => {
-                        self.list_delimiter.push(value);
-                        self.refresh_plan();
-                    }
-                    EditTarget::TemplateFile => {
-                        self.template_file.push(value);
-                        self.request.template_file = Some(self.template_file.clone());
-                        self.request.template = None;
-                        self.template.clear();
-                        self.refresh_plan();
-                    }
-                    EditTarget::Filters => {
-                        self.filters.push(value);
-                        self.update_filters();
-                    }
-                    EditTarget::Timeout => {
-                        self.timeout_ms.push(value);
-                        self.request.timeout_ms = self.timeout_ms.parse().ok();
-                        self.join_request.timeout_ms = self.request.timeout_ms;
-                    }
-                    EditTarget::ShardIndex => {
-                        self.shard_index.push(value);
-                        self.request.shard_index = self.shard_index.parse().ok();
-                        self.refresh_plan();
-                    }
-                    EditTarget::ShardCount => {
-                        self.shard_count.push(value);
-                        self.request.shard_count = self.shard_count.parse().ok();
-                        self.refresh_plan();
-                    }
-                    EditTarget::ResourceLimits => {
-                        self.resource_limits.push(value);
-                        self.update_resource_limits();
-                    }
-                    EditTarget::JoinLeft => {
-                        self.join_request.left_path.push(value);
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinRight => {
-                        self.join_request.right_path.push(value);
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinLeftKey => {
-                        self.join_request.left_key.push(value);
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinRightKey => {
-                        self.join_request.right_key.push(value);
-                        self.refresh_plan();
-                    }
-                    EditTarget::JoinFanout => {
-                        self.join_fanout.push(value);
-                        self.join_request.max_join_key_fanout =
-                            self.join_fanout.parse().unwrap_or(0);
-                        self.refresh_plan();
-                    }
-                },
+                    KeyCode::Char('u') => self.set_field_value(field, String::new()),
+                    _ => {}
+                }
+                return false;
+            }
+            match key.code {
+                KeyCode::Esc => self.editing = None,
+                KeyCode::Enter => self.finish_edit(field),
+                KeyCode::Tab => {
+                    self.finish_edit(field);
+                    self.move_focus(1);
+                }
+                KeyCode::BackTab => {
+                    self.finish_edit(field);
+                    self.move_focus(-1);
+                }
+                KeyCode::Backspace => self.edit_char(field, None),
+                KeyCode::Char(c) => self.edit_char(field, Some(c)),
                 _ => {}
             }
             return false;
         }
-
-        match code {
-            KeyCode::Char('q') => return true,
-            KeyCode::Enter => {
-                self.editing = true;
-                self.edit_target = EditTarget::List;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('o') => self.open_profile(),
+                KeyCode::Char('s') => self.save_profile(),
+                KeyCode::Char('n') => *self = Self::default(),
+                _ => {}
             }
-            KeyCode::Char('o') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Output;
-            }
-            KeyCode::Char('f') => {
-                if self.file_sources[self.selected].is_none() {
-                    self.file_sources[self.selected] = Some(String::new());
-                }
-                self.editing = true;
-                self.edit_target = EditTarget::File;
+            return false;
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return true,
+            KeyCode::Tab | KeyCode::Down => self.move_focus(1),
+            KeyCode::BackTab | KeyCode::Up => self.move_focus(-1),
+            KeyCode::Enter | KeyCode::Right => self.activate_focus(),
+            KeyCode::Char('1') => {
+                self.page = Page::Combine;
+                self.focus = Focus::Page(Page::Combine);
                 self.refresh_plan();
             }
-            KeyCode::Char('m') => {
-                self.editing = true;
-                self.edit_target = EditTarget::MaxCombinations;
-            }
-            KeyCode::Char('b') => {
-                self.editing = true;
-                self.edit_target = EditTarget::MaxOutputBytes;
-            }
-            KeyCode::Char('t') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Template;
-            }
-            KeyCode::Char('x') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Transforms;
-            }
-            KeyCode::Char('n') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Names;
-            }
-            KeyCode::Char('e') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Delimiter;
-            }
-            KeyCode::Char('j') => {
-                self.editing = true;
-                self.edit_target = EditTarget::TemplateFile;
-            }
-            KeyCode::Char('X') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Filters;
-            }
-            KeyCode::Char('T') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Timeout;
-            }
-            KeyCode::Char('I') => {
-                self.editing = true;
-                self.edit_target = EditTarget::ShardIndex;
-            }
-            KeyCode::Char('C') => {
-                self.editing = true;
-                self.edit_target = EditTarget::ShardCount;
-            }
-            KeyCode::Char('N') => {
-                self.editing = true;
-                self.edit_target = EditTarget::ResourceLimits;
-            }
-            KeyCode::Char('L') => {
-                self.lean_jsonl = !self.lean_jsonl;
-                self.request.lean_jsonl = self.lean_jsonl;
+            KeyCode::Char('2') => {
+                self.page = Page::Join;
+                self.focus = Focus::Page(Page::Join);
                 self.refresh_plan();
             }
-            KeyCode::Char('J') if self.join_mode => {
-                self.editing = true;
-                self.edit_target = EditTarget::JoinLeft;
+            KeyCode::Char('3') => {
+                self.page = Page::Settings;
+                self.focus = Focus::Page(Page::Settings);
             }
-            KeyCode::Char('R') if self.join_mode => {
-                self.editing = true;
-                self.edit_target = EditTarget::JoinRight;
+            KeyCode::Char('p') if self.page != Page::Settings => self.run_preview(),
+            KeyCode::Char('g') if self.page != Page::Settings => self.start_generation(),
+            KeyCode::Char('c') => self.cancel_generation(),
+            KeyCode::PageUp => self.preview_scroll = self.preview_scroll.saturating_sub(5),
+            KeyCode::PageDown => {
+                let last = self.records.len().saturating_sub(1);
+                self.preview_scroll = self
+                    .preview_scroll
+                    .saturating_add(5)
+                    .min(last.try_into().unwrap_or(u16::MAX));
             }
-            KeyCode::Char('K') if self.join_mode => {
-                self.editing = true;
-                self.edit_target = EditTarget::JoinLeftKey;
+            KeyCode::Char('a') if self.page == Page::Combine => self.add_list(),
+            KeyCode::Char('d') if self.page == Page::Combine => self.remove_list(),
+            KeyCode::Left | KeyCode::Char('[') if self.page == Page::Combine => {
+                self.select_previous_source()
             }
-            KeyCode::Char('O') if self.join_mode => {
-                self.editing = true;
-                self.edit_target = EditTarget::JoinRightKey;
-            }
-            KeyCode::Char('F') if self.join_mode => {
-                self.editing = true;
-                self.edit_target = EditTarget::JoinFanout;
-            }
-            KeyCode::Char('Y') if self.join_mode => {
-                self.join_request.format = next_join_format(self.join_request.format);
-                self.refresh_plan();
-            }
-            KeyCode::Char('U') if self.join_mode => {
-                self.join_request.kind = next_join_kind(self.join_request.kind);
-                self.refresh_plan();
-            }
-            KeyCode::Char('v') if self.join_mode => {
-                self.join_mode = false;
-                self.refresh_plan();
-            }
-            KeyCode::Char('V') => {
-                self.join_mode = true;
-                self.refresh_plan();
-            }
-            KeyCode::Char('v') => {
-                self.request.operation = next_operation(self.request.operation);
-                self.refresh_plan();
-            }
-            KeyCode::Char('z') => {
-                self.request.format = next_format(self.request.format);
-                self.refresh_plan();
-            }
-            KeyCode::Char('y') => {
-                if self.file_sources[self.selected].is_some() {
-                    self.file_formats[self.selected] =
-                        next_input_format(self.file_formats[self.selected]);
-                    self.refresh_plan();
-                }
-            }
-            KeyCode::Char('r') => {
-                self.request.options.reverse = !self.request.options.reverse;
-                self.refresh_plan();
-            }
-            KeyCode::Char('i') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Offset;
-            }
-            KeyCode::Char('l') => {
-                self.editing = true;
-                self.edit_target = EditTarget::Limit;
-            }
-            KeyCode::Char('k') => {
-                if matches!(self.request.operation, AppOperation::Combinations { .. }) {
-                    self.editing = true;
-                    self.edit_target = EditTarget::Choose;
-                }
-            }
-            KeyCode::Char('h') => {
-                if matches!(self.request.operation, AppOperation::Variations { .. }) {
-                    self.editing = true;
-                    self.edit_target = EditTarget::Length;
-                }
-            }
-            KeyCode::Char('u') => {
-                if let AppOperation::Zip { on_unequal } = self.request.operation {
-                    self.request.operation = AppOperation::Zip {
-                        on_unequal: next_zip_policy(on_unequal),
-                    };
-                    self.refresh_plan();
-                }
-            }
-            KeyCode::Char('a') => self.add_list(),
-            KeyCode::Char('d') => self.remove_list(),
-            KeyCode::Tab | KeyCode::Down => self.select_next(),
-            KeyCode::BackTab | KeyCode::Up => self.select_previous(),
-            KeyCode::Char('p') => {
-                if self.join_mode {
-                    self.run_join_preview(PREVIEW_LIMIT, "Join preview ready");
-                } else {
-                    self.run_preview(PREVIEW_LIMIT, "Preview ready");
-                }
-            }
-            KeyCode::Char('g') => self.start_generation(),
-            KeyCode::Char('c') => {
-                if let Some(token) = &self.cancellation {
-                    token.cancel();
-                    self.status = "Cancellation requested...".to_string();
-                }
-            }
-            KeyCode::Char('w') => self.overwrite = !self.overwrite,
+            KeyCode::Char(']') if self.page == Page::Combine => self.select_next_source(),
             _ => {}
         }
         false
     }
 
+    fn finish_edit(&mut self, field: Field) {
+        self.editing = None;
+        if field == Field::DefaultOutputDirectory {
+            self.preferences.default_output_directory =
+                (!self.field_value(field).trim().is_empty()).then(|| self.field_value(field));
+            if let Err(error) = save_preferences(&self.preferences) {
+                self.error = Some(format!("PREFERENCES_SAVE_FAILED: {error}"));
+            }
+        }
+    }
+
+    fn edit_char(&mut self, field: Field, character: Option<char>) {
+        let mut value = self.field_value(field);
+        if let Some(c) = character {
+            value.push(c);
+        } else {
+            value.pop();
+        }
+        self.set_field_value(field, value);
+    }
+
+    fn field_value(&self, field: Field) -> String {
+        match field {
+            Field::ListValue => self.sources[self.selected_source].value.clone(),
+            Field::FilePath => self.sources[self.selected_source].file_path.clone(),
+            Field::ListDelimiter => self.list_delimiter.clone(),
+            Field::Separator => self.field_separator.clone(),
+            Field::Choose => self.choose.clone(),
+            Field::Length => self.length.clone(),
+            Field::Template => self.template.clone(),
+            Field::TemplateFile => self.template_file.clone(),
+            Field::Transforms => self.transforms.clone(),
+            Field::Filters => self.filters.clone(),
+            Field::Names => self.names.clone(),
+            Field::Offset => self.offset.clone(),
+            Field::Limit => self.limit.clone(),
+            Field::MaxCombinations => self.max_combinations.clone(),
+            Field::MaxOutputBytes => self.max_output_bytes.clone(),
+            Field::MaxInputBytes => self.max_input_bytes.clone(),
+            Field::MaxItemBytes => self.max_item_bytes.clone(),
+            Field::MaxItemsPerList => self.max_items_per_list.clone(),
+            Field::MaxTotalItems => self.max_total_items.clone(),
+            Field::MaxLists => self.max_lists.clone(),
+            Field::Timeout => self.timeout.clone(),
+            Field::ShardIndex => self.shard_index.clone(),
+            Field::ShardCount => self.shard_count.clone(),
+            Field::DefaultOutputDirectory => self
+                .preferences
+                .default_output_directory
+                .clone()
+                .unwrap_or_default(),
+            Field::JoinLeft => self.join_left.clone(),
+            Field::JoinRight => self.join_right.clone(),
+            Field::JoinLeftKey => self.join_left_key.clone(),
+            Field::JoinRightKey => self.join_right_key.clone(),
+            Field::JoinOffset => self.join_offset.clone(),
+            Field::JoinLimit => self.join_limit.clone(),
+            Field::JoinMaxRecords => self.join_max_records.clone(),
+            Field::JoinFanout => self.join_fanout.clone(),
+            Field::OutputPath => self.output_path.clone(),
+            Field::ProfilePath => self.profile_path.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn set_field_value(&mut self, field: Field, value: String) {
+        match field {
+            Field::ListValue => self.sources[self.selected_source].value = value,
+            Field::FilePath => self.sources[self.selected_source].file_path = value,
+            Field::ListDelimiter => self.list_delimiter = value,
+            Field::Separator => self.field_separator = value,
+            Field::Choose => self.choose = value,
+            Field::Length => self.length = value,
+            Field::Template => self.template = value,
+            Field::TemplateFile => self.template_file = value,
+            Field::Transforms => self.transforms = value,
+            Field::Filters => self.filters = value,
+            Field::Names => self.names = value,
+            Field::Offset => self.offset = value,
+            Field::Limit => self.limit = value,
+            Field::MaxCombinations => self.max_combinations = value,
+            Field::MaxOutputBytes => self.max_output_bytes = value,
+            Field::MaxInputBytes => self.max_input_bytes = value,
+            Field::MaxItemBytes => self.max_item_bytes = value,
+            Field::MaxItemsPerList => self.max_items_per_list = value,
+            Field::MaxTotalItems => self.max_total_items = value,
+            Field::MaxLists => self.max_lists = value,
+            Field::Timeout => self.timeout = value,
+            Field::ShardIndex => self.shard_index = value,
+            Field::ShardCount => self.shard_count = value,
+            Field::DefaultOutputDirectory => {
+                self.preferences.default_output_directory = Some(value)
+            }
+            Field::JoinLeft => self.join_left = value,
+            Field::JoinRight => self.join_right = value,
+            Field::JoinLeftKey => self.join_left_key = value,
+            Field::JoinRightKey => self.join_right_key = value,
+            Field::JoinOffset => self.join_offset = value,
+            Field::JoinLimit => self.join_limit = value,
+            Field::JoinMaxRecords => self.join_max_records = value,
+            Field::JoinFanout => self.join_fanout = value,
+            Field::OutputPath => self.output_path = value,
+            Field::ProfilePath => self.profile_path = value,
+            _ => return,
+        }
+        self.sync_requests();
+        self.refresh_plan();
+    }
+
+    fn toggle_field(&mut self, field: Field) {
+        match field {
+            Field::FileMode => {
+                self.sources[self.selected_source].file_mode =
+                    !self.sources[self.selected_source].file_mode
+            }
+            Field::InputFormat => {
+                self.sources[self.selected_source].format =
+                    next_input_format(self.sources[self.selected_source].format)
+            }
+            Field::Operation => self.operation = next_operation(self.operation),
+            Field::ZipPolicy => self.zip_policy = next_zip_policy(self.zip_policy),
+            Field::Format => self.format = next_format(self.format),
+            Field::TemplateFileMode => {
+                self.template_file_mode = !self.template_file_mode;
+                if self.template_file_mode {
+                    self.template.clear();
+                } else {
+                    self.template_file.clear();
+                }
+            }
+            Field::JoinFormat => self.join_format = next_join_format(self.join_format),
+            Field::JoinKind => self.join_kind = next_join_kind(self.join_kind),
+            Field::Reverse => self.reverse = !self.reverse,
+            Field::ReverseFields => self.reverse_fields = !self.reverse_fields,
+            Field::LeanJsonl => self.lean_jsonl = !self.lean_jsonl,
+            Field::Overwrite => self.overwrite = !self.overwrite,
+            _ => return,
+        }
+        self.sync_requests();
+        self.refresh_plan();
+    }
+
     fn add_list(&mut self) {
-        self.sources.push(String::new());
-        self.file_sources.push(None);
-        self.file_formats.push(InputFormat::Lines);
-        self.selected = self.sources.len() - 1;
-        self.list_state.select(Some(self.selected));
+        self.sources.push(Source::default());
+        self.selected_source = self.sources.len() - 1;
         self.refresh_plan();
     }
 
     fn remove_list(&mut self) {
-        if self.sources.len() <= 1 {
-            return;
+        if self.sources.len() > 1 {
+            self.sources.remove(self.selected_source);
+            self.selected_source = self.selected_source.min(self.sources.len() - 1);
+            if self.sources.len() == 1 && self.focus == Focus::Action(Action::RemoveList) {
+                self.focus = Focus::Action(Action::AddList);
+            }
+            self.refresh_plan();
         }
-        self.sources.remove(self.selected);
-        self.file_sources.remove(self.selected);
-        self.file_formats.remove(self.selected);
-        self.selected = self.selected.min(self.sources.len() - 1);
-        self.list_state.select(Some(self.selected));
-        self.refresh_plan();
     }
 
-    fn select_next(&mut self) {
-        self.selected = (self.selected + 1) % self.sources.len();
-        self.list_state.select(Some(self.selected));
-    }
-
-    fn select_previous(&mut self) {
-        self.selected = self
-            .selected
+    fn select_previous_source(&mut self) {
+        self.selected_source = self
+            .selected_source
             .checked_sub(1)
             .unwrap_or(self.sources.len() - 1);
-        self.list_state.select(Some(self.selected));
     }
 
-    fn edit_selected<F>(&mut self, edit: F)
-    where
-        F: FnOnce(&mut String),
-    {
-        edit(&mut self.sources[self.selected]);
-        self.refresh_plan();
+    fn select_next_source(&mut self) {
+        self.selected_source = (self.selected_source + 1) % self.sources.len();
+    }
+
+    fn sync_requests(&mut self) {
+        self.request.operation = match self.operation {
+            AppOperation::Product { .. } => AppOperation::Product {
+                reverse_fields: self.reverse_fields,
+            },
+            AppOperation::Zip { .. } => AppOperation::Zip {
+                on_unequal: self.zip_policy,
+            },
+            AppOperation::Combinations { .. } => AppOperation::Combinations {
+                choose: self.choose.parse().unwrap_or(0),
+            },
+            AppOperation::Variations { .. } => AppOperation::Variations {
+                length: self.length.parse().unwrap_or(0),
+            },
+            operation => operation,
+        };
+        self.request.format = self.format;
+        self.request.lean_jsonl = self.lean_jsonl;
+        self.request.field_separator = self.field_separator.clone();
+        self.request.names = split_values(&self.names);
+        self.request.transforms = split_values(&self.transforms);
+        self.request.filters = split_values(&self.filters);
+        self.request.template =
+            (!self.template_file_mode && !self.template.is_empty()).then(|| self.template.clone());
+        self.request.template_file = (self.template_file_mode && !self.template_file.is_empty())
+            .then(|| self.template_file.clone());
+        self.request.options.reverse = self.reverse;
+        self.request.options.offset = self.offset.parse().unwrap_or(0);
+        self.request.options.limit =
+            (!self.limit.is_empty()).then(|| self.limit.parse().unwrap_or(0));
+        self.request.max_combinations = self.max_combinations.parse().unwrap_or(0);
+        self.request.max_output_bytes = self.max_output_bytes.parse().unwrap_or(0);
+        self.request.timeout_ms =
+            (!self.timeout.is_empty()).then(|| self.timeout.parse().unwrap_or(0));
+        self.request.shard_index =
+            (!self.shard_index.is_empty()).then(|| self.shard_index.parse().unwrap_or(0));
+        self.request.shard_count =
+            (!self.shard_count.is_empty()).then(|| self.shard_count.parse().unwrap_or(0));
+        self.request.max_input_bytes = self.max_input_bytes.parse().unwrap_or(0);
+        self.request.max_item_bytes = self.max_item_bytes.parse().unwrap_or(0);
+        self.request.max_items_per_list = self.max_items_per_list.parse().unwrap_or(0);
+        self.request.max_total_items = self.max_total_items.parse().unwrap_or(0);
+        self.request.max_lists = self.max_lists.parse().unwrap_or(0);
+        self.request.lists = self
+            .sources
+            .iter()
+            .map(|source| {
+                if source.file_mode {
+                    Vec::new()
+                } else {
+                    read_input_source(
+                        &InputSource::Inline {
+                            value: source.value.clone(),
+                            delimiter: self.list_delimiter.clone(),
+                        },
+                        InputLimits {
+                            max_input_bytes: self.request.max_input_bytes,
+                            max_item_bytes: self.request.max_item_bytes,
+                            max_items_per_list: self.request.max_items_per_list,
+                        },
+                    )
+                    .unwrap_or_default()
+                }
+            })
+            .collect();
+        self.join_request.left_path = self.join_left.clone();
+        self.join_request.right_path = self.join_right.clone();
+        self.join_request.left_key = self.join_left_key.clone();
+        self.join_request.right_key = self.join_right_key.clone();
+        self.join_request.format = self.join_format;
+        self.join_request.kind = self.join_kind;
+        self.join_request.offset = self.join_offset.parse().unwrap_or(0);
+        self.join_request.limit =
+            (!self.join_limit.is_empty()).then(|| self.join_limit.parse().unwrap_or(0));
+        self.join_request.max_join_records = self.join_max_records.parse().unwrap_or(0);
+        self.join_request.max_join_key_fanout = self.join_fanout.parse().unwrap_or(0);
+        self.join_request.max_output_bytes = self.request.max_output_bytes;
+        self.join_request.max_input_bytes = self.request.max_input_bytes;
+        self.join_request.max_item_bytes = self.request.max_item_bytes;
+        self.join_request.timeout_ms = self.request.timeout_ms;
     }
 
     fn refresh_plan(&mut self) {
-        if self.join_mode {
+        if self.page == Page::Join {
+            if self.join_left.is_empty()
+                || self.join_right.is_empty()
+                || self.join_left_key.is_empty()
+                || self.join_right_key.is_empty()
+            {
+                self.join_plan = None;
+                self.status = "Enter both paths and both keys".into();
+                return;
+            }
             match join_plan(&self.join_request) {
-                Ok(plan) => {
-                    self.join_plan = Some(plan);
+                Ok(value) => {
+                    self.join_plan = Some(value);
                     self.error = None;
                     self.status = "Join ready".into();
                 }
-                Err(error) => {
-                    self.join_plan = None;
-                    self.error = Some(format!("{}: {}", error.code, error.message));
-                }
+                Err(error) => self.set_error(error),
             }
             return;
         }
@@ -791,124 +1448,333 @@ impl TuiApp {
             max_item_bytes: self.request.max_item_bytes,
             max_items_per_list: self.request.max_items_per_list,
         };
-        let mut lists = Vec::with_capacity(self.sources.len());
-        for (index, source) in self.sources.iter().enumerate() {
-            let input = match &self.file_sources[index] {
-                Some(path) => InputSource::File {
-                    path: path.clone(),
-                    format: self.file_formats[index],
-                },
-                None => InputSource::Inline {
-                    value: source.clone(),
+        let mut lists = Vec::new();
+        for source in &self.sources {
+            let input = if source.file_mode {
+                InputSource::File {
+                    path: source.file_path.clone(),
+                    format: source.format,
+                }
+            } else {
+                InputSource::Inline {
+                    value: source.value.clone(),
                     delimiter: self.list_delimiter.clone(),
-                },
+                }
             };
             match read_input_source(&input, limits) {
                 Ok(list) => lists.push(list),
                 Err(error) => {
-                    self.plan = None;
-                    self.error = Some(format!("{}: {}", error.code, error.message));
+                    self.set_error(error);
                     return;
                 }
             }
         }
         self.request.lists = lists;
         match plan(&self.request) {
-            Ok(plan) => {
-                self.plan = Some(plan);
+            Ok(value) => {
+                self.plan = Some(value);
                 self.error = None;
-                self.status = "Ready".to_string();
+                self.status = "Ready".into();
             }
-            Err(error) => {
-                self.plan = None;
-                self.error = Some(format!("{}: {}", error.code, error.message));
-            }
+            Err(error) => self.set_error(error),
         }
     }
 
-    fn run_preview(&mut self, limit: u128, status: &str) {
-        self.refresh_plan();
-        match preview(&self.request, limit) {
-            Ok(records) => {
-                self.records = records;
-                self.status = status.to_string();
-                self.error = None;
-            }
-            Err(error) => {
-                self.records.clear();
-                self.error = Some(format!("{}: {}", error.code, error.message));
-            }
-        }
+    fn set_error(&mut self, error: AppError) {
+        self.error = Some(format!("{}: {}", error.code, error.message));
     }
 
-    fn run_join_preview(&mut self, limit: u128, status: &str) {
+    fn run_preview(&mut self) {
+        if self.page == Page::Settings {
+            return;
+        }
+        self.sync_requests();
         self.refresh_plan();
-        match join_preview(&self.join_request, limit) {
-            Ok(records) => {
-                self.records = records;
-                self.status = status.into();
-                self.error = None;
+        if self.page == Page::Join {
+            match join_preview(&self.join_request, PREVIEW_LIMIT) {
+                Ok(records) => {
+                    self.records = records;
+                    self.preview_scroll = 0;
+                    self.status = "Join preview ready".into();
+                    self.error = None;
+                }
+                Err(error) => self.set_error(error),
             }
-            Err(error) => {
-                self.records.clear();
-                self.error = Some(format!("{}: {}", error.code, error.message));
+        } else {
+            match preview(&self.request, PREVIEW_LIMIT) {
+                Ok(records) => {
+                    self.records = records;
+                    self.preview_scroll = 0;
+                    self.status = "Preview ready".into();
+                    self.error = None;
+                }
+                Err(error) => self.set_error(error),
             }
         }
     }
 
     fn start_generation(&mut self) {
-        if self.running {
+        if self.running || self.page == Page::Settings {
             return;
         }
+        self.sync_requests();
         self.refresh_plan();
-        if (!self.join_mode && self.plan.is_none()) || (self.join_mode && self.join_plan.is_none())
+        if (self.page == Page::Join && self.join_plan.is_none())
+            || (self.page == Page::Combine && self.plan.is_none())
         {
             return;
         }
         let sink = match FileSink::open(&self.output_path, self.overwrite) {
             Ok(sink) => sink,
             Err(error) => {
-                self.error = Some(format!("{}: {}", error.code, error.message));
+                self.set_error(error);
                 return;
             }
         };
-        let (messages, worker) = mpsc::channel();
+        let (messages, receiver) = mpsc::channel();
         let token = CancellationToken::new();
         let worker_token = token.clone();
         self.running = true;
         self.cancellation = Some(token);
-        self.worker = Some(worker);
+        self.worker = Some(receiver);
         self.progress = Some(ProgressEvent {
             records: 0,
             bytes: 0,
         });
-        self.status = "Generating...".to_string();
+        self.status = "Generating…".into();
         self.error = None;
-        if self.join_mode {
+        if self.page == Page::Join {
             let request = self.join_request.clone();
             thread::spawn(move || {
-                let mut sink = ProgressFileSink { sink, messages };
-                let cancelled = || worker_token.is_cancelled();
-                let result = match join_stream(&request, &mut sink, Some(&cancelled)) {
-                    Ok(progress) => sink.sink.commit().map(|_| progress),
-                    Err(error) => Err(error),
-                };
+                let mut sink = ProgressSink { sink, messages };
+                let result =
+                    match join_stream(&request, &mut sink, Some(&|| worker_token.is_cancelled())) {
+                        Ok(progress) => sink.sink.commit().map(|_| progress),
+                        Err(error) => Err(error),
+                    };
                 let _ = sink.messages.send(WorkerMessage::Finished(result));
             });
-            return;
+        } else {
+            let request = self.request.clone();
+            thread::spawn(move || {
+                let mut sink = ProgressSink { sink, messages };
+                let result =
+                    match stream(&request, &mut sink, Some(&|| worker_token.is_cancelled())) {
+                        Ok(progress) => sink.sink.commit().map(|_| progress),
+                        Err(error) => Err(error),
+                    };
+                let _ = sink.messages.send(WorkerMessage::Finished(result));
+            });
         }
-        let request = self.request.clone();
-        thread::spawn(move || {
-            let mut sink = ProgressFileSink { sink, messages };
-            let cancelled = || worker_token.is_cancelled();
-            let result = match stream(&request, &mut sink, Some(&cancelled)) {
-                Ok(progress) => sink.sink.commit().map(|_| progress),
-                Err(error) => Err(error),
-            };
-            let _ = sink.messages.send(WorkerMessage::Finished(result));
-        });
     }
 
+    fn cancel_generation(&mut self) {
+        if let Some(token) = &self.cancellation {
+            token.cancel();
+            self.status = "Cancellation requested…".into();
+        }
+    }
+
+    fn save_profile(&mut self) {
+        let path = PathBuf::from(self.profile_path.trim());
+        if path.as_os_str().is_empty() {
+            self.error = Some("PROFILE_SAVE_FAILED: enter a profile path in Settings".into());
+            return;
+        }
+        match save_profile_file(&path, self.to_profile()) {
+            Ok(()) => {
+                self.profile_path = path.to_string_lossy().into_owned();
+                remember_profile(&mut self.preferences, &path);
+                if let Err(error) = save_preferences(&self.preferences) {
+                    self.error = Some(format!("PREFERENCES_SAVE_FAILED: {error}"));
+                    return;
+                }
+                self.error = None;
+                self.status = format!("Saved profile {}", path.display());
+            }
+            Err(error) => self.error = Some(format!("PROFILE_SAVE_FAILED: {error}")),
+        }
+    }
+
+    fn open_profile(&mut self) {
+        let path = PathBuf::from(self.profile_path.trim());
+        if path.as_os_str().is_empty() {
+            self.error = Some("PROFILE_LOAD_FAILED: enter a profile path in Settings".into());
+            return;
+        }
+        let display_path = path.display().to_string();
+        match load_profile_file(&path) {
+            Ok(profile) => {
+                self.apply_profile(profile);
+                self.profile_path = path.to_string_lossy().into_owned();
+                remember_profile(&mut self.preferences, &path);
+                let _ = save_preferences(&self.preferences);
+                self.error = None;
+                self.status = format!("Loaded profile {display_path}");
+            }
+            Err(error) => self.error = Some(format!("PROFILE_LOAD_FAILED: {error}")),
+        }
+    }
+
+    fn to_profile(&self) -> Profile {
+        Profile {
+            version: PROFILE_VERSION,
+            active_mode: match self.page {
+                Page::Join => "join",
+                Page::Combine | Page::Settings => "combine",
+            }
+            .into(),
+            combine: CombineProfile {
+                sources: self
+                    .sources
+                    .iter()
+                    .map(|source| source.value.clone())
+                    .collect(),
+                file_sources: self
+                    .sources
+                    .iter()
+                    .map(|source| source.file_mode.then(|| source.file_path.clone()))
+                    .collect(),
+                file_formats: self
+                    .sources
+                    .iter()
+                    .map(|source| input_format_label(source.format).into())
+                    .collect(),
+                list_delimiter: self.list_delimiter.clone(),
+                field_separator: self.field_separator.clone(),
+                template: self.template.clone(),
+                template_file: self.template_file.clone(),
+                template_file_mode: self.template_file_mode,
+                transforms: self.transforms.clone(),
+                filters: self.filters.clone(),
+                names: self.names.clone(),
+                offset: self.offset.clone(),
+                limit: self.limit.clone(),
+                choose: self.choose.clone(),
+                length: self.length.clone(),
+                operation: operation_label(self.operation).into(),
+                format: format_label(self.format).into(),
+                zip_policy: zip_policy_label(self.zip_policy).into(),
+                reverse: self.reverse,
+                reverse_fields: self.reverse_fields,
+                lean_jsonl: self.lean_jsonl,
+                shard_index: self.shard_index.clone(),
+                shard_count: self.shard_count.clone(),
+            },
+            join: JoinProfile {
+                left_path: self.join_left.clone(),
+                right_path: self.join_right.clone(),
+                left_key: self.join_left_key.clone(),
+                right_key: self.join_right_key.clone(),
+                format: join_format_label(self.join_format).into(),
+                kind: join_kind_label(self.join_kind).into(),
+                offset: self.join_offset.clone(),
+                limit: self.join_limit.clone(),
+            },
+            output_path: self.output_path.clone(),
+            overwrite: self.overwrite,
+            limits: LimitsProfile {
+                max_combinations: self.max_combinations.clone(),
+                max_output_bytes: self.max_output_bytes.clone(),
+                max_input_bytes: self.max_input_bytes.clone(),
+                max_item_bytes: self.max_item_bytes.clone(),
+                max_items_per_list: self.max_items_per_list.clone(),
+                max_total_items: self.max_total_items.clone(),
+                max_lists: self.max_lists.clone(),
+                timeout_ms: self.timeout.clone(),
+                join_max_records: self.join_max_records.clone(),
+                join_fanout: self.join_fanout.clone(),
+            },
+        }
+    }
+
+    fn apply_profile(&mut self, profile: Profile) {
+        let combine = profile.combine;
+        let join = profile.join;
+        let limits = profile.limits;
+        self.page = if profile.active_mode == "join" {
+            Page::Join
+        } else {
+            Page::Combine
+        };
+        self.sources = combine
+            .sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let file_path = combine
+                    .file_sources
+                    .get(index)
+                    .and_then(Clone::clone)
+                    .unwrap_or_default();
+                Source {
+                    value,
+                    file_mode: !file_path.is_empty()
+                        || combine.file_sources.get(index).is_some_and(Option::is_some),
+                    file_path,
+                    format: combine
+                        .file_formats
+                        .get(index)
+                        .map(|format| parse_input_format(format))
+                        .unwrap_or(InputFormat::Lines),
+                }
+            })
+            .collect();
+        if self.sources.is_empty() {
+            self.sources.push(Source::default());
+        }
+        self.selected_source = 0;
+        self.list_delimiter = combine.list_delimiter;
+        self.operation = parse_operation(
+            &combine.operation,
+            combine.choose.parse().unwrap_or(2),
+            combine.length.parse().unwrap_or(2),
+        );
+        self.format = parse_format(&combine.format);
+        self.field_separator = combine.field_separator;
+        self.zip_policy = parse_zip_policy(&combine.zip_policy);
+        self.reverse = combine.reverse;
+        self.reverse_fields = combine.reverse_fields;
+        self.lean_jsonl = combine.lean_jsonl;
+        self.choose = combine.choose;
+        self.length = combine.length;
+        self.template = combine.template;
+        self.template_file = combine.template_file;
+        self.template_file_mode = combine.template_file_mode;
+        self.transforms = combine.transforms;
+        self.filters = combine.filters;
+        self.names = combine.names;
+        self.offset = combine.offset;
+        self.limit = combine.limit;
+        self.shard_index = combine.shard_index;
+        self.shard_count = combine.shard_count;
+        self.output_path = profile.output_path;
+        self.overwrite = profile.overwrite;
+        self.join_left = join.left_path;
+        self.join_right = join.right_path;
+        self.join_left_key = join.left_key;
+        self.join_right_key = join.right_key;
+        self.join_format = parse_join_format(&join.format);
+        self.join_kind = parse_join_kind(&join.kind);
+        self.join_offset = join.offset;
+        self.join_limit = join.limit;
+        self.join_max_records = limits.join_max_records;
+        self.join_fanout = limits.join_fanout;
+        self.max_combinations = limits.max_combinations;
+        self.max_output_bytes = limits.max_output_bytes;
+        self.max_input_bytes = limits.max_input_bytes;
+        self.max_item_bytes = limits.max_item_bytes;
+        self.max_items_per_list = limits.max_items_per_list;
+        self.max_total_items = limits.max_total_items;
+        self.max_lists = limits.max_lists;
+        self.timeout = limits.timeout_ms;
+        self.focus = Focus::Page(self.page);
+        self.editing = None;
+        self.records.clear();
+        self.preview_scroll = 0;
+        self.sync_requests();
+        self.refresh_plan();
+    }
     fn poll_worker(&mut self) {
         let mut finished = None;
         if let Some(worker) = &self.worker {
@@ -917,7 +1783,7 @@ impl TuiApp {
                     WorkerMessage::Progress(progress) => {
                         self.progress = Some(progress);
                         self.status = format!(
-                            "Generating... {} records ({} bytes)",
+                            "Generating… {} records ({} bytes)",
                             progress.records, progress.bytes
                         );
                     }
@@ -932,124 +1798,250 @@ impl TuiApp {
             match result {
                 Ok(progress) => {
                     self.status = format!(
-                        "Wrote {} records ({} bytes) to {}",
-                        progress.records, progress.bytes, self.output_path
-                    );
-                    self.error = None;
+                        "Wrote {} records ({} bytes)",
+                        progress.records, progress.bytes
+                    )
                 }
-                Err(error) => {
-                    self.error = Some(format!("{}: {}", error.code, error.message));
-                }
+                Err(error) => self.set_error(error),
             }
         }
-    }
-
-    fn update_limit(&mut self, combinations: bool) {
-        let text = if combinations {
-            &self.max_combinations
-        } else {
-            &self.max_output_bytes
-        };
-        match text.parse::<u128>() {
-            Ok(value) if value > 0 => {
-                if combinations {
-                    self.request.max_combinations = value;
-                } else {
-                    self.request.max_output_bytes = value;
-                }
-                self.refresh_plan();
-            }
-            _ => self.error = Some("LIMIT_INVALID: enter a positive integer".to_string()),
-        }
-    }
-
-    fn update_names(&mut self) {
-        self.request.names = self
-            .names
-            .split(';')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .collect();
-        self.refresh_plan();
-    }
-
-    fn update_resource_limits(&mut self) {
-        let values = self
-            .resource_limits
-            .split(';')
-            .map(str::trim)
-            .collect::<Vec<_>>();
-        if values.len() != 5 {
-            return;
-        }
-        if let (Ok(input), Ok(item), Ok(per_list), Ok(total), Ok(lists)) = (
-            values[0].parse(),
-            values[1].parse(),
-            values[2].parse(),
-            values[3].parse(),
-            values[4].parse(),
-        ) {
-            self.request.max_input_bytes = input;
-            self.request.max_item_bytes = item;
-            self.request.max_items_per_list = per_list;
-            self.request.max_total_items = total;
-            self.request.max_lists = lists;
-            self.refresh_plan();
-        }
-    }
-
-    fn update_filters(&mut self) {
-        self.request.filters = self
-            .filters
-            .split(';')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .collect();
-        self.refresh_plan();
-    }
-
-    fn update_paging(&mut self) {
-        if self.join_mode {
-            self.join_request.offset = self.offset.parse().unwrap_or(0);
-            self.join_request.limit = if self.limit.is_empty() {
-                None
-            } else {
-                self.limit.parse().ok()
-            };
-            self.refresh_plan();
-            return;
-        }
-        if let Ok(value) = self.offset.parse() {
-            self.request.options.offset = value;
-        }
-        self.request.options.limit = if self.limit.is_empty() {
-            None
-        } else {
-            self.limit.parse().ok()
-        };
-        self.refresh_plan();
-    }
-
-    fn update_selection(&mut self) {
-        match self.request.operation {
-            AppOperation::Combinations { .. } => {
-                if let Ok(choose) = self.choose.parse() {
-                    self.request.operation = AppOperation::Combinations { choose };
-                }
-            }
-            AppOperation::Variations { .. } => {
-                if let Ok(length) = self.length.parse() {
-                    self.request.operation = AppOperation::Variations { length };
-                }
-            }
-            _ => {}
-        }
-        self.refresh_plan();
     }
 }
 
+fn save_profile_file(path: &Path, mut profile: Profile) -> Result<(), String> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create profile folder: {error}"))?;
+    }
+    relativize_profile_paths(&mut profile, parent);
+    let mut text = serde_json::to_string_pretty(&profile)
+        .map_err(|error| format!("could not encode profile: {error}"))?;
+    text.push('\n');
+    if text.len() as u64 > MAX_PROFILE_BYTES {
+        return Err(format!(
+            "profile exceeds the {} byte limit",
+            MAX_PROFILE_BYTES
+        ));
+    }
+    fs::write(path, text).map_err(|error| format!("could not save profile: {error}"))
+}
+
+fn load_profile_file(path: &Path) -> Result<Profile, String> {
+    let text = read_bounded_utf8(path, MAX_PROFILE_BYTES)?;
+    let mut profile: Profile = serde_json::from_str(&text)
+        .map_err(|error| format!("profile is not valid JSON: {error}"))?;
+    if profile.version != PROFILE_VERSION {
+        return Err(format!(
+            "unsupported profile version {}; expected {}",
+            profile.version, PROFILE_VERSION
+        ));
+    }
+    resolve_profile_paths(
+        &mut profile,
+        path.parent().unwrap_or_else(|| Path::new(".")),
+    );
+    Ok(profile)
+}
+
+fn read_bounded_utf8(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|error| format!("could not read file: {error}"))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("could not read file: {error}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!("file exceeds the {max_bytes} byte limit"));
+    }
+    String::from_utf8(bytes).map_err(|_| "file is not valid UTF-8".into())
+}
+
+fn resolve_profile_paths(profile: &mut Profile, base: &Path) {
+    profile.output_path = resolve_path(&profile.output_path, base);
+    profile.combine.template_file = resolve_path(&profile.combine.template_file, base);
+    for path in profile.combine.file_sources.iter_mut().flatten() {
+        *path = resolve_path(path, base);
+    }
+    profile.join.left_path = resolve_path(&profile.join.left_path, base);
+    profile.join.right_path = resolve_path(&profile.join.right_path, base);
+}
+
+fn relativize_profile_paths(profile: &mut Profile, base: &Path) {
+    profile.output_path = stored_path(&profile.output_path, base);
+    profile.combine.template_file = stored_path(&profile.combine.template_file, base);
+    for path in profile.combine.file_sources.iter_mut().flatten() {
+        *path = stored_path(path, base);
+    }
+    profile.join.left_path = stored_path(&profile.join.left_path, base);
+    profile.join.right_path = stored_path(&profile.join.right_path, base);
+}
+
+fn resolve_path(path: &str, base: &Path) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        path.into()
+    } else {
+        base.join(candidate).to_string_lossy().into_owned()
+    }
+}
+
+fn stored_path(path: &str, base: &Path) -> String {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        if let Ok(relative) = candidate.strip_prefix(base) {
+            return relative.to_string_lossy().into_owned();
+        }
+    }
+    path.into()
+}
+
+fn load_preferences() -> Preferences {
+    preferences_path()
+        .and_then(|path| read_bounded_utf8(&path, MAX_PROFILE_BYTES).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_preferences(preferences: &Preferences) -> Result<(), String> {
+    let Some(path) = preferences_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create config folder: {error}"))?;
+    }
+    let text = serde_json::to_string_pretty(preferences)
+        .map_err(|error| format!("could not encode preferences: {error}"))?;
+    fs::write(path, format!("{text}\n"))
+        .map_err(|error| format!("could not save preferences: {error}"))
+}
+
+fn remember_profile(preferences: &mut Preferences, path: &Path) {
+    let path = path.to_string_lossy().into_owned();
+    preferences.recent_profiles.retain(|item| item != &path);
+    preferences.recent_profiles.insert(0, path.clone());
+    preferences.recent_profiles.truncate(8);
+    preferences.last_profile = Some(path);
+}
+
+fn preferences_path() -> Option<PathBuf> {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(
+            PathBuf::from(appdata)
+                .join("Combinator")
+                .join("preferences.json"),
+        );
+    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("combinator").join("preferences.json"))
+}
+
+fn is_text_field(field: Field) -> bool {
+    !matches!(
+        field,
+        Field::InputFormat
+            | Field::FileMode
+            | Field::Operation
+            | Field::ZipPolicy
+            | Field::Format
+            | Field::TemplateFileMode
+            | Field::JoinFormat
+            | Field::JoinKind
+            | Field::Reverse
+            | Field::ReverseFields
+            | Field::LeanJsonl
+            | Field::Overwrite
+    )
+}
+
+fn field_from_focus(focus: Focus) -> Option<Field> {
+    match focus {
+        Focus::Field(field) => Some(field),
+        _ => None,
+    }
+}
+
+fn panel_scroll(lines: &[String], height: u16) -> u16 {
+    let content_height = usize::from(height.saturating_sub(2)).max(1);
+    let focused = lines
+        .iter()
+        .position(|line| line.starts_with("▶ ") || line.starts_with("[▶"))
+        .or_else(|| lines.iter().position(|line| line.starts_with("• ")));
+    focused
+        .map(|index| index.saturating_sub(content_height / 2))
+        .unwrap_or(0)
+        .try_into()
+        .unwrap_or(u16::MAX)
+}
+
+fn terminal_text(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars().peekable();
+    let mut rendered = String::new();
+    for character in chars.by_ref().take(max_chars) {
+        match character {
+            '\n' => rendered.push_str("\\n"),
+            '\r' => rendered.push_str("\\r"),
+            '\t' => rendered.push_str("\\t"),
+            character if character.is_control() => {
+                write!(rendered, "\\u{{{:x}}}", u32::from(character))
+                    .expect("writing to a string cannot fail");
+            }
+            character => rendered.push(character),
+        }
+    }
+    if chars.peek().is_some() {
+        rendered.push('…');
+    }
+    rendered
+}
+
+fn plan_row(metrics: &[(&str, String)], width: usize) -> String {
+    const SEPARATOR: &str = " │ ";
+    if metrics.is_empty() || width == 0 {
+        return String::new();
+    }
+    let separators = SEPARATOR.chars().count().saturating_mul(metrics.len() - 1);
+    let cell_width = width.saturating_sub(separators) / metrics.len();
+    metrics
+        .iter()
+        .map(|(label, value)| {
+            let text = format!("{label}: {value}");
+            let mut chars = text.chars();
+            let mut cell = chars.by_ref().take(cell_width).collect::<String>();
+            if chars.next().is_some() && cell_width > 0 {
+                cell.pop();
+                cell.push('…');
+            }
+            format!("{cell:<cell_width$}")
+        })
+        .collect::<Vec<_>>()
+        .join(SEPARATOR)
+}
+
+fn format_uses_field_separator(format: Format) -> bool {
+    matches!(format, Format::Text | Format::Jsonl | Format::Nul)
+}
+
+fn checkbox(value: bool) -> &'static str {
+    if value {
+        "x"
+    } else {
+        " "
+    }
+}
+fn split_values(value: &str) -> Vec<String> {
+    value
+        .split([';', '\n'])
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .collect()
+}
 fn operation_label(operation: AppOperation) -> &'static str {
     match operation {
         AppOperation::Product { .. } => "Product",
@@ -1060,9 +2052,64 @@ fn operation_label(operation: AppOperation) -> &'static str {
         AppOperation::Variations { .. } => "Variations",
     }
 }
-
-fn next_operation(operation: AppOperation) -> AppOperation {
-    match operation {
+fn format_label(format: Format) -> &'static str {
+    match format {
+        Format::Text => "Text",
+        Format::Jsonl => "JSONL",
+        Format::Csv => "CSV",
+        Format::Tsv => "TSV",
+        Format::Nul => "NUL",
+    }
+}
+fn zip_policy_label(policy: UnequalPolicy) -> &'static str {
+    match policy {
+        UnequalPolicy::Error => "Error",
+        UnequalPolicy::Truncate => "Truncate",
+        UnequalPolicy::Cycle => "Cycle",
+    }
+}
+fn input_format_label(format: InputFormat) -> &'static str {
+    match format {
+        InputFormat::Lines => "Lines",
+        InputFormat::Csv => "CSV",
+        InputFormat::Tsv => "TSV",
+        InputFormat::Nul => "NUL",
+    }
+}
+fn join_format_label(format: JoinFormat) -> &'static str {
+    match format {
+        JoinFormat::Csv => "CSV",
+        JoinFormat::Tsv => "TSV",
+        JoinFormat::Jsonl => "JSONL",
+    }
+}
+fn join_kind_label(kind: JoinKind) -> &'static str {
+    match kind {
+        JoinKind::Inner => "Inner",
+        JoinKind::Left => "Left",
+        JoinKind::Full => "Full",
+        JoinKind::Anti => "Anti",
+    }
+}
+fn focus_label(focus: Focus) -> &'static str {
+    match focus {
+        Focus::Page(Page::Combine) => "Combine tab",
+        Focus::Page(Page::Join) => "Join tab",
+        Focus::Page(Page::Settings) => "Settings tab",
+        Focus::Action(Action::AddList) => "Add list",
+        Focus::Action(Action::RemoveList) => "Remove list",
+        Focus::Action(Action::Preview) => "Preview",
+        Focus::Action(Action::Generate) => "Generate",
+        Focus::Action(Action::Cancel) => "Cancel",
+        Focus::Action(Action::New) => "New",
+        Focus::Action(Action::OpenProfile) => "Open profile",
+        Focus::Action(Action::SaveProfile) => "Save profile",
+        Focus::Action(Action::SaveAsProfile) => "Save profile as",
+        Focus::Field(_) => "form field",
+    }
+}
+fn next_operation(value: AppOperation) -> AppOperation {
+    match value {
         AppOperation::Product { .. } => AppOperation::Zip {
             on_unequal: UnequalPolicy::Error,
         },
@@ -1075,9 +2122,8 @@ fn next_operation(operation: AppOperation) -> AppOperation {
         },
     }
 }
-
-fn next_format(format: Format) -> Format {
-    match format {
+fn next_format(value: Format) -> Format {
+    match value {
         Format::Text => Format::Jsonl,
         Format::Jsonl => Format::Csv,
         Format::Csv => Format::Tsv,
@@ -1085,37 +2131,229 @@ fn next_format(format: Format) -> Format {
         Format::Nul => Format::Text,
     }
 }
-
-fn next_zip_policy(policy: UnequalPolicy) -> UnequalPolicy {
-    match policy {
+fn next_zip_policy(value: UnequalPolicy) -> UnequalPolicy {
+    match value {
         UnequalPolicy::Error => UnequalPolicy::Truncate,
         UnequalPolicy::Truncate => UnequalPolicy::Cycle,
         UnequalPolicy::Cycle => UnequalPolicy::Error,
     }
 }
-
-fn next_input_format(format: InputFormat) -> InputFormat {
-    match format {
+fn next_input_format(value: InputFormat) -> InputFormat {
+    match value {
         InputFormat::Lines => InputFormat::Csv,
         InputFormat::Csv => InputFormat::Tsv,
         InputFormat::Tsv => InputFormat::Nul,
         InputFormat::Nul => InputFormat::Lines,
     }
 }
-
-fn next_join_format(format: JoinFormat) -> JoinFormat {
-    match format {
+fn next_join_format(value: JoinFormat) -> JoinFormat {
+    match value {
         JoinFormat::Csv => JoinFormat::Tsv,
         JoinFormat::Tsv => JoinFormat::Jsonl,
         JoinFormat::Jsonl => JoinFormat::Csv,
     }
 }
-
-fn next_join_kind(kind: JoinKind) -> JoinKind {
-    match kind {
+fn next_join_kind(value: JoinKind) -> JoinKind {
+    match value {
         JoinKind::Inner => JoinKind::Left,
         JoinKind::Left => JoinKind::Full,
         JoinKind::Full => JoinKind::Anti,
         JoinKind::Anti => JoinKind::Inner,
+    }
+}
+
+fn parse_input_format(value: &str) -> InputFormat {
+    match value {
+        "CSV" => InputFormat::Csv,
+        "TSV" => InputFormat::Tsv,
+        "NUL" => InputFormat::Nul,
+        _ => InputFormat::Lines,
+    }
+}
+fn parse_format(value: &str) -> Format {
+    match value {
+        "JSONL" => Format::Jsonl,
+        "CSV" => Format::Csv,
+        "TSV" => Format::Tsv,
+        "NUL" => Format::Nul,
+        _ => Format::Text,
+    }
+}
+fn parse_operation(value: &str, choose: usize, length: usize) -> AppOperation {
+    match value {
+        "Zip" => AppOperation::Zip {
+            on_unequal: UnequalPolicy::Error,
+        },
+        "Concat" => AppOperation::Concat,
+        "Permutations" => AppOperation::Permutations,
+        "Combinations" => AppOperation::Combinations { choose },
+        "Variations" => AppOperation::Variations { length },
+        _ => AppOperation::Product {
+            reverse_fields: false,
+        },
+    }
+}
+fn parse_zip_policy(value: &str) -> UnequalPolicy {
+    match value {
+        "Truncate" => UnequalPolicy::Truncate,
+        "Cycle" => UnequalPolicy::Cycle,
+        _ => UnequalPolicy::Error,
+    }
+}
+fn parse_join_format(value: &str) -> JoinFormat {
+    match value {
+        "TSV" => JoinFormat::Tsv,
+        "JSONL" => JoinFormat::Jsonl,
+        _ => JoinFormat::Csv,
+    }
+}
+fn parse_join_kind(value: &str) -> JoinKind {
+    match value {
+        "Left" => JoinKind::Left,
+        "Full" => JoinKind::Full,
+        "Anti" => JoinKind::Anti,
+        _ => JoinKind::Inner,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    #[test]
+    fn pages_render_at_standard_terminal_size() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut app = App::default();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let combine_text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(combine_text.contains("Inputs"));
+        assert!(combine_text.contains("Data Selection and pre-processing"));
+        assert!(combine_text.contains("Execution plan"));
+        assert!(combine_text.contains("Lists: 1"));
+        assert!(combine_text.contains("Combos: Exact(1)"));
+        assert!(combine_text.contains("Selected: 1"));
+        assert!(combine_text.contains("Bytes: Bytes(1)"));
+        assert!(combine_text.contains("Lists: [ previous"));
+        assert!(combine_text.contains("] next"));
+        app.page = Page::Join;
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let join_text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(join_text.contains("Structured join"));
+        assert!(join_text.contains("Preview"));
+        app.page = Page::Settings;
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+
+    #[test]
+    fn small_terminal_renders_resize_guidance() {
+        let mut terminal = Terminal::new(TestBackend::new(60, 15)).unwrap();
+        let app = App::default();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("terminal too small"));
+        assert!(text.contains("100 columns"));
+    }
+
+    #[test]
+    fn tab_order_reaches_selector_and_button_controls() {
+        let mut app = App::default();
+        assert_eq!(app.focus, Focus::Page(Page::Combine));
+        let format_index = app
+            .focus_order()
+            .iter()
+            .position(|focus| *focus == Focus::Field(Field::Format))
+            .unwrap();
+        for _ in 0..format_index {
+            app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        }
+        assert_eq!(app.focus, Focus::Field(Field::Format));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.format, Format::Jsonl);
+        app.focus = Focus::Action(Action::AddList);
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.sources.len(), 2);
+    }
+
+    #[test]
+    fn combine_form_drives_shared_plan_and_preview_workflow() {
+        let mut app = App::default();
+        app.sources[0].value = "red,blue".into();
+        app.add_list();
+        app.sources[1].value = "car,bike".into();
+        app.field_separator = "-".into();
+        app.sync_requests();
+        app.refresh_plan();
+        app.run_preview();
+        assert_eq!(app.plan.as_ref().map(|plan| plan.records_to_emit), Some(4));
+        assert_eq!(app.records.len(), 4);
+        assert_eq!(app.records[0].value, "red-car\n");
+    }
+
+    #[test]
+    fn profile_actions_round_trip_keyboard_state() {
+        let path = std::env::temp_dir().join(format!(
+            "combinator-tui-profile-{}.json",
+            std::process::id()
+        ));
+        let mut app = App::default();
+        app.sources[0].value = "one,two".into();
+        app.field_separator = "|".into();
+        save_profile_file(&path, app.to_profile()).unwrap();
+
+        let mut loaded = App::default();
+        loaded.apply_profile(load_profile_file(&path).unwrap());
+        assert_eq!(loaded.sources[0].value, "one,two");
+        assert_eq!(loaded.field_separator, "|");
+        assert!(loaded.error.is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn focus_order_contains_only_controls_visible_for_current_choices() {
+        let mut app = App::default();
+        assert!(!app.focus_order().contains(&Focus::Field(Field::ZipPolicy)));
+        assert!(app
+            .focus_order()
+            .contains(&Focus::Field(Field::ReverseFields)));
+        assert!(!app.focus_order().contains(&Focus::Field(Field::LeanJsonl)));
+
+        app.operation = AppOperation::Zip {
+            on_unequal: UnequalPolicy::Error,
+        };
+        app.format = Format::Jsonl;
+        let order = app.focus_order();
+        assert!(order.contains(&Focus::Field(Field::ZipPolicy)));
+        assert!(!order.contains(&Focus::Field(Field::ReverseFields)));
+        assert!(order.contains(&Focus::Field(Field::LeanJsonl)));
+        assert!(order.contains(&Focus::Field(Field::Names)));
+    }
+
+    #[test]
+    fn terminal_text_escapes_controls_and_bounds_rendering() {
+        assert_eq!(
+            terminal_text("safe\x1b[31m\nnext", 64),
+            "safe\\u{1b}[31m\\nnext"
+        );
+        assert_eq!(terminal_text("abcdef", 3), "abc…");
     }
 }

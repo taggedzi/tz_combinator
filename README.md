@@ -32,8 +32,26 @@ When a profile is saved, paths inside the profile folder are stored relative
 to that folder. This makes a profile and its input files portable as a small
 project/workspace. Paths outside the folder remain absolute. The Settings tab
 also stores a default output directory and up to eight recent profiles in the
-platform user configuration directory. These preferences are GUI-only and do
-not affect CLI invocations.
+platform user configuration directory. The GUI and TUI share these preferences;
+they do not affect CLI invocations.
+
+## Keyboard-first TUI
+
+The terminal interface is available as `combinator-tui`:
+
+```text
+cargo run -p combinator-tui --locked
+```
+
+It follows the desktop GUI's Combine, Join, and Settings page structure. The
+TUI is keyboard-first: Tab and Shift-Tab move through every visible field,
+selector, checkbox, and action; Enter edits or activates the focused control.
+The same pages provide execution plans, bounded previews, background file
+generation, progress, cancellation, and resource-limit controls. Shortcuts
+include `p` preview, `g` generate, `c` cancel, `a`/`d` list management, and
+`1`/`2`/`3` page selection. `Ctrl+O`, `Ctrl+S`, and `Ctrl+N` operate on the
+profile path configured in Settings; Page Up and Page Down scroll the preview.
+Profiles use the same format as the GUI and can be opened in either interface.
 
 ## Building / installing
 

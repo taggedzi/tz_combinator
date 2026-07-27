@@ -1628,6 +1628,7 @@ impl CombinatorGui {
                     .map(|format| input_format_label(*format).to_string())
                     .collect(),
                 list_delimiter: self.list_delimiter.clone(),
+                field_separator: self.request.field_separator.clone(),
                 template: self.template.clone(),
                 template_file: self.template_file.clone(),
                 template_file_mode: self.template_file_mode,
@@ -1691,6 +1692,7 @@ impl CombinatorGui {
             self.file_formats.push(InputFormat::Lines);
         }
         self.list_delimiter = combine.list_delimiter;
+        self.request.field_separator = combine.field_separator;
         self.template = combine.template;
         self.template_file = combine.template_file;
         self.template_file_mode = combine.template_file_mode;

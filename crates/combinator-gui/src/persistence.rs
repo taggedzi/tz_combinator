@@ -21,6 +21,8 @@ pub struct CombineProfile {
     pub file_sources: Vec<Option<String>>,
     pub file_formats: Vec<String>,
     pub list_delimiter: String,
+    #[serde(default)]
+    pub field_separator: String,
     pub template: String,
     pub template_file: String,
     pub template_file_mode: bool,
@@ -201,6 +203,7 @@ mod tests {
             active_mode: "join".into(),
             combine: CombineProfile {
                 file_sources: vec![Some("input.csv".into())],
+                field_separator: "|".into(),
                 ..Default::default()
             },
             join: JoinProfile {
@@ -228,6 +231,7 @@ mod tests {
                 folder.join("input.csv").to_string_lossy().into_owned()
             )]
         );
+        assert_eq!(loaded.combine.field_separator, "|");
         assert_eq!(
             loaded.join.left_path,
             folder.join("left.csv").to_string_lossy()

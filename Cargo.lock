@@ -765,6 +765,8 @@ version = "0.1.0"
 dependencies = [
  "combinator-app",
  "ratatui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
