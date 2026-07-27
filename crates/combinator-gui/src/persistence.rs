@@ -1,0 +1,264 @@
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub const PROFILE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Profile {
+    pub version: u32,
+    pub active_mode: String,
+    pub combine: CombineProfile,
+    pub join: JoinProfile,
+    pub output_path: String,
+    pub overwrite: bool,
+    pub limits: LimitsProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CombineProfile {
+    pub sources: Vec<String>,
+    pub file_sources: Vec<Option<String>>,
+    pub file_formats: Vec<String>,
+    pub list_delimiter: String,
+    pub template: String,
+    pub template_file: String,
+    pub template_file_mode: bool,
+    pub transforms: String,
+    pub filters: String,
+    pub names: String,
+    pub offset: String,
+    pub limit: String,
+    pub choose: String,
+    pub length: String,
+    pub operation: String,
+    pub format: String,
+    pub zip_policy: String,
+    pub reverse: bool,
+    pub reverse_fields: bool,
+    pub lean_jsonl: bool,
+    pub shard_index: String,
+    pub shard_count: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct JoinProfile {
+    pub left_path: String,
+    pub right_path: String,
+    pub left_key: String,
+    pub right_key: String,
+    pub format: String,
+    pub kind: String,
+    pub offset: String,
+    pub limit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LimitsProfile {
+    pub max_combinations: String,
+    pub max_output_bytes: String,
+    pub max_input_bytes: String,
+    pub max_item_bytes: String,
+    pub max_items_per_list: String,
+    pub max_total_items: String,
+    pub max_lists: String,
+    pub timeout_ms: String,
+    pub join_max_records: String,
+    pub join_fanout: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Preferences {
+    pub recent_profiles: Vec<String>,
+    pub last_profile: Option<String>,
+    pub default_output_directory: Option<String>,
+}
+
+pub fn load_profile(path: &Path) -> Result<Profile, String> {
+    let text =
+        fs::read_to_string(path).map_err(|error| format!("could not read profile: {error}"))?;
+    let profile: Profile = serde_json::from_str(&text)
+        .map_err(|error| format!("profile is not valid JSON: {error}"))?;
+    if profile.version != PROFILE_VERSION {
+        return Err(format!(
+            "unsupported profile version {}; expected {}",
+            profile.version, PROFILE_VERSION
+        ));
+    }
+    Ok(resolve_profile_paths(
+        profile,
+        path.parent().unwrap_or_else(|| Path::new(".")),
+    ))
+}
+
+pub fn save_profile(path: &Path, mut profile: Profile) -> Result<(), String> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if !parent.as_os_str().is_empty() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create profile folder: {error}"))?;
+    }
+    profile = relativize_profile_paths(profile, parent);
+    let text = serde_json::to_string_pretty(&profile)
+        .map_err(|error| format!("could not encode profile: {error}"))?;
+    fs::write(path, format!("{text}\n")).map_err(|error| format!("could not save profile: {error}"))
+}
+
+pub fn load_preferences() -> Preferences {
+    preferences_path()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_preferences(preferences: &Preferences) -> Result<(), String> {
+    let Some(path) = preferences_path() else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create config folder: {error}"))?;
+    }
+    let text = serde_json::to_string_pretty(preferences)
+        .map_err(|error| format!("could not encode preferences: {error}"))?;
+    fs::write(path, format!("{text}\n"))
+        .map_err(|error| format!("could not save preferences: {error}"))
+}
+
+pub fn remember_profile(mut preferences: Preferences, path: &Path) -> Preferences {
+    let path = path.to_string_lossy().into_owned();
+    preferences.recent_profiles.retain(|item| item != &path);
+    preferences.recent_profiles.insert(0, path.clone());
+    preferences.recent_profiles.truncate(8);
+    preferences.last_profile = Some(path);
+    preferences
+}
+
+fn preferences_path() -> Option<PathBuf> {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return Some(
+            PathBuf::from(appdata)
+                .join("Combinator")
+                .join("preferences.json"),
+        );
+    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .map(|base| base.join("combinator").join("preferences.json"))
+}
+
+fn resolve(path: &str, base: &Path) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        path.to_string()
+    } else {
+        base.join(candidate).to_string_lossy().into_owned()
+    }
+}
+
+fn store(path: &str, base: &Path) -> String {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        if let Ok(relative) = candidate.strip_prefix(base) {
+            return relative.to_string_lossy().into_owned();
+        }
+    }
+    path.to_string()
+}
+
+fn resolve_profile_paths(mut profile: Profile, base: &Path) -> Profile {
+    profile.output_path = resolve(&profile.output_path, base);
+    profile.combine.template_file = resolve(&profile.combine.template_file, base);
+    for path in profile.combine.file_sources.iter_mut().flatten() {
+        *path = resolve(path, base);
+    }
+    profile.join.left_path = resolve(&profile.join.left_path, base);
+    profile.join.right_path = resolve(&profile.join.right_path, base);
+    profile
+}
+
+fn relativize_profile_paths(mut profile: Profile, base: &Path) -> Profile {
+    profile.output_path = store(&profile.output_path, base);
+    profile.combine.template_file = store(&profile.combine.template_file, base);
+    for path in profile.combine.file_sources.iter_mut().flatten() {
+        *path = store(path, base);
+    }
+    profile.join.left_path = store(&profile.join.left_path, base);
+    profile.join.right_path = store(&profile.join.right_path, base);
+    profile
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> Profile {
+        Profile {
+            version: PROFILE_VERSION,
+            active_mode: "join".into(),
+            combine: CombineProfile {
+                file_sources: vec![Some("input.csv".into())],
+                ..Default::default()
+            },
+            join: JoinProfile {
+                left_path: "left.csv".into(),
+                right_path: "right.csv".into(),
+                ..Default::default()
+            },
+            output_path: "output.txt".into(),
+            overwrite: true,
+            limits: LimitsProfile::default(),
+        }
+    }
+
+    #[test]
+    fn profile_round_trip_preserves_relative_paths() {
+        let folder =
+            std::env::temp_dir().join(format!("combinator-profile-test-{}", std::process::id()));
+        let path = folder.join("profile.json");
+        save_profile(&path, sample()).expect("save profile");
+        let loaded = load_profile(&path).expect("load profile");
+        assert_eq!(loaded.active_mode, "join");
+        assert_eq!(
+            loaded.combine.file_sources,
+            vec![Some(
+                folder.join("input.csv").to_string_lossy().into_owned()
+            )]
+        );
+        assert_eq!(
+            loaded.join.left_path,
+            folder.join("left.csv").to_string_lossy()
+        );
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn unsupported_profile_version_is_rejected() {
+        let folder =
+            std::env::temp_dir().join(format!("combinator-version-test-{}", std::process::id()));
+        let path = folder.join("profile.json");
+        fs::create_dir_all(&folder).expect("create test folder");
+        let mut profile = sample();
+        profile.version = PROFILE_VERSION + 1;
+        fs::write(&path, serde_json::to_string(&profile).unwrap()).expect("write profile");
+        assert!(load_profile(&path)
+            .unwrap_err()
+            .contains("unsupported profile version"));
+        let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn recent_profiles_are_unique_and_bounded() {
+        let mut preferences = Preferences::default();
+        for index in 0..10 {
+            preferences =
+                remember_profile(preferences, Path::new(&format!("profile-{index}.json")));
+        }
+        preferences = remember_profile(preferences, Path::new("profile-5.json"));
+        assert_eq!(preferences.recent_profiles.len(), 8);
+        assert_eq!(preferences.recent_profiles[0], "profile-5.json");
+    }
+}

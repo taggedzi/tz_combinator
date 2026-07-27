@@ -755,6 +755,8 @@ dependencies = [
  "combinator-app",
  "iced",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

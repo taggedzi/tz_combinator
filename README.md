@@ -20,6 +20,21 @@ This repository is a Cargo workspace with three crates:
 For the durable references, see [CLI usage](docs/cli-usage.md) and
 [library usage](docs/library-usage.md).
 
+## GUI profiles and preferences
+
+The desktop GUI is available as `combinator-gui`. Its `New`, `Open…`, `Save`,
+and `Save as…` controls manage versioned JSON profiles containing both the
+Combine and Join workflows, shared safety limits, and the active tab. Loading
+a profile only restores the form; preview and file generation remain explicit
+user actions.
+
+When a profile is saved, paths inside the profile folder are stored relative
+to that folder. This makes a profile and its input files portable as a small
+project/workspace. Paths outside the folder remain absolute. The Settings tab
+also stores a default output directory and up to eight recent profiles in the
+platform user configuration directory. These preferences are GUI-only and do
+not affect CLI invocations.
+
 ## Building / installing
 
 ```

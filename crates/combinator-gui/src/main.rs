@@ -9,6 +9,11 @@ use iced::widget::{
     Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Subscription, Task};
+mod persistence;
+use persistence::{
+    CombineProfile, JoinProfile, LimitsProfile, Preferences, Profile, PROFILE_VERSION,
+};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -59,6 +64,8 @@ struct CombinatorGui {
     names_editor: text_editor::Content,
     offset: String,
     limit: String,
+    join_offset: String,
+    join_limit: String,
     choose: String,
     length: String,
     plan: Option<ExecutionPlan>,
@@ -85,10 +92,23 @@ struct CombinatorGui {
     progress: Option<Arc<Mutex<ProgressEvent>>>,
     status: String,
     error: Option<String>,
+    preferences: Preferences,
+    current_profile: Option<PathBuf>,
 }
 
 impl Default for CombinatorGui {
     fn default() -> Self {
+        let preferences = persistence::load_preferences();
+        let default_output = preferences
+            .default_output_directory
+            .as_deref()
+            .map(|directory| {
+                Path::new(directory)
+                    .join("output.txt")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(|| "output.txt".to_string());
         let mut state = Self {
             join_mode: false,
             request: ProductRequest::default(),
@@ -108,13 +128,15 @@ impl Default for CombinatorGui {
             names_editor: text_editor::Content::new(),
             offset: "0".into(),
             limit: String::new(),
+            join_offset: "0".into(),
+            join_limit: String::new(),
             choose: "2".into(),
             length: "2".into(),
             plan: None,
             join_plan: None,
             settings_mode: false,
             records: Vec::new(),
-            output_path: "output.txt".to_string(),
+            output_path: default_output,
             overwrite: false,
             max_combinations: "10000000".to_string(),
             max_output_bytes: "1073741824".to_string(),
@@ -134,6 +156,8 @@ impl Default for CombinatorGui {
             progress: None,
             status: "Add values to begin".to_string(),
             error: None,
+            current_profile: None,
+            preferences,
         };
         state.refresh_plan();
         state
@@ -206,6 +230,18 @@ enum Message {
     Cancel,
     Tick,
     GenerationFinished(Result<ProgressEvent, combinator_app::AppError>),
+    NewProfile,
+    BrowseOpenProfile,
+    ProfilePicked(Option<String>),
+    BrowseSaveProfile,
+    SaveProfile,
+    SaveProfileAsPicked(Option<String>),
+    ProfileLoaded(Box<Result<(Profile, String), String>>),
+    ProfileSaved(Result<String, String>),
+    OpenRecent(String),
+    DefaultOutputDirectoryChanged(String),
+    BrowseDefaultOutput,
+    DefaultOutputPicked(Option<String>),
 }
 
 fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
@@ -474,13 +510,13 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::JoinOffsetChanged(value) => {
-            state.offset = value.clone();
+            state.join_offset = value.clone();
             state.join_request.offset = value.parse().unwrap_or(0);
             state.refresh_plan();
             Task::none()
         }
         Message::JoinLimitChanged(value) => {
-            state.limit = value.clone();
+            state.join_limit = value.clone();
             state.join_request.limit = if value.is_empty() {
                 None
             } else {
@@ -712,7 +748,115 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::NewProfile => {
+            let preferences = state.preferences.clone();
+            *state = CombinatorGui::default();
+            state.preferences = preferences;
+            state.current_profile = None;
+            state.status = "New profile".into();
+            Task::none()
+        }
+        Message::BrowseOpenProfile => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Open Combinator profile")
+                    .add_filter("Combinator profile", &["json", "combinator"])
+                    .pick_file()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::ProfilePicked,
+        ),
+        Message::ProfilePicked(path) => match path {
+            Some(path) => load_profile_task(path),
+            None => Task::none(),
+        },
+        Message::BrowseSaveProfile => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Save Combinator profile")
+                    .add_filter("Combinator profile", &["json", "combinator"])
+                    .set_file_name("combinator-profile.json")
+                    .save_file()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::SaveProfileAsPicked,
+        ),
+        Message::SaveProfile => match state.current_profile.clone() {
+            Some(path) => save_profile_task(state, path),
+            None => Task::perform(async {}, |_| Message::BrowseSaveProfile),
+        },
+        Message::SaveProfileAsPicked(path) => match path {
+            Some(path) => save_profile_task(state, PathBuf::from(path)),
+            None => Task::none(),
+        },
+        Message::ProfileLoaded(result) => match *result {
+            Ok((profile, path)) => {
+                state.apply_profile(profile, PathBuf::from(&path));
+                state.status = format!("Loaded profile {}", path);
+                Task::none()
+            }
+            Err(error) => {
+                state.error = Some(error);
+                Task::none()
+            }
+        },
+        Message::ProfileSaved(result) => match result {
+            Ok(path) => {
+                let path = PathBuf::from(&path);
+                state.current_profile = Some(path.clone());
+                state.preferences = persistence::remember_profile(state.preferences.clone(), &path);
+                let _ = persistence::save_preferences(&state.preferences);
+                state.status = format!("Saved profile {}", path.display());
+                state.error = None;
+                Task::none()
+            }
+            Err(error) => {
+                state.error = Some(error);
+                Task::none()
+            }
+        },
+        Message::OpenRecent(path) => load_profile_task(path),
+        Message::DefaultOutputDirectoryChanged(value) => {
+            state.preferences.default_output_directory =
+                (!value.trim().is_empty()).then_some(value);
+            let _ = persistence::save_preferences(&state.preferences);
+            Task::none()
+        }
+        Message::BrowseDefaultOutput => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Select default output folder")
+                    .pick_folder()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::DefaultOutputPicked,
+        ),
+        Message::DefaultOutputPicked(path) => {
+            state.preferences.default_output_directory = path;
+            let _ = persistence::save_preferences(&state.preferences);
+            Task::none()
+        }
     }
+}
+
+fn load_profile_task(path: String) -> Task<Message> {
+    Task::perform(
+        async move {
+            let path_buf = PathBuf::from(&path);
+            persistence::load_profile(&path_buf).map(|profile| (profile, path))
+        },
+        |result| Message::ProfileLoaded(Box::new(result)),
+    )
+}
+
+fn save_profile_task(state: &CombinatorGui, path: PathBuf) -> Task<Message> {
+    let profile = state.to_profile();
+    Task::perform(
+        async move {
+            persistence::save_profile(&path, profile).map(|()| path.to_string_lossy().into_owned())
+        },
+        Message::ProfileSaved,
+    )
 }
 
 fn subscription(state: &CombinatorGui) -> Subscription<Message> {
@@ -752,7 +896,18 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
     };
     container(
         column![
-            row![combine_tab, join_tab, settings_tab].spacing(8),
+            row![
+                combine_tab,
+                join_tab,
+                settings_tab,
+                Space::new().width(Length::Fill),
+                button("New").on_press(Message::NewProfile),
+                button("Open…").on_press(Message::BrowseOpenProfile),
+                button("Save").on_press(Message::SaveProfile),
+                button("Save as…").on_press(Message::BrowseSaveProfile),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
             content
         ]
         .spacing(12),
@@ -1060,9 +1215,41 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
 }
 
 fn settings_view(state: &CombinatorGui) -> Element<'_, Message> {
+    let default_output = state
+        .preferences
+        .default_output_directory
+        .as_deref()
+        .unwrap_or_default();
+    let recent_profiles: Vec<Element<'_, Message>> = state
+        .preferences
+        .recent_profiles
+        .iter()
+        .map(|path| {
+            button(text(path))
+                .on_press(Message::OpenRecent(path.clone()))
+                .into()
+        })
+        .collect();
     let content = column![
         text("Settings").size(24),
         text("Shared execution policy and safety limits used by Combine and Join."),
+        text("Application preferences").size(18),
+        row![
+            labeled_text_input(
+                "Default output directory",
+                default_output,
+                Message::DefaultOutputDirectoryChanged,
+            ),
+            button("Browse…").on_press(Message::BrowseDefaultOutput),
+        ]
+        .spacing(8)
+        .align_y(Alignment::End),
+        text("Recent profiles").size(16),
+        if recent_profiles.is_empty() {
+            column![text("No profiles saved yet.")]
+        } else {
+            column(recent_profiles).spacing(4)
+        },
         text("Shared limits").size(18),
         labeled_text_input(
             "Maximum output bytes",
@@ -1341,8 +1528,12 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
         .spacing(8)
         .width(Length::Fill),
         row![
-            labeled_text_input("Offset", &state.offset, Message::JoinOffsetChanged),
-            labeled_text_input("Limit (optional)", &state.limit, Message::JoinLimitChanged),
+            labeled_text_input("Offset", &state.join_offset, Message::JoinOffsetChanged),
+            labeled_text_input(
+                "Limit (optional)",
+                &state.join_limit,
+                Message::JoinLimitChanged
+            ),
         ]
         .spacing(8)
         .width(Length::Fill),
@@ -1414,6 +1605,216 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
 }
 
 impl CombinatorGui {
+    fn to_profile(&self) -> Profile {
+        let reverse_fields = matches!(
+            self.request.operation,
+            AppOperation::Product {
+                reverse_fields: true
+            }
+        );
+        let zip_policy = match self.request.operation {
+            AppOperation::Zip { on_unequal } => zip_policy_label(on_unequal).to_string(),
+            _ => "Error".to_string(),
+        };
+        Profile {
+            version: PROFILE_VERSION,
+            active_mode: if self.join_mode { "join" } else { "combine" }.into(),
+            combine: CombineProfile {
+                sources: self.sources.clone(),
+                file_sources: self.file_sources.clone(),
+                file_formats: self
+                    .file_formats
+                    .iter()
+                    .map(|format| input_format_label(*format).to_string())
+                    .collect(),
+                list_delimiter: self.list_delimiter.clone(),
+                template: self.template.clone(),
+                template_file: self.template_file.clone(),
+                template_file_mode: self.template_file_mode,
+                transforms: self.transforms.clone(),
+                filters: self.filters.clone(),
+                names: self.names.clone(),
+                offset: self.offset.clone(),
+                limit: self.limit.clone(),
+                choose: self.choose.clone(),
+                length: self.length.clone(),
+                operation: operation_label(self.request.operation).to_string(),
+                format: format_label(self.request.format).to_string(),
+                zip_policy,
+                reverse: self.request.options.reverse,
+                reverse_fields,
+                lean_jsonl: self.lean_jsonl,
+                shard_index: self.shard_index.clone(),
+                shard_count: self.shard_count.clone(),
+            },
+            join: JoinProfile {
+                left_path: self.join_request.left_path.clone(),
+                right_path: self.join_request.right_path.clone(),
+                left_key: self.join_request.left_key.clone(),
+                right_key: self.join_request.right_key.clone(),
+                format: join_format_label(self.join_request.format).to_string(),
+                kind: join_kind_label(self.join_request.kind).to_string(),
+                offset: self.join_offset.clone(),
+                limit: self.join_limit.clone(),
+            },
+            output_path: self.output_path.clone(),
+            overwrite: self.overwrite,
+            limits: LimitsProfile {
+                max_combinations: self.max_combinations.clone(),
+                max_output_bytes: self.max_output_bytes.clone(),
+                max_input_bytes: self.max_input_bytes.clone(),
+                max_item_bytes: self.max_item_bytes.clone(),
+                max_items_per_list: self.max_items_per_list.clone(),
+                max_total_items: self.max_total_items.clone(),
+                max_lists: self.max_lists.clone(),
+                timeout_ms: self.timeout_ms.clone(),
+                join_max_records: self.join_max_records.clone(),
+                join_fanout: self.join_fanout.clone(),
+            },
+        }
+    }
+
+    fn apply_profile(&mut self, profile: Profile, path: PathBuf) {
+        let combine = profile.combine;
+        let join = profile.join;
+        self.sources = combine.sources;
+        self.file_sources = combine.file_sources;
+        while self.file_sources.len() < self.sources.len() {
+            self.file_sources.push(None);
+        }
+        self.file_formats = combine
+            .file_formats
+            .iter()
+            .map(|format| parse_input_format(format))
+            .collect();
+        while self.file_formats.len() < self.sources.len() {
+            self.file_formats.push(InputFormat::Lines);
+        }
+        self.list_delimiter = combine.list_delimiter;
+        self.template = combine.template;
+        self.template_file = combine.template_file;
+        self.template_file_mode = combine.template_file_mode;
+        self.transforms = combine.transforms;
+        self.transforms_editor = text_editor::Content::with_text(&self.transforms);
+        self.filters = combine.filters;
+        self.filters_editor = text_editor::Content::with_text(&self.filters);
+        self.names = combine.names;
+        self.names_editor = text_editor::Content::with_text(&self.names);
+        self.offset = combine.offset;
+        self.limit = combine.limit;
+        self.choose = combine.choose;
+        self.length = combine.length;
+        self.request.format = parse_format(&combine.format);
+        self.lean_jsonl = combine.lean_jsonl;
+        self.request.lean_jsonl = combine.lean_jsonl;
+        self.request.options.reverse = combine.reverse;
+        self.shard_index = combine.shard_index;
+        self.shard_count = combine.shard_count;
+        self.request.operation = match combine.operation.as_str() {
+            "Zip" => AppOperation::Zip {
+                on_unequal: parse_zip_policy(&combine.zip_policy),
+            },
+            "Concat" => AppOperation::Concat,
+            "Permutations" => AppOperation::Permutations,
+            "Combinations" => AppOperation::Combinations {
+                choose: self.choose.parse().unwrap_or(2),
+            },
+            "Variations" => AppOperation::Variations {
+                length: self.length.parse().unwrap_or(2),
+            },
+            _ => AppOperation::Product {
+                reverse_fields: combine.reverse_fields,
+            },
+        };
+        self.join_request.left_path = join.left_path;
+        self.join_request.right_path = join.right_path;
+        self.join_request.left_key = join.left_key;
+        self.join_request.right_key = join.right_key;
+        self.join_request.format = parse_join_format(&join.format);
+        self.join_request.kind = parse_join_kind(&join.kind);
+        self.join_request.offset = join.offset.parse().unwrap_or(0);
+        self.join_request.limit = (!join.limit.is_empty()).then(|| join.limit.parse().unwrap_or(0));
+        self.join_offset = join.offset;
+        self.join_limit = join.limit;
+        self.output_path = profile.output_path;
+        self.overwrite = profile.overwrite;
+        self.max_combinations = profile.limits.max_combinations;
+        self.max_output_bytes = profile.limits.max_output_bytes;
+        self.max_input_bytes = profile.limits.max_input_bytes;
+        self.max_item_bytes = profile.limits.max_item_bytes;
+        self.max_items_per_list = profile.limits.max_items_per_list;
+        self.max_total_items = profile.limits.max_total_items;
+        self.max_lists = profile.limits.max_lists;
+        self.timeout_ms = profile.limits.timeout_ms;
+        self.join_max_records = profile.limits.join_max_records;
+        self.join_fanout = profile.limits.join_fanout;
+        self.sync_request_fields();
+        self.join_mode = profile.active_mode == "join";
+        self.settings_mode = false;
+        self.current_profile = Some(path.clone());
+        self.preferences = persistence::remember_profile(self.preferences.clone(), &path);
+        let _ = persistence::save_preferences(&self.preferences);
+        self.records.clear();
+        self.error = None;
+        self.refresh_plan();
+    }
+
+    fn sync_request_fields(&mut self) {
+        self.request.max_combinations = self.max_combinations.parse().unwrap_or(0);
+        self.request.max_output_bytes = self.max_output_bytes.parse().unwrap_or(0);
+        self.request.max_input_bytes = self.max_input_bytes.parse().unwrap_or(0);
+        self.request.max_item_bytes = self.max_item_bytes.parse().unwrap_or(0);
+        self.request.max_items_per_list = self.max_items_per_list.parse().unwrap_or(0);
+        self.request.max_total_items = self.max_total_items.parse().unwrap_or(0);
+        self.request.max_lists = self.max_lists.parse().unwrap_or(0);
+        self.request.timeout_ms =
+            (!self.timeout_ms.is_empty()).then(|| self.timeout_ms.parse().unwrap_or(0));
+        self.join_request.max_output_bytes = self.request.max_output_bytes;
+        self.join_request.max_input_bytes = self.request.max_input_bytes;
+        self.join_request.max_item_bytes = self.request.max_item_bytes;
+        self.join_request.max_join_records = self.join_max_records.parse().unwrap_or(0);
+        self.join_request.max_join_key_fanout = self.join_fanout.parse().unwrap_or(0);
+        self.join_request.timeout_ms = self.request.timeout_ms;
+        self.request.options.offset = self.offset.parse().unwrap_or(0);
+        self.request.options.limit =
+            (!self.limit.is_empty()).then(|| self.limit.parse().unwrap_or(0));
+        self.request.shard_index =
+            (!self.shard_index.is_empty()).then(|| self.shard_index.parse().unwrap_or(0));
+        self.request.shard_count =
+            (!self.shard_count.is_empty()).then(|| self.shard_count.parse().unwrap_or(0));
+        self.request.template = if self.template_file_mode {
+            None
+        } else {
+            (!self.template.is_empty()).then(|| self.template.clone())
+        };
+        self.request.template_file = if self.template_file_mode {
+            (!self.template_file.is_empty()).then(|| self.template_file.clone())
+        } else {
+            None
+        };
+        self.request.transforms = self
+            .transforms
+            .lines()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .collect();
+        self.request.filters = self
+            .filters
+            .lines()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .collect();
+        self.request.names = self
+            .names
+            .lines()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+
     fn refresh_plan(&mut self) {
         if self.join_mode {
             if self.join_request.left_path.trim().is_empty()

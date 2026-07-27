@@ -16,3 +16,5 @@ path = "src/main.rs"
 combinator-app = { version = "0.1.0", path = "../combinator-app" }
 iced = { version = "0.14", features = ["tokio"] }
 rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
