@@ -67,8 +67,11 @@ Profiles use the same format as the GUI and can be opened in either interface.
 cargo build --release --locked
 ```
 
-The binary is produced at `target/release/combinator` (`target/release/combinator.exe`
-on Windows). Run it directly, or install it onto your `PATH`:
+This builds the workspace. The command-line binary is produced at
+`target/release/combinator` (`target/release/combinator.exe` on Windows). The
+TUI and GUI binaries are produced alongside it as `combinator-tui` and
+`combinator-gui` (with `.exe` suffixes on Windows). Run the CLI directly, or
+install it onto your `PATH`:
 
 ```
 cargo install --path crates/combinator-cli
@@ -79,12 +82,18 @@ workspace manifests).
 
 ## Compatibility and release scope
 
-The supported integration boundary is the `combinator` CLI. GitHub binary
-releases support Linux and Windows x86_64. Within a major version, flags and
-defaults, exit-code meanings, existing error codes, stdout/stderr ownership,
-and the meanings of JSONL fields remain compatible. New JSONL fields are
-additive. The machine-readable `--explain --format json` response is versioned
-by `schema_version`; incompatible changes require a new schema version.
+Version `0.1.0` is the first early public release. The project has automated
+tests and release validation, but has not yet received broad independent
+testing. The CLI is the supported integration boundary and should be preferred
+for automation. The library crates, GUI, and TUI are usable, but their APIs and
+behavior may still change before the `1.0.0` release.
+
+GitHub binary releases currently support Linux and Windows x86_64 and include
+the CLI, TUI, and GUI binaries. Within a major version, CLI flags and defaults,
+exit-code meanings, existing error codes, stdout/stderr ownership, and the
+meanings of JSONL fields remain compatible. New JSONL fields are additive. The
+machine-readable `--explain --format json` response is versioned by
+`schema_version`; incompatible changes require a new schema version.
 
 Product ordering and sharding use version 1 deterministic algorithms, with
 stable ordering for stable inputs. `combinator-core` is an internal/future

@@ -42,7 +42,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Build release binary
-        run: cargo build --package combinator-cli --release --locked
+        run: cargo build --workspace --release --locked
 
       - name: Smoke test release binary on Linux
         if: runner.os == 'Linux'
@@ -76,7 +76,9 @@ jobs:
           archive_version="${version//\//-}"
           mkdir -p dist
           cp target/release/combinator dist/combinator
-          tar -C dist -czf "combinator-${archive_version}-linux-x86_64.tar.gz" combinator
+          cp target/release/combinator-tui dist/combinator-tui
+          cp target/release/combinator-gui dist/combinator-gui
+          tar -C dist -czf "combinator-${archive_version}-linux-x86_64.tar.gz" combinator combinator-tui combinator-gui
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
@@ -86,7 +88,9 @@ jobs:
           $archiveVersion = $version -replace '[\\/]', '-'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target/release/combinator.exe dist/combinator.exe
-          Compress-Archive -Path dist/combinator.exe -DestinationPath "combinator-$archiveVersion-windows-x86_64.zip"
+          Copy-Item target/release/combinator-tui.exe dist/combinator-tui.exe
+          Copy-Item target/release/combinator-gui.exe dist/combinator-gui.exe
+          Compress-Archive -Path dist/combinator.exe,dist/combinator-tui.exe,dist/combinator-gui.exe -DestinationPath "combinator-$archiveVersion-windows-x86_64.zip"
 
       - name: Upload release archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -182,10 +186,14 @@ jobs:
           archive_version="${version//\//-}"
           archives=(dist/combinator-"$archive_version"-linux-x86_64.tar.gz dist/combinator-"$archive_version"-windows-x86_64.zip)
           for archive in "${archives[@]}"; do test -f "$archive"; done
-          tar -tzf "${archives[0]}" | grep -Fxq combinator
-          test "$(tar -tzf "${archives[0]}" | wc -l)" -eq 1
-          unzip -Z1 "${archives[1]}" | grep -Fxq combinator.exe
-          test "$(unzip -Z1 "${archives[1]}" | wc -l)" -eq 1
+          for binary in combinator combinator-tui combinator-gui; do
+            tar -tzf "${archives[0]}" | grep -Fxq "$binary"
+          done
+          test "$(tar -tzf "${archives[0]}" | wc -l)" -eq 3
+          for binary in combinator.exe combinator-tui.exe combinator-gui.exe; do
+            unzip -Z1 "${archives[1]}" | grep -Fxq "$binary"
+          done
+          test "$(unzip -Z1 "${archives[1]}" | wc -l)" -eq 3
           ! find dist -type f \( -name '*.tmp' -o -name '*.key' -o -name '.env' -o -name 'credentials*' \) -print -quit | grep -q .
 
       - name: Generate checksums
