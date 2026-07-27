@@ -1,14 +1,12 @@
 # tz_combinator
 
-`combinator` is a command-line tool that streams the **ordered Cartesian
-product** of two or more text lists. Give it N lists and it emits every
-combination — one item from each list, in list order — as plain text or JSON
-Lines. It is the reference implementation of the combination engine and the
-single, stable interface that downstream consumers (a future REST API, GUI,
-or web frontend) are expected to code against: spawn the binary, read its
-stdout, and you get the same contract every caller gets.
+`combinator` is a command-line tool for safely combining one or more text
+lists and structured data. It supports Cartesian products, positional zip,
+concatenation, permutations, combinations, variations, and keyed joins. It
+streams plain text, JSON Lines, CSV, TSV, or NUL-delimited output and provides
+the reference CLI contract used by the application, GUI, and TUI.
 
-This repository is a Cargo workspace with three crates:
+This repository is a Cargo workspace with six crates:
 
 - `crates/combinator-core` — the engine: counting, size estimation, and the
   lazy product iterator. No I/O.
@@ -16,6 +14,10 @@ This repository is a Cargo workspace with three crates:
   gathering, formatting, pre-flight checks, and stdout/stderr/file output.
 - `crates/combinator-codecs` — bounded, reusable input, template, output, and
   estimate codecs used by the CLI.
+- `crates/combinator-app` — shared application workflows for planning,
+  previewing, streaming, joins, and safe file output.
+- `crates/combinator-gui` — the desktop GUI.
+- `crates/combinator-tui` — the keyboard-first terminal UI.
 
 For the durable references, see [CLI usage](docs/cli-usage.md) and
 [library usage](docs/library-usage.md).
@@ -34,6 +36,12 @@ project/workspace. Paths outside the folder remain absolute. The Settings tab
 also stores a default output directory and up to eight recent profiles in the
 platform user configuration directory. The GUI and TUI share these preferences;
 they do not affect CLI invocations.
+
+Run the GUI from the workspace with:
+
+```text
+cargo run -p combinator-gui --locked
+```
 
 ## Keyboard-first TUI
 
@@ -160,7 +168,8 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--count-only` | off | Print only the total combination count and exit; generates nothing. |
 | `--explain` | off | Print a validated execution summary and generate nothing. Use `--format json` for JSON. |
 | `--dry-run` | off | Validate the request and print a summary without generating records or creating output files. |
-| `--format <text\|jsonl\|csv\|tsv\|nul>` | `text` | Output format. CSV/TSV quote fields as needed; NUL terminates each record with `\\0`. |
+| `--filter <EXPR>` | none | Apply a typed candidate filter; repeatable and ANDed. |
+| `--format <text\|jsonl\|json\|csv\|tsv\|nul>` | `text` | Output format. `json` is for `--explain`/`--dry-run`; CSV/TSV quote fields as needed; NUL terminates each record with `\\0`. |
 | `--lean-output` | off | In `jsonl` format, emit only the value as a bare JSON string per line, instead of the full `{"i":...,"value":...,"fields":[...]}` object. |
 | `-o, --output <PATH>` | stdout | Write output to this file instead of stdout. |
 | `-f, --overwrite` (alias `--force`) | off | Allow overwriting `--output` if it already exists. |
@@ -178,6 +187,7 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--quiet` | off | Suppress non-fatal warnings; fatal diagnostics are unaffected. |
 | `--warnings-as-errors` | off | Convert the first non-fatal warning into a runtime error. Takes precedence over `--quiet`. |
 | `--summary` | off | Print `records` and `bytes` to stderr after successful generated output. |
+| `--timeout-ms <MS>` | none | Cancel execution after the specified number of milliseconds. |
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
 
@@ -188,7 +198,7 @@ definition and keep stdout free of diagnostics.
 
 ## Operation modes
 
-`combinator` supports four operations. The bare invocation with no
+`combinator` supports seven operation modes. The bare invocation with no
 subcommand — everything shown above — means `product`, and behaves
 identically to `combinator product ...`:
 
@@ -197,6 +207,9 @@ combinator [OPTIONS]           # product (default)
 combinator product [OPTIONS]   # same as above, explicit
 combinator zip [OPTIONS]       # positional pairing
 combinator concat [OPTIONS]    # sequential concatenation
+combinator permutations [OPTIONS]  # orderings of one input pool
+combinator combinations [OPTIONS]  # unordered selections
+combinator variations [OPTIONS]    # ordered selections without replacement
 combinator join [OPTIONS]      # keyed relational join
 ```
 
@@ -227,6 +240,11 @@ combinator join [OPTIONS]      # keyed relational join
   y
   z
   ```
+- **`permutations`** — emits every ordering of one input pool.
+- **`combinations`** — emits unordered selections of a fixed size using
+  `--choose`.
+- **`variations`** — emits ordered selections without replacement using
+  `--length`.
 
 Flags that only make sense for one mode are rejected at parse time (exit 2)
 under the others: `--reverse-fields` only exists under `product`,

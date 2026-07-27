@@ -1,12 +1,15 @@
 # tz_combinator Feature Roadmap
 
 This document converts the product recommendations for `tz_combinator` into an
-implementation roadmap. It is intentionally a planning document: the features
-below are proposed work, not claims about functionality that already exists.
+implementation roadmap. It is a historical planning document, not the current
+feature reference. For implemented behavior, use the [README](../README.md),
+[CLI usage](cli-usage.md), and [library usage](library-usage.md) documents.
 
-The current product remains the compatibility baseline: a bounded,
-deterministic Cartesian-product generator with text and JSONL output, stable
-diagnostic codes, explicit resource limits, and safe file-output behavior.
+The current product has grown beyond the original Cartesian-product baseline:
+it now includes multiple list operations, structured joins, reusable
+application workflows, a desktop GUI, and a terminal UI. The compatibility
+baseline remains bounded deterministic processing with stable diagnostics,
+explicit resource limits, and safe file-output behavior.
 
 ## Product direction
 

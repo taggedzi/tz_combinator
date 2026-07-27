@@ -1,9 +1,10 @@
 # Library usage
 
-The workspace exposes two reusable crates. `combinator-core` contains lazy,
-CLI-independent algorithms. `combinator-codecs` contains bounded input,
-template, output, and size-estimation adapters. Neither crate owns paths,
-processes, terminals, or command-line parsing.
+The workspace exposes three reusable library crates. `combinator-core` contains
+lazy, CLI-independent algorithms. `combinator-codecs` contains bounded input,
+template, output, and size-estimation adapters. `combinator-app` provides
+shared planning, preview, streaming, join, and safe file-output workflows.
+These libraries do not own terminal event loops or command-line parsing.
 
 Add the crates from the workspace:
 
