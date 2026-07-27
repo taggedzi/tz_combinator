@@ -169,7 +169,7 @@ Transforms are repeated and applied left-to-right per list:
 `trim`, `skip-empty`, `deduplicate`, `reject-duplicates`, `sort`, `lower`,
 `upper`, `filter=GLOB`, `replace=FROM=>TO`, `prefix=VALUE`, and
 `suffix=VALUE`. Typed `--filter` predicates are repeated and ANDed:
-`eq:N=VALUE`, `prefix:N=VALUE`, `suffix:N=VALUE`, `glob:N=PATTERN`, and
+`eq:N=VALUE`, `neq:N=VALUE`, `prefix:N=VALUE`, `suffix:N=VALUE`, `glob:N=PATTERN`, and
 `length:N=MIN..MAX`.
 
 ```text

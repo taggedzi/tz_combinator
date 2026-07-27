@@ -602,7 +602,7 @@ AND predicates together:
 combinator permutations --list aa,ab,ba --filter prefix:0=a --filter length:0=2..2
 ```
 
-Supported forms are `eq:FIELD=VALUE`, `prefix:FIELD=VALUE`,
+Supported forms are `eq:FIELD=VALUE`, `neq:FIELD=VALUE`, `prefix:FIELD=VALUE`,
 `suffix:FIELD=VALUE`, `glob:FIELD=PATTERN` (`*` and `?`), and
 `length:FIELD=MIN..MAX`. Filtered `--count-only`, `--explain`, and `--dry-run`
 requests are rejected because those modes must not report an unevaluated

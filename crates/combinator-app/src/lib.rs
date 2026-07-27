@@ -576,6 +576,10 @@ fn parse_filter(expression: &str) -> Result<Constraint, AppError> {
             field,
             value: value.to_string(),
         },
+        "neq" => Constraint::NotEquals {
+            field,
+            value: value.to_string(),
+        },
         "prefix" => Constraint::Prefix {
             field,
             value: value.to_string(),
@@ -922,6 +926,15 @@ mod tests {
         let records = preview(&request, 10).unwrap();
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|record| record.fields[0] == "blue"));
+    }
+
+    #[test]
+    fn not_equal_filters_exclude_matching_records() {
+        let mut request = request();
+        request.filters = vec!["neq:0=blue".into()];
+        let records = preview(&request, 10).unwrap();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|record| record.fields[0] != "blue"));
     }
 
     #[test]

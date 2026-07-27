@@ -917,7 +917,7 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
         operation_control,
         operation_controls(state),
         labeled_text_editor(
-            "Filters, one per line (eq:0=value, prefix:1=x)",
+            "Filters, one per line (eq, neq, prefix, suffix, glob, length)",
             &state.filters_editor,
             Message::FiltersChanged,
         ),

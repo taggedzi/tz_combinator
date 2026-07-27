@@ -132,7 +132,7 @@ pub struct CommonArgs {
     #[arg(long = "transform")]
     pub transforms: Vec<String>,
 
-    /// Typed candidate filter. Forms: eq:N=VALUE, prefix:N=VALUE,
+    /// Typed candidate filter. Forms: eq:N=VALUE, neq:N=VALUE, prefix:N=VALUE,
     /// suffix:N=VALUE, glob:N=PATTERN, length:N=MIN..MAX. Repeatable; all
     /// filters must match.
     #[arg(long = "filter")]

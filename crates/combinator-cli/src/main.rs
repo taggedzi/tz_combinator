@@ -465,6 +465,10 @@ fn parse_filter(expression: &str) -> Result<Constraint, AppError> {
             field,
             value: value.to_string(),
         },
+        "neq" => Constraint::NotEquals {
+            field,
+            value: value.to_string(),
+        },
         "prefix" => Constraint::Prefix {
             field,
             value: value.to_string(),
@@ -498,7 +502,7 @@ fn parse_filter(expression: &str) -> Result<Constraint, AppError> {
         _ => {
             return Err(AppError::usage(
                 "FILTER_INVALID",
-                "unsupported filter kind; use eq, prefix, suffix, glob, or length",
+                "unsupported filter kind; use eq, neq, prefix, suffix, glob, or length",
             ))
         }
     };

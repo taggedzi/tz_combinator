@@ -13,6 +13,10 @@ pub enum Constraint {
         field: usize,
         value: String,
     },
+    NotEquals {
+        field: usize,
+        value: String,
+    },
     Prefix {
         field: usize,
         value: String,
@@ -57,6 +61,7 @@ impl Constraint {
         }
         match self {
             Self::Equals { value, .. }
+            | Self::NotEquals { value, .. }
             | Self::Prefix { value, .. }
             | Self::Suffix { value, .. } => {
                 if value.len() > MAX_LITERAL_BYTES {
@@ -105,6 +110,7 @@ impl Constraint {
         Ok(match self {
             Self::True => true,
             Self::Equals { field, value } => fields.get(*field).is_some_and(|v| *v == value),
+            Self::NotEquals { field, value } => fields.get(*field).is_some_and(|v| *v != value),
             Self::Prefix { field, value } => {
                 fields.get(*field).is_some_and(|v| v.starts_with(value))
             }
@@ -185,6 +191,18 @@ mod tests {
             pattern: "a*".into()
         }
         .matches(&["abc"])
+        .unwrap());
+        assert!(Constraint::NotEquals {
+            field: 0,
+            value: "red".into(),
+        }
+        .matches(&["blue"])
+        .unwrap());
+        assert!(!Constraint::NotEquals {
+            field: 0,
+            value: "red".into(),
+        }
+        .matches(&["red"])
         .unwrap());
     }
     #[test]

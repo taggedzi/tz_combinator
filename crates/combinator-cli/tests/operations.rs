@@ -60,6 +60,13 @@ fn filters_are_typed_and_repeated_filters_are_conjunctive() {
 }
 
 #[test]
+fn not_equal_filter_excludes_matching_field_values() {
+    let output = run(&["product", "--list", "red,blue", "--filter", "neq:0=red"]);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "blue\n");
+}
+
+#[test]
 fn malformed_filters_and_filtered_count_are_usage_errors() {
     let malformed = run(&["permutations", "--list", "a,b", "--filter", "unknown:0=x"]);
     assert_eq!(malformed.status.code(), Some(2));
