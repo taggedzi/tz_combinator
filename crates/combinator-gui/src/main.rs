@@ -175,7 +175,7 @@ enum Message {
     JoinOffsetChanged(String),
     JoinLimitChanged(String),
     FormatChanged(Format),
-    ZipPolicyNext,
+    ZipPolicyChanged(UnequalPolicy),
     ReverseChanged(bool),
     ReverseFieldsChanged(bool),
     OffsetChanged(String),
@@ -509,11 +509,9 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::ZipPolicyNext => {
-            if let AppOperation::Zip { on_unequal } = state.request.operation {
-                state.request.operation = AppOperation::Zip {
-                    on_unequal: next_zip_policy(on_unequal),
-                };
+        Message::ZipPolicyChanged(policy) => {
+            if matches!(state.request.operation, AppOperation::Zip { .. }) {
+                state.request.operation = AppOperation::Zip { on_unequal: policy };
                 state.refresh_plan();
             }
             Task::none()
@@ -911,10 +909,38 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
     } else {
         text("").into()
     };
+    let field_separator_control: Element<'_, Message> =
+        if format_uses_field_separator(state.request.format) {
+            labeled_text_input(
+                "Field separator",
+                &state.request.field_separator,
+                Message::SeparatorChanged,
+            )
+        } else {
+            text("").into()
+        };
+    let unequal_control: Element<'_, Message> =
+        if let AppOperation::Zip { on_unequal } = state.request.operation {
+            column![
+                text("Unequal list lengths").size(13),
+                pick_list(
+                    ZIP_POLICY_OPTIONS,
+                    Some(zip_policy_label(on_unequal)),
+                    |label| Message::ZipPolicyChanged(parse_zip_policy(label)),
+                )
+                .width(Length::Fill),
+            ]
+            .spacing(4)
+            .width(Length::Fill)
+            .into()
+        } else {
+            text("").into()
+        };
 
     let plan_content = column![
         text("Data Selection and pre-processing").size(20),
         operation_control,
+        unequal_control,
         operation_controls(state),
         labeled_text_editor(
             "Filters, one per line (eq, neq, prefix, suffix, glob, length)",
@@ -927,11 +953,6 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
             text("Reverse output"),
         ]
         .spacing(8),
-        labeled_text_input(
-            "Field separator",
-            &state.request.field_separator,
-            Message::SeparatorChanged,
-        ),
         labeled_text_editor(
             "Transforms, one per line",
             &state.transforms_editor,
@@ -939,6 +960,7 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
         ),
         template_control,
         row![format_control].width(Length::Fill),
+        field_separator_control,
         lean_jsonl_control,
         names_control,
         text("Sharding").size(16),
@@ -1104,7 +1126,7 @@ fn plan_view(plan: Option<&ExecutionPlan>) -> Element<'static, Message> {
                 plan_metric("Items", format!("{:?}", plan.list_lengths)),
                 plan_metric("Combinations", format!("{:?}", plan.total_combinations)),
             ]
-            .spacing(16)
+            .spacing(12)
             .width(Length::Fill),
             row![
                 plan_metric("Selected", plan.records_to_emit.to_string()),
@@ -1114,21 +1136,37 @@ fn plan_view(plan: Option<&ExecutionPlan>) -> Element<'static, Message> {
                 ),
                 plan_metric("Warnings", plan.warnings.len().to_string()),
             ]
-            .spacing(16)
+            .spacing(12)
             .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .width(Length::Fill)
         .into(),
         None => text("No valid plan yet").into(),
     };
-    container(content).padding(12).width(Length::Fill).into()
+    container(content)
+        .padding(8)
+        .style(plan_card_style)
+        .width(Length::Fill)
+        .into()
 }
 
 fn plan_metric(label: &'static str, value: String) -> Element<'static, Message> {
-    container(column![text(label).size(12), text(value).size(15)].spacing(3))
+    container(column![text(label).size(12), text(value).size(14)].spacing(2))
         .width(Length::Fill)
         .into()
+}
+
+fn plan_card_style(_theme: &iced::Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(Color::from_rgb8(43, 45, 50))),
+        border: Border {
+            width: 1.0,
+            radius: 6.0.into(),
+            color: Color::from_rgb8(88, 91, 99),
+        },
+        ..Default::default()
+    }
 }
 
 fn status_view(state: &CombinatorGui) -> Element<'_, Message> {
@@ -1196,21 +1234,25 @@ fn join_plan_view(plan: Option<&JoinPlan>) -> Element<'static, Message> {
                 plan_metric("Left records", plan.left_records.to_string()),
                 plan_metric("Right records", plan.right_records.to_string()),
             ]
-            .spacing(16)
+            .spacing(12)
             .width(Length::Fill),
             row![
                 plan_metric("Join records", plan.total_records.to_string()),
                 plan_metric("Selected", plan.records_to_emit.to_string()),
             ]
-            .spacing(16)
+            .spacing(12)
             .width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(6)
         .width(Length::Fill)
         .into(),
         None => text("No valid join plan").into(),
     };
-    container(content).padding(12).width(Length::Fill).into()
+    container(content)
+        .padding(8)
+        .style(plan_card_style)
+        .width(Length::Fill)
+        .into()
 }
 
 fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
@@ -1531,6 +1573,10 @@ fn format_label(format: Format) -> &'static str {
     }
 }
 
+fn format_uses_field_separator(format: Format) -> bool {
+    matches!(format, Format::Text | Format::Jsonl | Format::Nul)
+}
+
 fn parse_format(label: &str) -> Format {
     match label {
         "JSONL" => Format::Jsonl,
@@ -1541,11 +1587,21 @@ fn parse_format(label: &str) -> Format {
     }
 }
 
-fn next_zip_policy(policy: UnequalPolicy) -> UnequalPolicy {
+const ZIP_POLICY_OPTIONS: &[&str] = &["Error", "Truncate", "Cycle"];
+
+fn zip_policy_label(policy: UnequalPolicy) -> &'static str {
     match policy {
-        UnequalPolicy::Error => UnequalPolicy::Truncate,
-        UnequalPolicy::Truncate => UnequalPolicy::Cycle,
-        UnequalPolicy::Cycle => UnequalPolicy::Error,
+        UnequalPolicy::Error => "Error",
+        UnequalPolicy::Truncate => "Truncate",
+        UnequalPolicy::Cycle => "Cycle",
+    }
+}
+
+fn parse_zip_policy(label: &str) -> UnequalPolicy {
+    match label {
+        "Truncate" => UnequalPolicy::Truncate,
+        "Cycle" => UnequalPolicy::Cycle,
+        _ => UnequalPolicy::Error,
     }
 }
 
@@ -1602,11 +1658,6 @@ fn operation_controls(state: &CombinatorGui) -> Element<'_, Message> {
                 text("Leftmost first"),
             ]
             .spacing(8),
-        );
-    }
-    if let AppOperation::Zip { on_unequal } = state.request.operation {
-        controls = controls.push(
-            button(text(format!("Unequal: {:?}", on_unequal))).on_press(Message::ZipPolicyNext),
         );
     }
     if let AppOperation::Combinations { choose: _ } = state.request.operation {
