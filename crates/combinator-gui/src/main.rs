@@ -153,6 +153,10 @@ enum Message {
     TemplatePicked(Option<String>),
     BrowseOutput,
     OutputPicked(Option<String>),
+    BrowseJoinLeft,
+    JoinLeftPicked(Option<String>),
+    BrowseJoinRight,
+    JoinRightPicked(Option<String>),
     FileFormatChanged(usize, InputFormat),
     ListDelimiterChanged(String),
     SeparatorChanged(String),
@@ -170,8 +174,8 @@ enum Message {
     JoinRightChanged(String),
     JoinLeftKeyChanged(String),
     JoinRightKeyChanged(String),
-    JoinFormatNext,
-    JoinKindNext,
+    JoinFormatChanged(JoinFormat),
+    JoinKindChanged(JoinKind),
     JoinOffsetChanged(String),
     JoinLimitChanged(String),
     FormatChanged(Format),
@@ -293,6 +297,38 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
         Message::OutputPicked(path) => {
             if let Some(path) = path {
                 state.output_path = path;
+            }
+            Task::none()
+        }
+        Message::BrowseJoinLeft => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Select left join file")
+                    .pick_file()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::JoinLeftPicked,
+        ),
+        Message::JoinLeftPicked(path) => {
+            if let Some(path) = path {
+                state.join_request.left_path = path;
+                state.refresh_plan();
+            }
+            Task::none()
+        }
+        Message::BrowseJoinRight => Task::perform(
+            async {
+                rfd::FileDialog::new()
+                    .set_title("Select right join file")
+                    .pick_file()
+                    .map(|path| path.to_string_lossy().into_owned())
+            },
+            Message::JoinRightPicked,
+        ),
+        Message::JoinRightPicked(path) => {
+            if let Some(path) = path {
+                state.join_request.right_path = path;
+                state.refresh_plan();
             }
             Task::none()
         }
@@ -427,13 +463,13 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.refresh_plan();
             Task::none()
         }
-        Message::JoinFormatNext => {
-            state.join_request.format = next_join_format(state.join_request.format);
+        Message::JoinFormatChanged(format) => {
+            state.join_request.format = format;
             state.refresh_plan();
             Task::none()
         }
-        Message::JoinKindNext => {
-            state.join_request.kind = next_join_kind(state.join_request.kind);
+        Message::JoinKindChanged(kind) => {
+            state.join_request.kind = kind;
             state.refresh_plan();
             Task::none()
         }
@@ -1091,6 +1127,12 @@ fn settings_view(state: &CombinatorGui) -> Element<'_, Message> {
         .width(Length::Fill),
     ]
     .spacing(12)
+    .padding(Padding {
+        top: 0.0,
+        right: 24.0,
+        bottom: 0.0,
+        left: 0.0,
+    })
     .width(Length::Fill);
     container(scrollable(content).height(Length::Fill))
         .width(Length::Fill)
@@ -1258,16 +1300,32 @@ fn join_plan_view(plan: Option<&JoinPlan>) -> Element<'static, Message> {
 fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
     let content = column![
         text("Structured join").size(24),
-        labeled_text_input(
-            "Left CSV/TSV/JSONL path",
-            &state.join_request.left_path,
-            Message::JoinLeftChanged,
-        ),
-        labeled_text_input(
-            "Right CSV/TSV/JSONL path",
-            &state.join_request.right_path,
-            Message::JoinRightChanged,
-        ),
+        row![
+            labeled_text_input(
+                "Left CSV/TSV/JSONL path",
+                &state.join_request.left_path,
+                Message::JoinLeftChanged,
+            ),
+            button("Browse…")
+                .on_press(Message::BrowseJoinLeft)
+                .width(Length::Shrink),
+        ]
+        .spacing(8)
+        .align_y(Alignment::End)
+        .width(Length::Fill),
+        row![
+            labeled_text_input(
+                "Right CSV/TSV/JSONL path",
+                &state.join_request.right_path,
+                Message::JoinRightChanged,
+            ),
+            button("Browse…")
+                .on_press(Message::BrowseJoinRight)
+                .width(Length::Shrink),
+        ]
+        .spacing(8)
+        .align_y(Alignment::End)
+        .width(Length::Fill),
         row![
             labeled_text_input(
                 "Left key",
@@ -1283,22 +1341,48 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
         .spacing(8)
         .width(Length::Fill),
         row![
-            button(text(format!("Format: {:?}", state.join_request.format)))
-                .on_press(Message::JoinFormatNext),
-            button(text(format!("Type: {:?}", state.join_request.kind)))
-                .on_press(Message::JoinKindNext),
-        ]
-        .spacing(8),
-        labeled_text_input(
-            "Output file path",
-            &state.output_path,
-            Message::OutputPathChanged
-        ),
-        row![
             labeled_text_input("Offset", &state.offset, Message::JoinOffsetChanged),
             labeled_text_input("Limit (optional)", &state.limit, Message::JoinLimitChanged),
         ]
         .spacing(8)
+        .width(Length::Fill),
+        row![
+            column![
+                text("Format").size(13),
+                pick_list(
+                    JOIN_FORMAT_OPTIONS,
+                    Some(join_format_label(state.join_request.format)),
+                    |label| Message::JoinFormatChanged(parse_join_format(label)),
+                )
+                .width(Length::Fill),
+            ]
+            .spacing(4)
+            .width(Length::Fill),
+            column![
+                text("Type").size(13),
+                pick_list(
+                    JOIN_KIND_OPTIONS,
+                    Some(join_kind_label(state.join_request.kind)),
+                    |label| Message::JoinKindChanged(parse_join_kind(label)),
+                )
+                .width(Length::Fill),
+            ]
+            .spacing(4)
+            .width(Length::Fill),
+        ]
+        .spacing(8),
+        row![
+            labeled_text_input(
+                "Output file path",
+                &state.output_path,
+                Message::OutputPathChanged,
+            ),
+            button("Browse…")
+                .on_press(Message::BrowseOutput)
+                .width(Length::Shrink),
+        ]
+        .spacing(8)
+        .align_y(Alignment::End)
         .width(Length::Fill),
         text("Execution plan").size(18),
         join_plan_view(state.join_plan.as_ref()),
@@ -1306,6 +1390,12 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
         preview_view(&state.records),
     ]
     .spacing(12)
+    .padding(Padding {
+        top: 0.0,
+        right: 24.0,
+        bottom: 0.0,
+        left: 0.0,
+    })
     .width(Length::Fill);
     container(
         column![
@@ -1326,6 +1416,22 @@ fn join_view(state: &CombinatorGui) -> Element<'_, Message> {
 impl CombinatorGui {
     fn refresh_plan(&mut self) {
         if self.join_mode {
+            if self.join_request.left_path.trim().is_empty()
+                || self.join_request.right_path.trim().is_empty()
+            {
+                self.join_plan = None;
+                self.error = None;
+                self.status = "Enter both join input paths".into();
+                return;
+            }
+            if self.join_request.left_key.trim().is_empty()
+                || self.join_request.right_key.trim().is_empty()
+            {
+                self.join_plan = None;
+                self.error = None;
+                self.status = "Enter both join keys".into();
+                return;
+            }
             match join_plan(&self.join_request) {
                 Ok(plan) => {
                     self.join_plan = Some(plan);
@@ -1625,20 +1731,41 @@ fn parse_input_format(label: &str) -> InputFormat {
     }
 }
 
-fn next_join_format(format: JoinFormat) -> JoinFormat {
+const JOIN_FORMAT_OPTIONS: &[&str] = &["CSV", "TSV", "JSONL"];
+
+fn join_format_label(format: JoinFormat) -> &'static str {
     match format {
-        JoinFormat::Csv => JoinFormat::Tsv,
-        JoinFormat::Tsv => JoinFormat::Jsonl,
-        JoinFormat::Jsonl => JoinFormat::Csv,
+        JoinFormat::Csv => "CSV",
+        JoinFormat::Tsv => "TSV",
+        JoinFormat::Jsonl => "JSONL",
     }
 }
 
-fn next_join_kind(kind: JoinKind) -> JoinKind {
+fn parse_join_format(label: &str) -> JoinFormat {
+    match label {
+        "TSV" => JoinFormat::Tsv,
+        "JSONL" => JoinFormat::Jsonl,
+        _ => JoinFormat::Csv,
+    }
+}
+
+const JOIN_KIND_OPTIONS: &[&str] = &["Inner", "Left", "Full", "Anti"];
+
+fn join_kind_label(kind: JoinKind) -> &'static str {
     match kind {
-        JoinKind::Inner => JoinKind::Left,
-        JoinKind::Left => JoinKind::Full,
-        JoinKind::Full => JoinKind::Anti,
-        JoinKind::Anti => JoinKind::Inner,
+        JoinKind::Inner => "Inner",
+        JoinKind::Left => "Left",
+        JoinKind::Full => "Full",
+        JoinKind::Anti => "Anti",
+    }
+}
+
+fn parse_join_kind(label: &str) -> JoinKind {
+    match label {
+        "Left" => JoinKind::Left,
+        "Full" => JoinKind::Full,
+        "Anti" => JoinKind::Anti,
+        _ => JoinKind::Inner,
     }
 }
 
