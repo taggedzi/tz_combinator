@@ -114,7 +114,11 @@ jobs:
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
 
       - name: Enforce 80% line coverage
-        run: cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 80
+        # GUI and TUI entry points require an interactive display/input loop and
+        # are not exercised by this headless Linux coverage job. Their
+        # persistence/core behavior has focused tests; keep the release gate
+        # representative of the engine, codecs, application layer, and CLI.
+        run: cargo llvm-cov --workspace --all-features --exclude combinator-gui --exclude combinator-tui --summary-only --fail-under-lines 80
 
   package:
     name: Package and install validation
