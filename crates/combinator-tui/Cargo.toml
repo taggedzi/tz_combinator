@@ -1,0 +1,17 @@
+[package]
+name = "combinator-tui"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "MIT"
+description = "Terminal UI for tz_combinator"
+readme = "../../README.md"
+repository = "https://github.com/taggedzi/tz_combinator"
+
+[[bin]]
+name = "combinator-tui"
+path = "src/main.rs"
+
+[dependencies]
+combinator-app = { version = "0.1.0", path = "../combinator-app" }
+ratatui = "0.30.2"
