@@ -16,6 +16,10 @@ fn concat_emits_every_list_in_order() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\nx\ny\nz\n");
 }
 
+// Exit 2 alone does not identify these: clap parse errors and the CLI's own
+// usage errors share it, so a typo in the arguments below would still pass.
+// Each rejection test names the flag it expects to be refused.
+
 #[test]
 fn concat_rejects_sep() {
     let out = bin()
@@ -23,6 +27,9 @@ fn concat_rejects_sep() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}");
+    assert!(stderr.contains("--sep"), "stderr: {stderr}");
 }
 
 #[test]
@@ -32,6 +39,21 @@ fn concat_rejects_reverse_fields() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}");
+    assert!(stderr.contains("--reverse-fields"), "stderr: {stderr}");
+}
+
+#[test]
+fn concat_rejects_on_unequal() {
+    let out = bin()
+        .args(["concat", "--list", "a,b", "--on-unequal", "truncate"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unexpected argument"), "stderr: {stderr}");
+    assert!(stderr.contains("--on-unequal"), "stderr: {stderr}");
 }
 
 #[test]
@@ -108,6 +130,58 @@ fn concat_template_renders_its_single_field() {
         .unwrap();
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), "value=a\nvalue=b\n");
+}
+
+/// A template position beyond the input-list count is rejected at validation
+/// time. Note this is validated against the number of lists, not against
+/// concat's actual single-field record arity.
+#[test]
+fn concat_template_rejects_an_out_of_range_field() {
+    let out = bin()
+        .args(["concat", "--list", "a,b", "--template", "{5}"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("TEMPLATE_UNKNOWN_FIELD"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("position=5"), "stderr: {stderr}");
+}
+
+/// Concat's per-record size bound is the longest item across *all* lists
+/// rendered as a single field, not one item per list joined together.
+///
+/// Three lists of four items give 12 concat records; the widest item is
+/// `bbbb`, so the bound is 12 * len("bbbb\n") = 60. Were concat to use the
+/// product bound it would join one item per list ("abbbbc\n"), giving
+/// 12 * 7 = 84. The list count is high enough that this bound, rather than
+/// the codec's product-shaped estimate, is the reported minimum.
+#[test]
+fn concat_size_bound_uses_the_widest_item_as_a_single_field() {
+    let out = bin()
+        .args([
+            "concat",
+            "--list",
+            "a,a,a,a",
+            "--list",
+            "bbbb,bbbb,bbbb,bbbb",
+            "--list",
+            "c,c,c,c",
+            "--explain",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Match whole lines: `contains` would also accept 120 and 600.
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(lines.contains(&"combination_count=12"), "stdout: {stdout}");
+    assert!(
+        lines.contains(&"estimated_output_bytes=60"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]
