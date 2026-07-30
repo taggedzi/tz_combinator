@@ -6,7 +6,7 @@
 [![Latest release](https://img.shields.io/github/v/release/taggedzi/tz_combinator?display_name=tag&sort=semver)](https://github.com/taggedzi/tz_combinator/releases/latest)
 [![MSRV](https://img.shields.io/badge/MSRV-1.94.1-orange?logo=rust)](rust-toolchain.toml)
 [![License](https://img.shields.io/github/license/taggedzi/tz_combinator)](LICENSE)
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)](docs/release.md)
+[![Release targets](https://img.shields.io/badge/release%20targets-Linux%20x86__64%20%7C%20Windows%20x86__64-blue)](docs/release.md)
 
 `combinator` is a command-line tool for safely combining one or more text
 lists and structured data. It supports Cartesian products, positional zip,
