@@ -150,11 +150,13 @@ jobs:
           test -n "$linux_archive" -a -n "$windows_archive"
           linux_root="tz-combinator-${version}-linux-x86_64"
           windows_root="tz-combinator-${version}-windows-x86_64"
+          linux_listing="$(tar -tzf "$linux_archive")"
+          windows_listing="$(unzip -Z1 "$windows_archive")"
           for file in combinator combinator-gui combinator-tui LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md; do
-            tar -tzf "$linux_archive" | grep -Fxq "$linux_root/$file"
+            grep -Fxq "$linux_root/$file" <<<"$linux_listing"
           done
           for file in combinator.exe combinator-gui.exe combinator-tui.exe LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md; do
-            unzip -Z1 "$windows_archive" | grep -Fxq "$windows_root/$file"
+            grep -Fxq "$windows_root/$file" <<<"$windows_listing"
           done
 
       - name: Generate build provenance
