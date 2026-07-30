@@ -1,5 +1,8 @@
 //! Black-box tests for the `concat` subcommand.
 
+mod common;
+
+use common::TempDir;
 use std::process::Command;
 
 fn bin() -> Command {
@@ -91,11 +94,10 @@ fn concat_runtime_output_limit_is_enforced() {
 
 #[test]
 fn concat_reads_files_and_writes_output_file() {
-    let dir = std::env::temp_dir();
-    let stem = format!("combinator_concat_files_{}", std::process::id());
-    let first = dir.join(format!("{stem}_first.txt"));
-    let second = dir.join(format!("{stem}_second.txt"));
-    let output = dir.join(format!("{stem}_output.txt"));
+    let dir = TempDir::new("concat_files");
+    let first = dir.join("first.txt");
+    let second = dir.join("second.txt");
+    let output = dir.join("output.txt");
     std::fs::write(&first, "a\nb\n").unwrap();
     std::fs::write(&second, "x\ny\n").unwrap();
 
@@ -112,14 +114,9 @@ fn concat_reads_files_and_writes_output_file() {
         .output()
         .unwrap();
 
-    let contents = std::fs::read_to_string(&output).unwrap_or_default();
-    std::fs::remove_file(&first).ok();
-    std::fs::remove_file(&second).ok();
-    std::fs::remove_file(&output).ok();
-
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
-    assert_eq!(contents, "a\nb\nx\ny\n");
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), "a\nb\nx\ny\n");
 }
 
 #[test]
@@ -246,11 +243,8 @@ fn concat_jsonl_shape_has_single_element_fields() {
 /// remaining lists still produce some.
 #[test]
 fn concat_empty_list_warns_without_claiming_zero_records() {
-    let dir = std::env::temp_dir();
-    let empty = dir.join(format!(
-        "combinator_concat_empty_{}.txt",
-        std::process::id()
-    ));
+    let dir = TempDir::new("concat_empty");
+    let empty = dir.join("empty.txt");
     std::fs::write(&empty, "").unwrap();
 
     let out = bin()
@@ -264,7 +258,6 @@ fn concat_empty_list_warns_without_claiming_zero_records() {
         ])
         .output()
         .unwrap();
-    std::fs::remove_file(&empty).ok();
 
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\n");
