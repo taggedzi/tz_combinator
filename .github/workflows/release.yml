@@ -96,7 +96,7 @@ jobs:
           New-Item -ItemType Directory -Path $root | Out-Null
           Copy-Item target/release/combinator.exe, target/release/combinator-gui.exe, target/release/combinator-tui.exe $root
           Copy-Item LICENSE, README.md, CHANGELOG.md, THIRD_PARTY_LICENSES.md $root
-          Compress-Archive -Path "$root\*" -DestinationPath "$root.zip"
+          Compress-Archive -Path $root -DestinationPath "$root.zip"
           $hash = (Get-FileHash "$root.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $root.zip" | Set-Content "$root.zip.sha256"
 
