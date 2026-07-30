@@ -56,6 +56,10 @@ impl Write for OutputWriter<'_> {
 
 fn main() {
     let cli = Cli::parse();
+    if cli.about {
+        println!("{}", combinator_app::about_text());
+        return;
+    }
     if let Some(mode) = cli.command.as_ref() {
         match mode {
             Mode::Completions { shell } => {
