@@ -61,12 +61,7 @@ fn application_icon() -> Option<iced::window::Icon> {
         .iter()
         .max_by_key(|entry| (entry.width(), entry.height()))?;
     let image = entry.decode().ok()?;
-    iced::window::icon::from_rgba(
-        image.rgba_data().to_vec(),
-        u32::from(image.width()),
-        u32::from(image.height()),
-    )
-    .ok()
+    iced::window::icon::from_rgba(image.rgba_data().to_vec(), image.width(), image.height()).ok()
 }
 
 fn bundled_icon() -> iced::widget::image::Handle {
