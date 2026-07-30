@@ -735,11 +735,17 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     // Collect warnings until all validation and preflight checks have passed.
     // This prevents a warning from appearing before a later fatal diagnostic.
     let mut warnings: Vec<Warning> = Vec::new();
+    let empty_list_message = match op {
+        // Concat emits each list in sequence, so an empty list drops out
+        // without affecting the records the other lists contribute.
+        Operation::Concat(_) => "a list is empty; it contributes no records",
+        _ => "a list is empty; zero combinations will be produced",
+    };
     for (i, l) in lists.iter().enumerate() {
         if l.is_empty() {
             warnings.push((
                 "EMPTY_LIST",
-                "a list is empty; zero combinations will be produced",
+                empty_list_message,
                 vec![("list_index".to_string(), i.to_string())],
             ));
         }

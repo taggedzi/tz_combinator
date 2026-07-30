@@ -288,13 +288,19 @@ pub fn plan(request: &ProductRequest) -> Result<ExecutionPlan, AppError> {
             })
         }
     };
+    // Concat emits each list in sequence, so an empty list drops out without
+    // affecting the records the other lists contribute.
+    let empty_list_message = match request.operation {
+        AppOperation::Concat => "an input list is empty; it contributes no records",
+        _ => "an input list is empty; no records will be generated",
+    };
     let warnings = request
         .lists
         .iter()
         .filter(|list| list.is_empty())
         .map(|_| Warning {
             code: "EMPTY_LIST",
-            message: "an input list is empty; no records will be generated",
+            message: empty_list_message,
         })
         .collect();
     Ok(ExecutionPlan {
@@ -778,6 +784,26 @@ mod tests {
         assert_eq!(plan.total_combinations, Count::Exact(0));
         assert_eq!(plan.warnings[0].code, "EMPTY_LIST");
         assert!(execute(&request).unwrap().is_empty());
+    }
+
+    /// Concat still emits the non-empty lists, so the warning must not tell a
+    /// GUI/TUI user that no records will be generated.
+    #[test]
+    fn concat_empty_list_warning_does_not_claim_no_records() {
+        let mut request = request();
+        request.operation = AppOperation::Concat;
+        request.lists[1].clear();
+        let plan = plan(&request).unwrap();
+        assert_eq!(plan.total_combinations, Count::Exact(2));
+        assert_eq!(plan.warnings[0].code, "EMPTY_LIST");
+        assert!(
+            !plan.warnings[0]
+                .message
+                .contains("no records will be generated"),
+            "concat generates 2 records; warning said: {}",
+            plan.warnings[0].message
+        );
+        assert_eq!(execute(&request).unwrap().len(), 2);
     }
 
     #[test]

@@ -503,9 +503,11 @@ stderr alone and get nothing but diagnostics.
 errors (bad arguments/input) exit **2**; runtime errors (I/O, capacity, and
 similar failures encountered while executing an otherwise-valid command) exit
 **1**. `EMPTY_LIST` is the sole non-fatal warning: it is written to stderr but
-does not change the exit code (the run still exits **0**, having produced
-zero combinations). `--quiet` suppresses it; `--warnings-as-errors` reports it
-as a runtime error with exit **1**.
+does not change the exit code (the run still exits **0**). For every operation
+except `concat` an empty list means zero combinations; under `concat` the empty
+list simply contributes no records and the remaining lists are still emitted,
+and the warning says so. `--quiet` suppresses it; `--warnings-as-errors`
+reports it as a runtime error with exit **1**.
 
 | Code | Exit | Meaning |
 |---|---|---|
@@ -535,7 +537,7 @@ as a runtime error with exit **1**.
 | `SHARD_COUNT_INVALID` | 2 | `--shard-count` must be positive. |
 | `SHARD_INDEX_INVALID` | 2 | `--shard-index` must be less than `--shard-count`. |
 | `SHARD_COUNT_OVERFLOW` | 1 | The shard range could not be computed safely. |
-| `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
+| `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items. Every operation except `concat` therefore produces no combinations; under `concat` that list contributes no records and the others are still emitted. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
 | `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |
 | `OUTPUT_EXISTS` | 1 | `--output` names a file that already exists and `--overwrite` was not passed. |

@@ -198,6 +198,41 @@ fn concat_jsonl_shape_has_single_element_fields() {
     assert_eq!(first["fields"][0], "a");
 }
 
+/// An empty input list is invisible to `concat` — unlike `product`, where it
+/// zeroes the output. The warning must not claim zero records when the
+/// remaining lists still produce some.
+#[test]
+fn concat_empty_list_warns_without_claiming_zero_records() {
+    let dir = std::env::temp_dir();
+    let empty = dir.join(format!(
+        "combinator_concat_empty_{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&empty, "").unwrap();
+
+    let out = bin()
+        .args([
+            "concat",
+            "--file",
+            empty.to_str().unwrap(),
+            "--list",
+            "a,b",
+            "--allow-mixed-inputs",
+        ])
+        .output()
+        .unwrap();
+    std::fs::remove_file(&empty).ok();
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "a\nb\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("EMPTY_LIST"), "stderr was: {stderr}");
+    assert!(
+        !stderr.contains("zero combinations"),
+        "concat produced 2 records; warning must not claim zero: {stderr}"
+    );
+}
+
 #[test]
 fn concat_reverse_walks_from_the_end() {
     let out = bin()
