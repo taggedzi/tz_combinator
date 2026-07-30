@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use combinator_app::{
     join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
     CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits, InputSource,
