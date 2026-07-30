@@ -439,11 +439,13 @@ fn count_only_prints_total() {
 }
 
 #[test]
-fn no_lists_is_usage_error() {
+fn no_arguments_print_help_successfully() {
     let out = bin().output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("NO_LISTS"), "stderr was: {err}");
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty());
+    let help = String::from_utf8_lossy(&out.stdout);
+    assert!(help.contains("Usage:"), "stdout was: {help}");
+    assert!(help.contains("--help"), "stdout was: {help}");
 }
 
 #[test]

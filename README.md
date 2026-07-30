@@ -145,7 +145,8 @@ both — for the whole invocation:
 
 Mixing `--list` and `--file` requires `--allow-mixed-inputs`; inline lists are
 processed first, followed by file sources. Stdin (`--file -`) may appear only
-once. Passing neither is rejected as `NO_LISTS`.
+once. Running `combinator` with no arguments displays help; an invocation that
+includes arguments but provides neither source is rejected as `NO_LISTS`.
 
 `--input-format` selects bounded file/stdin parsing: `lines` (the default),
 `csv`, `tsv`, or `nul`. CSV/TSV sources are single-column records, with quoted
@@ -522,7 +523,7 @@ reports it as a runtime error with exit **1**.
 
 | Code | Exit | Meaning |
 |---|---|---|
-| `NO_LISTS` | 2 | Neither `--list` nor `--file` was given. |
+| `NO_LISTS` | 2 | Arguments were provided, but neither `--list` nor `--file` was given. |
 | `SOURCE_CONFLICT` | 2 | Both `--list` and `--file` were given; only one source is allowed. |
 | `DUPLICATE_STDIN` | 2 | Stdin was selected more than once as an input source. |
 | `INPUT_FORMAT_INVALID` | 2 | The selected input format is incompatible with the requested source type. |
@@ -573,10 +574,17 @@ reports it as a runtime error with exit **1**.
 | `UNSAFE_OUTPUT_PATH` | 1 | The output path is a symbolic link or otherwise unsafe to overwrite. |
 | `WRITE_FAILED` | 1 | Creating or writing to the output file failed. |
 
-Example (`NO_LISTS`, plain-text rendering — the default):
+With no arguments, the CLI displays help and exits successfully:
 
 ```
 $ combinator
+Usage: combinator [OPTIONS] [COMMAND]
+```
+
+Example (`NO_LISTS`, plain-text rendering — the default):
+
+```
+$ combinator product
 error[NO_LISTS]: no input lists were provided
 $ echo $?
 2

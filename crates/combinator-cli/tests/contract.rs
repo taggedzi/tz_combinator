@@ -124,7 +124,7 @@ fn explain_json_is_versioned_and_typed() {
 
 #[test]
 fn diagnostics_and_exit_codes_never_leak_to_stdout() {
-    let usage = run(&[]);
+    let usage = run(&["product"]);
     assert_eq!(usage.status.code(), Some(2));
     assert!(usage.stdout.is_empty());
     assert_eq!(usage.stderr, include_bytes!("golden/no-lists.stderr"));

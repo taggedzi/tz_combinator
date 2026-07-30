@@ -226,8 +226,11 @@ on stderr.
 Use JSONL for subprocess integration. Stdout contains only data; stderr
 contains diagnostics. Plain errors look like:
 
+With no arguments, `combinator` prints help and exits successfully. An
+explicit operation without an input source reports a usage error:
+
 ```text
-combinator
+combinator product
 error[NO_LISTS]: no input lists were provided
 ```
 

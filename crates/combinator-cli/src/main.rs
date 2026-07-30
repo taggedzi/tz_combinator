@@ -55,6 +55,15 @@ impl Write for OutputWriter<'_> {
 }
 
 fn main() {
+    if std::env::args_os().nth(1).is_none() {
+        let mut command = Cli::command();
+        if let Err(error) = command.print_help() {
+            eprintln!("error: could not write help: {error}");
+            std::process::exit(1);
+        }
+        println!();
+        return;
+    }
     let cli = Cli::parse();
     if cli.about {
         println!("{}", combinator_app::about_text());
