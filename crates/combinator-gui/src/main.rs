@@ -1,14 +1,16 @@
 use combinator_app::{
-    about_text, join_plan, join_preview, join_stream, plan, preview, read_input_source, stream,
-    AppOperation, CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits,
-    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
-    PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
+    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
+    CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits, InputSource,
+    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, PreviewRecord,
+    ProductRequest, ProgressEvent, UnequalPolicy, PROJECT_DESCRIPTION, PROJECT_ISSUES,
+    PROJECT_LICENSE, PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
 };
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, scrollable, text, text_editor, text_input,
-    Space,
+    button, checkbox, column, container, image, pick_list, row, scrollable, text, text_editor,
+    text_input, Space,
 };
 use iced::{Alignment, Background, Border, Color, Element, Length, Padding, Subscription, Task};
+use std::io::Cursor;
 mod persistence;
 use persistence::{
     CombineProfile, JoinProfile, LimitsProfile, Preferences, Profile, PROFILE_VERSION,
@@ -40,9 +42,37 @@ impl OutputSink for ProgressFileSink {
 fn main() -> iced::Result {
     iced::application(CombinatorGui::default, update, view)
         .title("Combinator")
+        .window(iced::window::Settings {
+            icon: application_icon(),
+            ..Default::default()
+        })
         .centered()
         .subscription(subscription)
         .run()
+}
+
+fn application_icon() -> Option<iced::window::Icon> {
+    let directory = ico::IconDir::read(Cursor::new(include_bytes!(
+        "../../../assets/icon/tz_combinator_tz.ico"
+    )))
+    .ok()?;
+    let entry = directory
+        .entries()
+        .iter()
+        .max_by_key(|entry| (entry.width(), entry.height()))?;
+    let image = entry.decode().ok()?;
+    iced::window::icon::from_rgba(
+        image.rgba_data().to_vec(),
+        u32::from(image.width()),
+        u32::from(image.height()),
+    )
+    .ok()
+}
+
+fn bundled_icon() -> iced::widget::image::Handle {
+    iced::widget::image::Handle::from_bytes(
+        include_bytes!("../../../assets/icon/tz_combinator_tz.ico").as_slice(),
+    )
 }
 
 struct CombinatorGui {
@@ -911,6 +941,9 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
     };
     container(
         column![
+            row![text("◈").size(24), text("tz_combinator").size(24)]
+                .spacing(8)
+                .align_y(Alignment::Center),
             row![
                 combine_tab,
                 join_tab,
@@ -937,17 +970,48 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
 fn about_view() -> Element<'static, Message> {
     container(
         column![
-            text("About tz_combinator").size(24),
-            scrollable(text(about_text()).width(Length::Fill))
-                .height(Length::Fixed(300.0))
+            row![
+                image(bundled_icon())
+                    .width(Length::Fixed(96.0))
+                    .height(Length::Fixed(96.0)),
+                column![
+                    text(PROJECT_NAME).size(30),
+                    text("Combinatorics, bounded by design.").size(16),
+                    text(format!("Version {} · {}", PROJECT_VERSION, PROJECT_LICENSE)).size(14),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Start),
+            ]
+            .spacing(20)
+            .align_y(Alignment::Center),
+            text(PROJECT_DESCRIPTION).size(16),
+            container(
+                column![
+                    text("Built for predictable results").size(18),
+                    text("Generate combinations, products, permutations, and joins from the desktop or terminal—with explicit limits and clear diagnostics."),
+                ]
+                .spacing(8),
+            )
+            .padding(16)
+            .width(Length::Fill),
+            column![
+                text("Project links").size(18),
+                text(format!("GitHub  {}", PROJECT_REPOSITORY)),
+                text(format!("Bug reports  {}", PROJECT_ISSUES)),
+            ]
+            .spacing(6),
+            scrollable(text(format!("Runtime: {} {}", std::env::consts::OS, std::env::consts::ARCH)))
                 .width(Length::Fill),
-            button("Close").on_press(Message::CloseAbout),
+            row![
+                Space::new().width(Length::Fill),
+                button("Close").on_press(Message::CloseAbout),
+            ],
         ]
-        .spacing(16)
+        .spacing(20)
         .width(Length::Fill),
     )
-    .padding(24)
-    .width(Length::Fixed(640.0))
+    .padding(32)
+    .width(Length::Fixed(700.0))
     .center_x(Length::Fill)
     .center_y(Length::Fill)
     .into()
@@ -2263,6 +2327,11 @@ mod tests {
             Some(1)
         );
         assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn bundled_application_icon_decodes() {
+        assert!(application_icon().is_some());
     }
 
     #[test]

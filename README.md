@@ -1,3 +1,5 @@
+![Combinator Header](assets/images/header.jpg)
+
 # tz_combinator
 
 `combinator` is a command-line tool for safely combining one or more text
@@ -34,6 +36,10 @@ near the profile controls.
 
 ## GUI profiles and preferences
 
+![Combinator GUI](assets/screenshots/combinator-gui_default-operation-dropdown.png)
+
+![Combinator GUI](assets/screenshots/combinator-gui_example-usage.png)
+
 The desktop GUI is available as `combinator-gui`. Its `New`, `Open…`, `Save`,
 and `Save as…` controls manage versioned JSON profiles containing both the
 Combine and Join workflows, shared safety limits, and the active tab. Loading
@@ -54,6 +60,8 @@ cargo run -p combinator-gui --locked
 ```
 
 ## Keyboard-first TUI
+
+![Combinator GUI](assets/screenshots/combinator-tui_example-usage.png)
 
 The terminal interface is available as `combinator-tui`:
 
