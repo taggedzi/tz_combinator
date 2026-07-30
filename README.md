@@ -2,6 +2,12 @@
 
 # tz_combinator
 
+[![Security and quality](https://github.com/taggedzi/tz_combinator/actions/workflows/security.yml/badge.svg?branch=master)](https://github.com/taggedzi/tz_combinator/actions/workflows/security.yml)
+[![Latest release](https://img.shields.io/github/v/release/taggedzi/tz_combinator?display_name=tag&sort=semver)](https://github.com/taggedzi/tz_combinator/releases/latest)
+[![MSRV](https://img.shields.io/badge/MSRV-1.94.1-orange?logo=rust)](rust-toolchain.toml)
+[![License](https://img.shields.io/github/license/taggedzi/tz_combinator)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)](docs/release.md)
+
 `combinator` is a command-line tool for safely combining one or more text
 lists and structured data. It supports Cartesian products, positional zip,
 concatenation, permutations, combinations, variations, and keyed joins. It
@@ -696,3 +702,10 @@ Supported forms are `eq:FIELD=VALUE`, `neq:FIELD=VALUE`, `prefix:FIELD=VALUE`,
 `length:FIELD=MIN..MAX`. Filtered `--count-only`, `--explain`, and `--dry-run`
 requests are rejected because those modes must not report an unevaluated
 logical count as an accepted-record count.
+
+## AI assistance disclosure
+
+AI tools were used during the development of this project, including OpenAI
+OpenAI Codex, Anthropic Claude, and xAI Grok. Their assistance included brainstorming,
+code and documentation drafting, and review. The project maintainer reviewed
+and tested the resulting work and is responsible for the final contents.
