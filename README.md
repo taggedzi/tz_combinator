@@ -523,7 +523,7 @@ reports it as a runtime error with exit **1**.
 | `TEMPLATE_SEPARATOR_CONFLICT` | 2 | A template was combined with a non-empty `--sep`. |
 | `TEMPLATE_INVALID` | 2 | Template syntax or a template reference is invalid. |
 | `TEMPLATE_UNKNOWN_FIELD` | 2 | A template references an unknown field. |
-| `TEMPLATE_NAMES_MISMATCH` | 2 | The number of `--name` values does not match the input-list count. |
+| `TEMPLATE_NAMES_MISMATCH` | 2 | The number of `--name` values does not match the number of fields in a record. That is the input-list count for `product` and `zip`, always 1 for `concat`, the pool size for `permutations`, and `--choose`/`--length` for `combinations`/`variations`. |
 | `TEMPLATE_DUPLICATE_NAME` | 2 | A field name was supplied more than once. |
 | `TEMPLATE_INVALID_NAME` | 2 | A field name is not a valid identifier. |
 | `TEMPLATE_TOO_LARGE` | 2 | The template exceeds its 1 MiB security ceiling or configured input limit. |

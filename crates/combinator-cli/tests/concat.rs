@@ -132,9 +132,8 @@ fn concat_template_renders_its_single_field() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "value=a\nvalue=b\n");
 }
 
-/// A template position beyond the input-list count is rejected at validation
-/// time. Note this is validated against the number of lists, not against
-/// concat's actual single-field record arity.
+/// A template position well past the record's single field is refused at
+/// validation time, naming the offending position.
 #[test]
 fn concat_template_rejects_an_out_of_range_field() {
     let out = bin()
@@ -148,6 +147,50 @@ fn concat_template_rejects_an_out_of_range_field() {
         "stderr: {stderr}"
     );
     assert!(stderr.contains("position=5"), "stderr: {stderr}");
+}
+
+/// Concat records carry one field no matter how many lists are supplied, so a
+/// position past 0 must be refused up front — not left to fail opaquely while
+/// rendering.
+#[test]
+fn concat_template_rejects_a_field_beyond_its_single_field() {
+    let out = bin()
+        .args([
+            "concat",
+            "--list",
+            "a,b",
+            "--list",
+            "x,y",
+            "--template",
+            "{1}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("TEMPLATE_UNKNOWN_FIELD"),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains("position=1"), "stderr: {stderr}");
+}
+
+/// Naming two fields when a concat record has one is ambiguous, so it is
+/// refused rather than silently ignored.
+#[test]
+fn concat_rejects_more_names_than_it_has_fields() {
+    let out = bin()
+        .args([
+            "concat", "--list", "a,b", "--list", "x,y", "--name", "first", "--name", "second",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("TEMPLATE_NAMES_MISMATCH"),
+        "stderr: {stderr}"
+    );
 }
 
 /// Concat's per-record size bound is the longest item across *all* lists

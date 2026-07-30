@@ -505,10 +505,16 @@ fn validate_request(request: &ProductRequest) -> Result<(), AppError> {
             "this operation requires exactly one input list",
         ));
     }
-    if request.names.len() > request.lists.len() {
+    // Names address record fields, which is not the list count for concat or
+    // the single-pool operations. Mirror the rule `Template::validate_fields`
+    // applies: naming some but not all fields is ambiguous, so an incomplete
+    // set is refused here even when no template will consume the names.
+    let field_count =
+        combinator_core::operation_field_count(&core_operation(request), &request.lists);
+    if !request.names.is_empty() && request.names.len() != field_count {
         return Err(AppError::usage(
             "TEMPLATE_NAMES_MISMATCH",
-            "more field names were provided than input lists",
+            "the number of field names must equal the number of fields in a record",
         ));
     }
     Ok(())
@@ -527,7 +533,10 @@ fn prepared_lists(request: &ProductRequest) -> Result<Vec<Vec<String>>, AppError
         let parsed = combinator_codecs::Template::parse(&template)
             .map_err(|error| AppError::usage("TEMPLATE_INVALID", format!("{error:?}")))?;
         parsed
-            .validate_fields(&request.names, lists.len())
+            .validate_fields(
+                &request.names,
+                combinator_core::operation_field_count(&core_operation(request), &lists),
+            )
             .map_err(|error| AppError::usage("TEMPLATE_INVALID", format!("{error:?}")))?;
     }
     Ok(lists)
@@ -804,6 +813,30 @@ mod tests {
             plan.warnings[0].message
         );
         assert_eq!(execute(&request).unwrap().len(), 2);
+    }
+
+    /// The CLI refuses a partial set of field names whether or not a template
+    /// is present; the app surface must apply the same rule rather than
+    /// accepting names that label only some of a record's fields.
+    #[test]
+    fn rejects_fewer_names_than_fields_without_a_template() {
+        let mut request = request();
+        request.names = vec!["only".into()];
+        assert!(request.template.is_none());
+        assert_eq!(
+            plan(&request).unwrap_err().code,
+            "TEMPLATE_NAMES_MISMATCH",
+            "two-field record labelled by one name must be refused"
+        );
+    }
+
+    /// A full set of names stays valid, so the stricter rule rejects ambiguity
+    /// rather than names in general.
+    #[test]
+    fn accepts_one_name_per_field_without_a_template() {
+        let mut request = request();
+        request.names = vec!["colour".into(), "vehicle".into()];
+        assert!(plan(&request).is_ok());
     }
 
     #[test]

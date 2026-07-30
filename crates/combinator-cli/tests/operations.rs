@@ -83,3 +83,66 @@ fn malformed_filters_and_filtered_count_are_usage_errors() {
     assert_eq!(count.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&count.stderr).contains("FILTER_MODE_UNSUPPORTED"));
 }
+
+/// A permutations record has one field per pool item, so `{1}` is a real field
+/// even though there is only one input list. Validating against the list count
+/// would reject it.
+#[test]
+fn permutations_template_can_reference_every_pool_position() {
+    let out = run(&["permutations", "--list", "a,b,c", "--template", "{1}-{2}"]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).lines().next(),
+        Some("b-c")
+    );
+}
+
+/// Field names must match the record's field count, which for permutations is
+/// the pool size rather than the input-list count.
+#[test]
+fn permutations_accept_one_name_per_pool_position() {
+    let out = run(&[
+        "permutations",
+        "--list",
+        "a,b",
+        "--name",
+        "left",
+        "--name",
+        "right",
+        "--template",
+        "{left}{right}",
+    ]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ab\nba\n");
+}
+
+/// Combinations produce `--choose` fields per record.
+#[test]
+fn combinations_template_can_reference_each_chosen_field() {
+    let out = run(&[
+        "combinations",
+        "--list",
+        "a,b,c,d",
+        "--choose",
+        "2",
+        "--template",
+        "{0}+{1}",
+    ]);
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).lines().next(),
+        Some("a+b")
+    );
+}

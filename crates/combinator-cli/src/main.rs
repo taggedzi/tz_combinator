@@ -14,8 +14,8 @@ use clap::{CommandFactory, Parser};
 use combinator_codecs::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
-    generate_with, operation_count, ConcatOptions, Constraint, Count, GenerationLimits,
-    GenerationRequest, Operation, ProductOptions, SelectionOptions, ZipOptions,
+    generate_with, operation_count, operation_field_count, ConcatOptions, Constraint, Count,
+    GenerationLimits, GenerationRequest, Operation, ProductOptions, SelectionOptions, ZipOptions,
 };
 
 use cli::{
@@ -727,7 +727,7 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     let empty_template = Template::parse("").expect("empty template is valid");
     let template_for_validation = template.as_ref().unwrap_or(&empty_template);
     template_for_validation
-        .validate_fields(&common.names, lists.len())
+        .validate_fields(&common.names, operation_field_count(&op, &lists))
         .map_err(template_error)?;
 
     let json_out = matches!(common.format, OutFormat::Jsonl);
@@ -1259,7 +1259,7 @@ fn template_error(error: TemplateError) -> AppError {
         TemplateError::NameCountMismatch { expected, actual } => {
             return AppError::usage(
                 "TEMPLATE_NAMES_MISMATCH",
-                "the number of field names must equal the number of input lists",
+                "the number of field names must equal the number of fields in a record",
             )
             .with("expected", expected)
             .with("actual", actual);
