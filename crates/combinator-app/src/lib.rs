@@ -4,8 +4,10 @@
 //! and execution orchestration. It deliberately has no dependency on Clap,
 //! terminals, windows, processes, or filesystem paths.
 
+mod about;
 mod file_sink;
 mod join;
+mod path_safety;
 
 use combinator_codecs::{InputBudget, SizeEstimate, SizeInput};
 use combinator_core::{
@@ -182,8 +184,13 @@ pub struct OutputRecord {
 /// Compatibility name for records returned by the bounded preview helper.
 pub type PreviewRecord = OutputRecord;
 
+pub use about::{
+    about_text, ABOUT_HELP, PROJECT_DESCRIPTION, PROJECT_ISSUES, PROJECT_LICENSE, PROJECT_NAME,
+    PROJECT_REPOSITORY, PROJECT_VERSION,
+};
 pub use file_sink::FileSink;
 pub use join::{join_plan, join_preview, join_stream, JoinFormat, JoinKind, JoinPlan, JoinRequest};
+pub use path_safety::{ensure_output_parent, validate_output_path, OutputPathError};
 
 /// Progress information emitted after a record is accepted by a sink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +262,12 @@ impl From<CoreError> for AppError {
 
 impl From<combinator_codecs::template::TemplateError> for AppError {
     fn from(error: combinator_codecs::template::TemplateError) -> Self {
+        if matches!(
+            error,
+            combinator_codecs::template::TemplateError::OutputEncoding
+        ) {
+            return Self::runtime("WRITE_FAILED", "failed encoding output record");
+        }
         Self {
             code: "TEMPLATE_INVALID",
             message: format!("invalid output template: {error:?}"),
@@ -288,13 +301,19 @@ pub fn plan(request: &ProductRequest) -> Result<ExecutionPlan, AppError> {
             })
         }
     };
+    // Concat emits each list in sequence, so an empty list drops out without
+    // affecting the records the other lists contribute.
+    let empty_list_message = match request.operation {
+        AppOperation::Concat => "an input list is empty; it contributes no records",
+        _ => "an input list is empty; no records will be generated",
+    };
     let warnings = request
         .lists
         .iter()
         .filter(|list| list.is_empty())
         .map(|_| Warning {
             code: "EMPTY_LIST",
-            message: "an input list is empty; no records will be generated",
+            message: empty_list_message,
         })
         .collect();
     Ok(ExecutionPlan {
@@ -499,10 +518,16 @@ fn validate_request(request: &ProductRequest) -> Result<(), AppError> {
             "this operation requires exactly one input list",
         ));
     }
-    if request.names.len() > request.lists.len() {
+    // Names address record fields, which is not the list count for concat or
+    // the single-pool operations. Mirror the rule `Template::validate_fields`
+    // applies: naming some but not all fields is ambiguous, so an incomplete
+    // set is refused here even when no template will consume the names.
+    let field_count =
+        combinator_core::operation_field_count(&core_operation(request), &request.lists);
+    if !request.names.is_empty() && request.names.len() != field_count {
         return Err(AppError::usage(
             "TEMPLATE_NAMES_MISMATCH",
-            "more field names were provided than input lists",
+            "the number of field names must equal the number of fields in a record",
         ));
     }
     Ok(())
@@ -521,7 +546,10 @@ fn prepared_lists(request: &ProductRequest) -> Result<Vec<Vec<String>>, AppError
         let parsed = combinator_codecs::Template::parse(&template)
             .map_err(|error| AppError::usage("TEMPLATE_INVALID", format!("{error:?}")))?;
         parsed
-            .validate_fields(&request.names, lists.len())
+            .validate_fields(
+                &request.names,
+                combinator_core::operation_field_count(&core_operation(request), &lists),
+            )
             .map_err(|error| AppError::usage("TEMPLATE_INVALID", format!("{error:?}")))?;
     }
     Ok(lists)
@@ -778,6 +806,50 @@ mod tests {
         assert_eq!(plan.total_combinations, Count::Exact(0));
         assert_eq!(plan.warnings[0].code, "EMPTY_LIST");
         assert!(execute(&request).unwrap().is_empty());
+    }
+
+    /// Concat still emits the non-empty lists, so the warning must not tell a
+    /// GUI/TUI user that no records will be generated.
+    #[test]
+    fn concat_empty_list_warning_does_not_claim_no_records() {
+        let mut request = request();
+        request.operation = AppOperation::Concat;
+        request.lists[1].clear();
+        let plan = plan(&request).unwrap();
+        assert_eq!(plan.total_combinations, Count::Exact(2));
+        assert_eq!(plan.warnings[0].code, "EMPTY_LIST");
+        assert!(
+            !plan.warnings[0]
+                .message
+                .contains("no records will be generated"),
+            "concat generates 2 records; warning said: {}",
+            plan.warnings[0].message
+        );
+        assert_eq!(execute(&request).unwrap().len(), 2);
+    }
+
+    /// The CLI refuses a partial set of field names whether or not a template
+    /// is present; the app surface must apply the same rule rather than
+    /// accepting names that label only some of a record's fields.
+    #[test]
+    fn rejects_fewer_names_than_fields_without_a_template() {
+        let mut request = request();
+        request.names = vec!["only".into()];
+        assert!(request.template.is_none());
+        assert_eq!(
+            plan(&request).unwrap_err().code,
+            "TEMPLATE_NAMES_MISMATCH",
+            "two-field record labelled by one name must be refused"
+        );
+    }
+
+    /// A full set of names stays valid, so the stricter rule rejects ambiguity
+    /// rather than names in general.
+    #[test]
+    fn accepts_one_name_per_field_without_a_template() {
+        let mut request = request();
+        request.names = vec!["colour".into(), "vehicle".into()];
+        assert!(plan(&request).is_ok());
     }
 
     #[test]

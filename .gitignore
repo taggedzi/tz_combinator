@@ -1,2 +1,4 @@
 /target
 /fuzz/target
+*.png
+output.txt

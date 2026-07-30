@@ -1,8 +1,8 @@
 use combinator_app::{
-    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
-    CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits, InputSource,
-    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, PreviewRecord,
-    ProductRequest, ProgressEvent, UnequalPolicy,
+    about_text, join_plan, join_preview, join_stream, plan, preview, read_input_source, stream,
+    AppOperation, CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits,
+    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
+    PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
 };
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, scrollable, text, text_editor, text_input,
@@ -94,6 +94,7 @@ struct CombinatorGui {
     error: Option<String>,
     preferences: Preferences,
     current_profile: Option<PathBuf>,
+    about_open: bool,
 }
 
 impl Default for CombinatorGui {
@@ -158,6 +159,7 @@ impl Default for CombinatorGui {
             error: None,
             current_profile: None,
             preferences,
+            about_open: false,
         };
         state.refresh_plan();
         state
@@ -236,6 +238,8 @@ enum Message {
     BrowseSaveProfile,
     SaveProfile,
     SaveProfileAsPicked(Option<String>),
+    ShowAbout,
+    CloseAbout,
     ProfileLoaded(Box<Result<(Profile, String), String>>),
     ProfileSaved(Result<String, String>),
     OpenRecent(String),
@@ -756,6 +760,14 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             state.status = "New profile".into();
             Task::none()
         }
+        Message::ShowAbout => {
+            state.about_open = true;
+            Task::none()
+        }
+        Message::CloseAbout => {
+            state.about_open = false;
+            Task::none()
+        }
         Message::BrowseOpenProfile => Task::perform(
             async {
                 rfd::FileDialog::new()
@@ -868,6 +880,9 @@ fn subscription(state: &CombinatorGui) -> Subscription<Message> {
 }
 
 fn view(state: &CombinatorGui) -> Element<'_, Message> {
+    if state.about_open {
+        return about_view();
+    }
     let combine_tab = if !state.join_mode && !state.settings_mode {
         button("Combine").style(iced::widget::button::primary)
     } else {
@@ -905,6 +920,7 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
                 button("Open…").on_press(Message::BrowseOpenProfile),
                 button("Save").on_press(Message::SaveProfile),
                 button("Save as…").on_press(Message::BrowseSaveProfile),
+                button("About").on_press(Message::ShowAbout),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -915,6 +931,25 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
     .padding(24)
     .width(Length::Fill)
     .height(Length::Fill)
+    .into()
+}
+
+fn about_view() -> Element<'static, Message> {
+    container(
+        column![
+            text("About tz_combinator").size(24),
+            scrollable(text(about_text()).width(Length::Fill))
+                .height(Length::Fixed(300.0))
+                .width(Length::Fill),
+            button("Close").on_press(Message::CloseAbout),
+        ]
+        .spacing(16)
+        .width(Length::Fill),
+    )
+    .padding(24)
+    .width(Length::Fixed(640.0))
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
     .into()
 }
 
@@ -2391,6 +2426,18 @@ mod tests {
 
         state.settings_mode = true;
         let _ = view(&state);
+    }
+
+    #[test]
+    fn about_button_opens_and_closes_without_changing_form_state() {
+        let mut state = CombinatorGui::default();
+        state.sources[0] = "red,blue".into();
+        dispatch(&mut state, Message::ShowAbout);
+        assert!(state.about_open);
+        let _ = view(&state);
+        dispatch(&mut state, Message::CloseAbout);
+        assert!(!state.about_open);
+        assert_eq!(state.sources[0], "red,blue");
     }
 
     #[test]

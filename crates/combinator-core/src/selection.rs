@@ -74,24 +74,24 @@ fn window(total: Count, options: SelectionOptions) -> Result<(u128, u128, bool),
     Ok((start, amount, options.reverse))
 }
 
-fn unrank_permutation(n: usize, mut rank: u128) -> Vec<usize> {
+fn unrank_permutation(n: usize, mut rank: u128) -> Option<Vec<usize>> {
     let mut available: Vec<usize> = (0..n).collect();
     let mut output = Vec::with_capacity(n);
     for width in (1..=n).rev() {
-        let block = factorial(width - 1).expect_exact();
+        let block = factorial(width - 1).exact()?;
         let position = (rank / block) as usize;
         rank %= block;
         output.push(available.remove(position));
     }
-    output
+    Some(output)
 }
 
-fn unrank_combination(n: usize, k: usize, mut rank: u128) -> Vec<usize> {
+fn unrank_combination(n: usize, k: usize, mut rank: u128) -> Option<Vec<usize>> {
     let mut output = Vec::with_capacity(k);
     let mut next = 0;
     for remaining in (1..=k).rev() {
         for candidate in next..=n - remaining {
-            let count = binomial(n - candidate - 1, remaining - 1).expect_exact();
+            let count = binomial(n - candidate - 1, remaining - 1).exact()?;
             if rank < count {
                 output.push(candidate);
                 next = candidate + 1;
@@ -100,29 +100,29 @@ fn unrank_combination(n: usize, k: usize, mut rank: u128) -> Vec<usize> {
             rank -= count;
         }
     }
-    output
+    Some(output)
 }
 
-fn unrank_variation(n: usize, k: usize, mut rank: u128) -> Vec<usize> {
+fn unrank_variation(n: usize, k: usize, mut rank: u128) -> Option<Vec<usize>> {
     let mut available: Vec<usize> = (0..n).collect();
     let mut output = Vec::with_capacity(k);
     for position in 0..k {
-        let block = falling_factorial(n - position - 1, k - position - 1).expect_exact();
+        let block = falling_factorial(n - position - 1, k - position - 1).exact()?;
         let selected = (rank / block) as usize;
         rank %= block;
         output.push(available.remove(selected));
     }
-    output
+    Some(output)
 }
 
 trait ExactCount {
-    fn expect_exact(self) -> u128;
+    fn exact(self) -> Option<u128>;
 }
 impl ExactCount for Count {
-    fn expect_exact(self) -> u128 {
+    fn exact(self) -> Option<u128> {
         match self {
-            Count::Exact(value) => value,
-            Count::Overflow => unreachable!("validated selection count"),
+            Count::Exact(value) => Some(value),
+            Count::Overflow => None,
         }
     }
 }
@@ -138,7 +138,7 @@ macro_rules! selection_iterator {
                 let rank = self.next;
                 self.remaining -= 1;
                 self.next = if self.reverse { self.next.saturating_sub(1) } else { self.next.saturating_add(1) };
-                Some($unrank($(self.$arg,)* rank))
+                $unrank($(self.$arg,)* rank)
             }
         }
     };

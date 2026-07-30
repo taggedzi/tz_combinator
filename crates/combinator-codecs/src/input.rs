@@ -106,7 +106,12 @@ pub fn split_escaped_inline(
     let mut current = String::new();
     let mut pos = 0;
     while pos < value.len() {
-        let ch = value[pos..].chars().next().expect("UTF-8 boundary");
+        let Some(ch) = value[pos..].chars().next() else {
+            return Err(CodecError::usage(
+                "INLINE_ESCAPE_INVALID",
+                "inline input contains an invalid UTF-8 boundary",
+            ));
+        };
         if ch == '\\' {
             pos += 1;
             let escaped = value[pos..].chars().next().ok_or_else(|| {

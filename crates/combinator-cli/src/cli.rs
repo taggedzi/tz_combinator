@@ -349,8 +349,17 @@ pub enum Mode {
 
 /// Streams combinations of text lists: product (default), zip, concat.
 #[derive(Debug, Parser)]
-#[command(name = "combinator", version, about)]
+#[command(
+    name = "combinator",
+    version,
+    about = combinator_app::PROJECT_DESCRIPTION,
+    long_about = combinator_app::ABOUT_HELP
+)]
 pub struct Cli {
+    /// Print project information and troubleshooting guidance.
+    #[arg(long)]
+    pub about: bool,
+
     #[command(subcommand)]
     pub command: Option<Mode>,
 
@@ -366,6 +375,7 @@ mod tests {
     #[test]
     fn defaults_are_sane() {
         let cli = Cli::parse_from(["combinator", "--list", "a,b"]);
+        assert!(!cli.about);
         assert_eq!(cli.product.sep, "");
         assert_eq!(cli.product.common.rec_sep, "\n");
         assert_eq!(cli.product.common.list_delim, ",");
@@ -374,6 +384,13 @@ mod tests {
         assert_eq!(cli.product.common.offset, 0);
         assert!(cli.product.common.limit.is_none());
         assert!(matches!(cli.product.common.format, OutFormat::Text));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parses_about_flag_without_an_operation() {
+        let cli = Cli::parse_from(["combinator", "--about"]);
+        assert!(cli.about);
         assert!(cli.command.is_none());
     }
 

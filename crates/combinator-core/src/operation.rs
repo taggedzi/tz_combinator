@@ -41,6 +41,24 @@ pub fn validate(op: &Operation, lists: &[Vec<String>]) -> Result<(), CoreError> 
     }
 }
 
+/// Fields in one output record, which is what templates and `--name` values
+/// address.
+///
+/// This is not always the input-list count: `concat` emits one item at a time
+/// regardless of how many lists it walks, and the single-pool operations draw
+/// several fields from their one list.
+pub fn field_count(op: &Operation, lists: &[Vec<String>]) -> usize {
+    match op {
+        Operation::Product(_) | Operation::Zip(_) => lists.len(),
+        Operation::Concat(_) => 1,
+        // Callers may not have validated the single-list shape yet, so read the
+        // pool defensively rather than indexing.
+        Operation::Permutations(_) => lists.first().map_or(0, Vec::len),
+        Operation::Combinations { choose, .. } => *choose,
+        Operation::Variations { length, .. } => *length,
+    }
+}
+
 /// Counts combinations for whichever operation is selected.
 ///
 /// Only `Zip` under `UnequalPolicy::Error` can fail (mismatched lengths).
@@ -87,6 +105,60 @@ mod tests {
             vec!["a".to_string(), "b".to_string()],
             vec!["c".to_string(), "d".to_string()],
         ]
+    }
+
+    /// Templates and `--name` values address record fields, so this must track
+    /// the record shape rather than the input-list count. Only product and zip
+    /// happen to agree with the list count.
+    #[test]
+    fn field_count_tracks_record_shape_not_list_count() {
+        let two = lists();
+        assert_eq!(
+            field_count(&Operation::Product(ProductOptions::default()), &two),
+            2
+        );
+        assert_eq!(field_count(&Operation::Zip(ZipOptions::default()), &two), 2);
+        // Concat emits one item at a time however many lists it walks.
+        assert_eq!(
+            field_count(&Operation::Concat(ConcatOptions::default()), &two),
+            1
+        );
+        // Single-pool operations draw several fields from their one list.
+        let pool = vec![vec!["a".to_string(), "b".to_string(), "c".to_string()]];
+        assert_eq!(
+            field_count(&Operation::Permutations(Default::default()), &pool),
+            3
+        );
+        assert_eq!(
+            field_count(
+                &Operation::Combinations {
+                    choose: 2,
+                    options: Default::default()
+                },
+                &pool
+            ),
+            2
+        );
+        assert_eq!(
+            field_count(
+                &Operation::Variations {
+                    length: 2,
+                    options: Default::default()
+                },
+                &pool
+            ),
+            2
+        );
+    }
+
+    /// Field validation runs before the single-list shape check, so an
+    /// unvalidated permutations request must not panic here.
+    #[test]
+    fn field_count_of_a_pool_less_permutation_is_zero() {
+        assert_eq!(
+            field_count(&Operation::Permutations(Default::default()), &[]),
+            0
+        );
     }
 
     #[test]

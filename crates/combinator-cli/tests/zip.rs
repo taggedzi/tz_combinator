@@ -1,5 +1,8 @@
 //! Black-box tests for the `zip` subcommand.
 
+mod common;
+
+use common::TempDir;
 use std::process::Command;
 
 fn bin() -> Command {
@@ -108,11 +111,10 @@ fn zip_runtime_output_limit_is_enforced() {
 
 #[test]
 fn zip_reads_files_and_writes_output_file() {
-    let dir = std::env::temp_dir();
-    let stem = format!("combinator_zip_files_{}", std::process::id());
-    let left = dir.join(format!("{stem}_left.txt"));
-    let right = dir.join(format!("{stem}_right.txt"));
-    let output = dir.join(format!("{stem}_output.txt"));
+    let dir = TempDir::new("zip_files");
+    let left = dir.join("left.txt");
+    let right = dir.join("right.txt");
+    let output = dir.join("output.txt");
     std::fs::write(&left, "a\nb\n").unwrap();
     std::fs::write(&right, "x\ny\n").unwrap();
 
@@ -131,14 +133,9 @@ fn zip_reads_files_and_writes_output_file() {
         .output()
         .unwrap();
 
-    let contents = std::fs::read_to_string(&output).unwrap_or_default();
-    std::fs::remove_file(&left).ok();
-    std::fs::remove_file(&right).ok();
-    std::fs::remove_file(&output).ok();
-
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
-    assert_eq!(contents, "a-x\nb-y\n");
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), "a-x\nb-y\n");
 }
 
 #[test]

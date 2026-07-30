@@ -7,7 +7,7 @@ prefix and use `combinator`.
 ## Invocation shape
 
 ```text
-combinator [MODE] [OPTIONS]
+combinator [OPTIONS] [COMMAND]
 ```
 
 With no mode, the command is `product`. The explicit form

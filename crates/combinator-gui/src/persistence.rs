@@ -1,3 +1,4 @@
+use combinator_app::{ensure_output_parent, FileSink, OutputRecord, OutputSink};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -95,14 +96,10 @@ pub fn load_profile(path: &Path) -> Result<Profile, String> {
 
 pub fn save_profile(path: &Path, mut profile: Profile) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create profile folder: {error}"))?;
-    }
     profile = relativize_profile_paths(profile, parent);
     let text = serde_json::to_string_pretty(&profile)
         .map_err(|error| format!("could not encode profile: {error}"))?;
-    fs::write(path, format!("{text}\n")).map_err(|error| format!("could not save profile: {error}"))
+    atomic_write(path, &format!("{text}\n"))
 }
 
 pub fn load_preferences() -> Preferences {
@@ -116,14 +113,23 @@ pub fn save_preferences(preferences: &Preferences) -> Result<(), String> {
     let Some(path) = preferences_path() else {
         return Ok(());
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create config folder: {error}"))?;
-    }
+    ensure_output_parent(&path).map_err(|error| format!("{}: {}", error.code, error.message))?;
     let text = serde_json::to_string_pretty(preferences)
         .map_err(|error| format!("could not encode preferences: {error}"))?;
-    fs::write(path, format!("{text}\n"))
-        .map_err(|error| format!("could not save preferences: {error}"))
+    atomic_write(&path, &format!("{text}\n"))
+}
+
+fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
+    let mut sink =
+        FileSink::open(path, true).map_err(|error| format!("{}: {}", error.code, error.message))?;
+    sink.record(OutputRecord {
+        ordinal: 0,
+        value: contents.to_string(),
+        fields: Vec::new(),
+    })
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    sink.commit()
+        .map_err(|error| format!("{}: {}", error.code, error.message))
 }
 
 pub fn remember_profile(mut preferences: Preferences, path: &Path) -> Preferences {
@@ -222,6 +228,7 @@ mod tests {
         let folder =
             std::env::temp_dir().join(format!("combinator-profile-test-{}", std::process::id()));
         let path = folder.join("profile.json");
+        fs::create_dir_all(&folder).expect("create profile folder");
         save_profile(&path, sample()).expect("save profile");
         let loaded = load_profile(&path).expect("load profile");
         assert_eq!(loaded.active_mode, "join");
@@ -237,6 +244,24 @@ mod tests {
             folder.join("left.csv").to_string_lossy()
         );
         let _ = fs::remove_dir_all(folder);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn profile_save_rejects_nested_symlink_parent() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "combinator-profile-symlink-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("real")).expect("create profile folder");
+        symlink(root.join("real"), root.join("linked")).expect("create symlink");
+
+        let error = save_profile(&root.join("linked/profile.json"), sample()).unwrap_err();
+        assert!(error.contains("UNSAFE_OUTPUT_PATH"));
+        fs::remove_dir_all(root).expect("remove profile folder");
     }
 
     #[test]

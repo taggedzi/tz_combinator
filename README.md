@@ -1,14 +1,12 @@
 # tz_combinator
 
-`combinator` is a command-line tool that streams the **ordered Cartesian
-product** of two or more text lists. Give it N lists and it emits every
-combination — one item from each list, in list order — as plain text or JSON
-Lines. It is the reference implementation of the combination engine and the
-single, stable interface that downstream consumers (a future REST API, GUI,
-or web frontend) are expected to code against: spawn the binary, read its
-stdout, and you get the same contract every caller gets.
+`combinator` is a command-line tool for safely combining one or more text
+lists and structured data. It supports Cartesian products, positional zip,
+concatenation, permutations, combinations, variations, and keyed joins. It
+streams plain text, JSON Lines, CSV, TSV, or NUL-delimited output and provides
+the reference CLI contract used by the application, GUI, and TUI.
 
-This repository is a Cargo workspace with three crates:
+This repository is a Cargo workspace with six crates:
 
 - `crates/combinator-core` — the engine: counting, size estimation, and the
   lazy product iterator. No I/O.
@@ -16,9 +14,23 @@ This repository is a Cargo workspace with three crates:
   gathering, formatting, pre-flight checks, and stdout/stderr/file output.
 - `crates/combinator-codecs` — bounded, reusable input, template, output, and
   estimate codecs used by the CLI.
+- `crates/combinator-app` — shared application workflows for planning,
+  previewing, streaming, joins, and safe file output.
+- `crates/combinator-gui` — the desktop GUI.
+- `crates/combinator-tui` — the keyboard-first terminal UI.
 
 For the durable references, see [CLI usage](docs/cli-usage.md) and
 [library usage](docs/library-usage.md).
+
+Release builds and artifact verification are documented in
+[the release procedure](docs/release.md). Output destinations and GUI/TUI
+profile paths must use existing parent directories; symlink/reparse-point
+ancestors and `..` traversal are rejected.
+
+All interfaces include an About notice with the project description, version,
+MIT license, GitHub repository, and issue-reporting guidance. The CLI exposes
+it through both `--help` and `--about`; the GUI and TUI provide an About button
+near the profile controls.
 
 ## GUI profiles and preferences
 
@@ -34,6 +46,12 @@ project/workspace. Paths outside the folder remain absolute. The Settings tab
 also stores a default output directory and up to eight recent profiles in the
 platform user configuration directory. The GUI and TUI share these preferences;
 they do not affect CLI invocations.
+
+Run the GUI from the workspace with:
+
+```text
+cargo run -p combinator-gui --locked
+```
 
 ## Keyboard-first TUI
 
@@ -59,11 +77,14 @@ Profiles use the same format as the GUI and can be opened in either interface.
 cargo build --release --locked
 ```
 
-The binary is produced at `target/release/combinator` (`target/release/combinator.exe`
-on Windows). Run it directly, or install it onto your `PATH`:
+This builds the workspace. The command-line binary is produced at
+`target/release/combinator` (`target/release/combinator.exe` on Windows). The
+TUI and GUI binaries are produced alongside it as `combinator-tui` and
+`combinator-gui` (with `.exe` suffixes on Windows). Run the CLI directly, or
+install it onto your `PATH`:
 
 ```
-cargo install --path crates/combinator-cli
+cargo install --path crates/combinator-cli --locked
 ```
 
 Requires Rust edition 2021 and Rust `1.94.1` (the minimum declared by all
@@ -71,12 +92,18 @@ workspace manifests).
 
 ## Compatibility and release scope
 
-The supported integration boundary is the `combinator` CLI. GitHub binary
-releases support Linux and Windows x86_64. Within a major version, flags and
-defaults, exit-code meanings, existing error codes, stdout/stderr ownership,
-and the meanings of JSONL fields remain compatible. New JSONL fields are
-additive. The machine-readable `--explain --format json` response is versioned
-by `schema_version`; incompatible changes require a new schema version.
+Version `0.1.0` is the first early public release. The project has automated
+tests and release validation, but has not yet received broad independent
+testing. The CLI is the supported integration boundary and should be preferred
+for automation. The library crates, GUI, and TUI are usable, but their APIs and
+behavior may still change before the `1.0.0` release.
+
+GitHub binary releases currently support Linux and Windows x86_64 and include
+the CLI, TUI, and GUI binaries. Within a major version, CLI flags and defaults,
+exit-code meanings, existing error codes, stdout/stderr ownership, and the
+meanings of JSONL fields remain compatible. New JSONL fields are additive. The
+machine-readable `--explain --format json` response is versioned by
+`schema_version`; incompatible changes require a new schema version.
 
 Product ordering and sharding use version 1 deterministic algorithms, with
 stable ordering for stable inputs. `combinator-core` is an internal/future
@@ -160,7 +187,8 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--count-only` | off | Print only the total combination count and exit; generates nothing. |
 | `--explain` | off | Print a validated execution summary and generate nothing. Use `--format json` for JSON. |
 | `--dry-run` | off | Validate the request and print a summary without generating records or creating output files. |
-| `--format <text\|jsonl\|csv\|tsv\|nul>` | `text` | Output format. CSV/TSV quote fields as needed; NUL terminates each record with `\\0`. |
+| `--filter <EXPR>` | none | Apply a typed candidate filter; repeatable and ANDed. |
+| `--format <text\|jsonl\|json\|csv\|tsv\|nul>` | `text` | Output format. `json` is for `--explain`/`--dry-run`; CSV/TSV quote fields as needed; NUL terminates each record with `\\0`. |
 | `--lean-output` | off | In `jsonl` format, emit only the value as a bare JSON string per line, instead of the full `{"i":...,"value":...,"fields":[...]}` object. |
 | `-o, --output <PATH>` | stdout | Write output to this file instead of stdout. |
 | `-f, --overwrite` (alias `--force`) | off | Allow overwriting `--output` if it already exists. |
@@ -178,8 +206,10 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--quiet` | off | Suppress non-fatal warnings; fatal diagnostics are unaffected. |
 | `--warnings-as-errors` | off | Convert the first non-fatal warning into a runtime error. Takes precedence over `--quiet`. |
 | `--summary` | off | Print `records` and `bytes` to stderr after successful generated output. |
+| `--timeout-ms <MS>` | none | Cancel execution after the specified number of milliseconds. |
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
+| `--about` | — | Print project information and troubleshooting guidance. |
 
 The `completions <shell>` subcommand generates a completion script for
 `bash`, `elvish`, `fish`, `powershell`, or `zsh`. The `man` subcommand writes
@@ -188,7 +218,7 @@ definition and keep stdout free of diagnostics.
 
 ## Operation modes
 
-`combinator` supports four operations. The bare invocation with no
+`combinator` supports seven operation modes. The bare invocation with no
 subcommand — everything shown above — means `product`, and behaves
 identically to `combinator product ...`:
 
@@ -197,6 +227,9 @@ combinator [OPTIONS]           # product (default)
 combinator product [OPTIONS]   # same as above, explicit
 combinator zip [OPTIONS]       # positional pairing
 combinator concat [OPTIONS]    # sequential concatenation
+combinator permutations [OPTIONS]  # orderings of one input pool
+combinator combinations [OPTIONS]  # unordered selections
+combinator variations [OPTIONS]    # ordered selections without replacement
 combinator join [OPTIONS]      # keyed relational join
 ```
 
@@ -227,6 +260,11 @@ combinator join [OPTIONS]      # keyed relational join
   y
   z
   ```
+- **`permutations`** — emits every ordering of one input pool.
+- **`combinations`** — emits unordered selections of a fixed size using
+  `--choose`.
+- **`variations`** — emits ordered selections without replacement using
+  `--length`.
 
 Flags that only make sense for one mode are rejected at parse time (exit 2)
 under the others: `--reverse-fields` only exists under `product`,
@@ -476,9 +514,11 @@ stderr alone and get nothing but diagnostics.
 errors (bad arguments/input) exit **2**; runtime errors (I/O, capacity, and
 similar failures encountered while executing an otherwise-valid command) exit
 **1**. `EMPTY_LIST` is the sole non-fatal warning: it is written to stderr but
-does not change the exit code (the run still exits **0**, having produced
-zero combinations). `--quiet` suppresses it; `--warnings-as-errors` reports it
-as a runtime error with exit **1**.
+does not change the exit code (the run still exits **0**). For every operation
+except `concat` an empty list means zero combinations; under `concat` the empty
+list simply contributes no records and the remaining lists are still emitted,
+and the warning says so. `--quiet` suppresses it; `--warnings-as-errors`
+reports it as a runtime error with exit **1**.
 
 | Code | Exit | Meaning |
 |---|---|---|
@@ -494,7 +534,7 @@ as a runtime error with exit **1**.
 | `TEMPLATE_SEPARATOR_CONFLICT` | 2 | A template was combined with a non-empty `--sep`. |
 | `TEMPLATE_INVALID` | 2 | Template syntax or a template reference is invalid. |
 | `TEMPLATE_UNKNOWN_FIELD` | 2 | A template references an unknown field. |
-| `TEMPLATE_NAMES_MISMATCH` | 2 | The number of `--name` values does not match the input-list count. |
+| `TEMPLATE_NAMES_MISMATCH` | 2 | The number of `--name` values does not match the number of fields in a record. That is the input-list count for `product` and `zip`, always 1 for `concat`, the pool size for `permutations`, and `--choose`/`--length` for `combinations`/`variations`. |
 | `TEMPLATE_DUPLICATE_NAME` | 2 | A field name was supplied more than once. |
 | `TEMPLATE_INVALID_NAME` | 2 | A field name is not a valid identifier. |
 | `TEMPLATE_TOO_LARGE` | 2 | The template exceeds its 1 MiB security ceiling or configured input limit. |
@@ -508,7 +548,7 @@ as a runtime error with exit **1**.
 | `SHARD_COUNT_INVALID` | 2 | `--shard-count` must be positive. |
 | `SHARD_INDEX_INVALID` | 2 | `--shard-index` must be less than `--shard-count`. |
 | `SHARD_COUNT_OVERFLOW` | 1 | The shard range could not be computed safely. |
-| `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items, so the product is empty. Written to stderr; not a failure. |
+| `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items. Every operation except `concat` therefore produces no combinations; under `concat` that list contributes no records and the others are still emitted. Written to stderr; not a failure. |
 | `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
 | `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |
 | `OUTPUT_EXISTS` | 1 | `--output` names a file that already exists and `--overwrite` was not passed. |

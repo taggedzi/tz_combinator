@@ -9,5 +9,8 @@ automatically generated release notes.
 
 ## [0.1.0] - 2026-07-26
 
-- Initial release of the `combinator` CLI and workspace libraries.
-- Linux and Windows release archives are published by the tagged-release workflow.
+- First early public release of the `combinator` CLI, TUI, GUI, and workspace
+  libraries.
+- Linux and Windows x86_64 release archives include all three binaries.
+- The CLI is the supported integration boundary; library, GUI, and TUI APIs may
+  change before `1.0.0`.

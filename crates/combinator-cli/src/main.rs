@@ -14,8 +14,8 @@ use clap::{CommandFactory, Parser};
 use combinator_codecs::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
-    generate_with, operation_count, ConcatOptions, Constraint, Count, GenerationLimits,
-    GenerationRequest, Operation, ProductOptions, SelectionOptions, ZipOptions,
+    generate_with, operation_count, operation_field_count, ConcatOptions, Constraint, Count,
+    GenerationLimits, GenerationRequest, Operation, ProductOptions, SelectionOptions, ZipOptions,
 };
 
 use cli::{
@@ -56,6 +56,10 @@ impl Write for OutputWriter<'_> {
 
 fn main() {
     let cli = Cli::parse();
+    if cli.about {
+        println!("{}", combinator_app::about_text());
+        return;
+    }
     if let Some(mode) = cli.command.as_ref() {
         match mode {
             Mode::Completions { shell } => {
@@ -87,7 +91,13 @@ fn main() {
             | Mode::Variations(_) => {}
         }
     }
-    let (common, sep, op) = resolve(cli);
+    let (common, sep, op) = match resolve(cli) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{}", render(&error, false));
+            std::process::exit(exit_code(&error));
+        }
+    };
     let json_errors = matches!(common.format, OutFormat::Jsonl | OutFormat::Json);
     if let Err(e) = run(common, sep, op) {
         eprintln!("{}", render(&e, json_errors));
@@ -163,7 +173,7 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         .map(|path| OutputFile::open(path, common.overwrite))
         .transpose()?;
     let mut writer = match output_file.as_mut() {
-        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
+        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut()?)),
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let mut bytes = 0u64;
@@ -368,43 +378,53 @@ fn parse_join_csv(
 /// invocation) to a clap-free `(CommonArgs, String, Operation)` triple
 /// (`sep` is CLI-only — not every mode has one, so it isn't part of any
 /// engine's options type). Everything past this point is clap-agnostic.
-fn resolve(cli: Cli) -> (CommonArgs, String, Operation) {
+fn resolve(cli: Cli) -> Result<(CommonArgs, String, Operation), AppError> {
     match cli.command {
-        Some(Mode::Product(args)) => product_operation(args),
-        Some(Mode::Zip(args)) => zip_operation(args),
-        Some(Mode::Concat(args)) => concat_operation(args),
+        Some(Mode::Product(args)) => Ok(product_operation(args)),
+        Some(Mode::Zip(args)) => Ok(zip_operation(args)),
+        Some(Mode::Concat(args)) => Ok(concat_operation(args)),
         Some(Mode::Permutations(args)) => {
             let common = args.common;
             let options = selection_options(&common);
-            selection_operation(common, Operation::Permutations(options), "")
+            Ok(selection_operation(
+                common,
+                Operation::Permutations(options),
+                "",
+            ))
         }
         Some(Mode::Combinations(args)) => {
             let common = args.common;
             let options = selection_options(&common);
-            selection_operation(
+            Ok(selection_operation(
                 common,
                 Operation::Combinations {
                     choose: args.choose,
                     options,
                 },
                 "",
-            )
+            ))
         }
         Some(Mode::Variations(args)) => {
             let common = args.common;
             let options = selection_options(&common);
-            selection_operation(
+            Ok(selection_operation(
                 common,
                 Operation::Variations {
                     length: args.length,
                     options,
                 },
                 "",
-            )
+            ))
         }
-        Some(Mode::Join(_)) => unreachable!("handled in main"),
-        Some(Mode::Completions { .. } | Mode::Man) => unreachable!("handled in main"),
-        None => product_operation(cli.product),
+        Some(Mode::Join(_)) => Err(AppError::usage(
+            "MODE_CONFLICT",
+            "join mode must be handled before resolving list operations",
+        )),
+        Some(Mode::Completions { .. } | Mode::Man) => Err(AppError::usage(
+            "MODE_CONFLICT",
+            "auxiliary mode must be handled before resolving list operations",
+        )),
+        None => Ok(product_operation(cli.product)),
     }
 }
 
@@ -724,10 +744,10 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     )?;
     check_deadline(deadline)?;
 
-    let empty_template = Template::parse("").expect("empty template is valid");
+    let empty_template = Template::parse("").map_err(template_error)?;
     let template_for_validation = template.as_ref().unwrap_or(&empty_template);
     template_for_validation
-        .validate_fields(&common.names, lists.len())
+        .validate_fields(&common.names, operation_field_count(&op, &lists))
         .map_err(template_error)?;
 
     let json_out = matches!(common.format, OutFormat::Jsonl);
@@ -735,11 +755,17 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     // Collect warnings until all validation and preflight checks have passed.
     // This prevents a warning from appearing before a later fatal diagnostic.
     let mut warnings: Vec<Warning> = Vec::new();
+    let empty_list_message = match op {
+        // Concat emits each list in sequence, so an empty list drops out
+        // without affecting the records the other lists contribute.
+        Operation::Concat(_) => "a list is empty; it contributes no records",
+        _ => "a list is empty; zero combinations will be produced",
+    };
     for (i, l) in lists.iter().enumerate() {
         if l.is_empty() {
             warnings.push((
                 "EMPTY_LIST",
-                "a list is empty; zero combinations will be produced",
+                empty_list_message,
                 vec![("list_index".to_string(), i.to_string())],
             ));
         }
@@ -858,7 +884,7 @@ fn stream_core(
         .map(|path| OutputFile::open(path, common.overwrite))
         .transpose()?;
     let mut writer = match output_file.as_mut() {
-        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut())),
+        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut()?)),
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let cancel = || deadline_expired(deadline);
@@ -1223,7 +1249,12 @@ fn load_template(common: &CommonArgs, sep: &str) -> Result<Option<Template>, App
         }
         (None, Some(path)) => input::read_template_bounded(path, max_template_bytes)?,
         (None, None) => return Ok(None),
-        (Some(_), Some(_)) => unreachable!("template source conflict handled above"),
+        (Some(_), Some(_)) => {
+            return Err(AppError::usage(
+                "TEMPLATE_CONFLICT",
+                "template and template-file cannot be used together",
+            ))
+        }
     };
     Template::parse(&source).map(Some).map_err(template_error)
 }
@@ -1253,7 +1284,7 @@ fn template_error(error: TemplateError) -> AppError {
         TemplateError::NameCountMismatch { expected, actual } => {
             return AppError::usage(
                 "TEMPLATE_NAMES_MISMATCH",
-                "the number of field names must equal the number of input lists",
+                "the number of field names must equal the number of fields in a record",
             )
             .with("expected", expected)
             .with("actual", actual);
@@ -1263,6 +1294,9 @@ fn template_error(error: TemplateError) -> AppError {
             "template references an unknown field",
             Some(position),
         ),
+        TemplateError::OutputEncoding => {
+            return AppError::runtime("WRITE_FAILED", "failed encoding output record");
+        }
     };
     let error = AppError::usage(code, message);
     match position {
@@ -1585,7 +1619,8 @@ mod tests {
             "--sep",
             "-",
             "--reverse-fields",
-        ]));
+        ]))
+        .unwrap();
         assert_eq!(sep, "-");
         assert_eq!(operation_name(&product), "product");
         assert_eq!(ordering_name(&product), "reverse-fields");
@@ -1599,16 +1634,16 @@ mod tests {
             "b",
             "--reverse",
         ]);
-        let (_, _, zip) = resolve(cli);
+        let (_, _, zip) = resolve(cli).unwrap();
         assert_eq!(operation_name(&zip), "zip");
         assert_eq!(ordering_name(&zip), "reverse");
 
         let cli = Cli::parse_from(["combinator", "concat", "--list", "a", "--reverse"]);
-        let (_, _, concat) = resolve(cli);
+        let (_, _, concat) = resolve(cli).unwrap();
         assert_eq!(operation_name(&concat), "concat");
         assert_eq!(ordering_name(&concat), "reverse");
 
-        let (_, _, forward) = resolve(Cli::parse_from(["combinator", "--list", "a"]));
+        let (_, _, forward) = resolve(Cli::parse_from(["combinator", "--list", "a"])).unwrap();
         assert_eq!(ordering_name(&forward), "forward");
     }
 

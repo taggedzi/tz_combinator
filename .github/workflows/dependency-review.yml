@@ -21,3 +21,8 @@ jobs:
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
           cargo audit
+
+      - name: Check dependency policy
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked
+          cargo deny check

@@ -26,7 +26,10 @@ pub use join::{
     JoinedRecord, Record,
 };
 pub use normalize::{normalize_lists, normalize_typed, Transform};
-pub use operation::{count as operation_count, validate as validate_operation, Operation};
+pub use operation::{
+    count as operation_count, field_count as operation_field_count, validate as validate_operation,
+    Operation,
+};
 pub use product::{combinations, Product, ProductOptions};
 pub use records::{
     generate, generate_with, FieldIndex, GenerationLimits, GenerationReport, GenerationRequest,

@@ -6,6 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
+use combinator_app::validate_output_path;
 
 /// Owns an output file and commits it only after successful generation.
 pub struct OutputFile {
@@ -21,25 +22,8 @@ impl OutputFile {
     /// sibling temporary file for atomic replacement.
     pub fn open(path: &str, overwrite: bool) -> Result<Self, AppError> {
         let destination = PathBuf::from(path);
-        if let Ok(metadata) = fs::symlink_metadata(&destination) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to use a symbolic link or reparse point as output",
-                )
-                .with("path", path));
-            }
-        }
-        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-        if let Ok(metadata) = fs::symlink_metadata(parent) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to use a symbolic-link or reparse-point output directory",
-                )
-                .with("path", parent.display()));
-            }
-        }
+        validate_output_path(&destination)
+            .map_err(|error| AppError::runtime(error.code, error.message).with("path", path))?;
 
         let (temporary, file) = create_sibling_temp(&destination)?;
         Ok(Self {
@@ -51,22 +35,22 @@ impl OutputFile {
         })
     }
 
-    pub fn file_mut(&mut self) -> &mut File {
+    pub fn file_mut(&mut self) -> Result<&mut File, AppError> {
         self.file
             .as_mut()
-            .expect("output file remains open until commit")
+            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))
     }
 
     /// Commits the completed output. A staged overwrite is replaced atomically.
     pub fn commit(mut self) -> Result<(), AppError> {
-        self.file
+        let file = self
+            .file
             .as_ref()
-            .expect("output file remains open until commit")
-            .sync_all()
-            .map_err(|e| {
-                AppError::runtime("WRITE_FAILED", format!("could not sync output file: {e}"))
-                    .with("path", self.destination.display())
-            })?;
+            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))?;
+        file.sync_all().map_err(|e| {
+            AppError::runtime("WRITE_FAILED", format!("could not sync output file: {e}"))
+                .with("path", self.destination.display())
+        })?;
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
             let result = if self.overwrite {
@@ -91,20 +75,6 @@ impl OutputFile {
         self.committed = true;
         Ok(())
     }
-}
-
-#[cfg(not(windows))]
-fn is_unsafe_target(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
-#[cfg(windows)]
-fn is_unsafe_target(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 impl Drop for OutputFile {
@@ -248,7 +218,7 @@ mod tests {
         let _ = fs::remove_file(&destination);
         {
             let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-            output.file_mut().write_all(b"new").unwrap();
+            output.file_mut().unwrap().write_all(b"new").unwrap();
             output.commit().unwrap();
         }
         assert_eq!(fs::read(&destination).unwrap(), b"new");
@@ -258,7 +228,7 @@ mod tests {
         let _ = fs::remove_file(&destination);
         {
             let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-            output.file_mut().write_all(b"discarded").unwrap();
+            output.file_mut().unwrap().write_all(b"discarded").unwrap();
         }
         assert!(!destination.exists());
     }
@@ -269,7 +239,7 @@ mod tests {
         let _ = fs::remove_file(&destination);
         fs::write(&destination, b"old").unwrap();
         let mut output = OutputFile::open(destination.to_str().unwrap(), true).unwrap();
-        output.file_mut().write_all(b"new").unwrap();
+        output.file_mut().unwrap().write_all(b"new").unwrap();
         output.commit().unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"new");
         let _ = fs::remove_file(&destination);
@@ -280,7 +250,7 @@ mod tests {
         let destination = path("race");
         let _ = fs::remove_file(&destination);
         let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-        output.file_mut().write_all(b"new").unwrap();
+        output.file_mut().unwrap().write_all(b"new").unwrap();
         fs::write(&destination, b"existing").unwrap();
         let error = output.commit().unwrap_err();
         assert_eq!(error.code, "OUTPUT_EXISTS");
@@ -295,7 +265,7 @@ mod tests {
         let _ = fs::remove_dir_all(&destination);
         fs::create_dir(&destination).unwrap();
         let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-        output.file_mut().write_all(b"new").unwrap();
+        output.file_mut().unwrap().write_all(b"new").unwrap();
         let error = output.commit().unwrap_err();
         assert!(matches!(error.code, "OUTPUT_EXISTS" | "WRITE_FAILED"));
         assert!(destination.is_dir());
