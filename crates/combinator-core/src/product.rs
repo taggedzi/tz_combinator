@@ -267,4 +267,123 @@ mod tests {
             vec![vec![0]]
         );
     }
+
+    #[test]
+    fn reverse_fields_and_reverse_with_window_use_the_same_mixed_radix_order() {
+        let lists = vec![
+            vec!["a".into(), "b".into()],
+            vec!["1".into(), "2".into(), "3".into()],
+        ];
+        let opts = ProductOptions {
+            reverse: true,
+            reverse_fields: true,
+            offset: 1,
+            limit: Some(3),
+        };
+
+        assert_eq!(
+            combinations(&lists, opts).collect::<Vec<_>>(),
+            vec![vec![0, 2], vec![1, 1], vec![0, 1]]
+        );
+    }
+
+    #[test]
+    fn handles_more_than_two_lists_and_ragged_lengths() {
+        let lists = vec![
+            vec!["a".into(), "b".into()],
+            vec!["1".into()],
+            vec!["x".into(), "y".into(), "z".into()],
+        ];
+
+        assert_eq!(
+            combinations(&lists, ProductOptions::default()).collect::<Vec<_>>(),
+            vec![
+                vec![0, 0, 0],
+                vec![0, 0, 1],
+                vec![0, 0, 2],
+                vec![1, 0, 0],
+                vec![1, 0, 1],
+                vec![1, 0, 2],
+            ]
+        );
+    }
+
+    #[test]
+    fn zero_lists_are_empty_and_do_not_panic() {
+        assert!(combinations(&[], ProductOptions::default())
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn option_matrix_matches_a_simple_reference_order() {
+        let lists = vec![
+            vec!["a0".into(), "a1".into()],
+            vec!["b0".into(), "b1".into(), "b2".into()],
+            vec!["c0".into(), "c1".into()],
+        ];
+        let total = 12usize;
+
+        for reverse in [false, true] {
+            for reverse_fields in [false, true] {
+                let mut expected = Vec::with_capacity(total);
+                let outer_order: Vec<usize> = if reverse_fields {
+                    (0..lists.len()).rev().collect()
+                } else {
+                    (0..lists.len()).collect()
+                };
+
+                fn visit(
+                    lists: &[Vec<String>],
+                    order: &[usize],
+                    depth: usize,
+                    tuple: &mut [usize],
+                    output: &mut Vec<Vec<usize>>,
+                ) {
+                    if depth == order.len() {
+                        output.push(tuple.to_vec());
+                        return;
+                    }
+                    let position = order[depth];
+                    for index in 0..lists[position].len() {
+                        tuple[position] = index;
+                        visit(lists, order, depth + 1, tuple, output);
+                    }
+                }
+
+                visit(
+                    &lists,
+                    &outer_order,
+                    0,
+                    &mut vec![0; lists.len()],
+                    &mut expected,
+                );
+                if reverse {
+                    expected.reverse();
+                }
+
+                for offset in [0u128, 1, 5, total as u128, (total + 1) as u128] {
+                    for limit in [None, Some(0u128), Some(1), Some(4), Some(20)] {
+                        let expected_page = expected
+                            .iter()
+                            .skip(offset as usize)
+                            .take(limit.map_or(usize::MAX, |value| value as usize))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let actual = combinations(
+                            &lists,
+                            ProductOptions {
+                                reverse,
+                                reverse_fields,
+                                offset,
+                                limit,
+                            },
+                        )
+                        .collect::<Vec<_>>();
+                        assert_eq!(actual, expected_page, "reverse={reverse}, reverse_fields={reverse_fields}, offset={offset}, limit={limit:?}");
+                    }
+                }
+            }
+        }
+    }
 }
