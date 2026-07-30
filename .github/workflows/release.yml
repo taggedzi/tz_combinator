@@ -26,9 +26,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             platform: linux-x86_64
-          - os: windows-latest
+          - os: windows-2022
             platform: windows-x86_64
     steps:
       - name: Check out source
@@ -114,7 +114,7 @@ jobs:
   publish:
     name: Publish release artifacts
     needs: [package, coverage, install, dependencies]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
