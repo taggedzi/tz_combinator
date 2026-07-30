@@ -21,23 +21,8 @@ impl FileSink {
     /// Opens a staged output destination.
     pub fn open(path: impl AsRef<Path>, overwrite: bool) -> Result<Self, AppError> {
         let destination = path.as_ref().to_path_buf();
-        if let Ok(metadata) = fs::symlink_metadata(&destination) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to use a symbolic link or reparse point as output",
-                ));
-            }
-        }
-        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-        if let Ok(metadata) = fs::symlink_metadata(parent) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to use a symbolic-link or reparse-point output directory",
-                ));
-            }
-        }
+        crate::validate_output_path(&destination)
+            .map_err(|error| AppError::runtime(error.code, error.message))?;
         let (temporary, file) = create_sibling_temp(&destination)?;
         Ok(Self {
             file: Some(file),
@@ -98,20 +83,6 @@ impl Drop for FileSink {
             let _ = fs::remove_file(temporary);
         }
     }
-}
-
-#[cfg(not(windows))]
-fn is_unsafe_target(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
-#[cfg(windows)]
-fn is_unsafe_target(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> {

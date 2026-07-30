@@ -9,10 +9,10 @@ use std::{
 };
 
 use combinator_app::{
-    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppError,
-    AppOperation, CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits,
-    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
-    PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
+    ensure_output_parent, join_plan, join_preview, join_stream, plan, preview, read_input_source,
+    stream, AppError, AppOperation, CancellationToken, ExecutionPlan, FileSink, Format,
+    InputFormat, InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest,
+    OutputRecord, OutputSink, PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
@@ -1810,10 +1810,6 @@ impl App {
 
 fn save_profile_file(path: &Path, mut profile: Profile) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create profile folder: {error}"))?;
-    }
     relativize_profile_paths(&mut profile, parent);
     let mut text = serde_json::to_string_pretty(&profile)
         .map_err(|error| format!("could not encode profile: {error}"))?;
@@ -1824,7 +1820,7 @@ fn save_profile_file(path: &Path, mut profile: Profile) -> Result<(), String> {
             MAX_PROFILE_BYTES
         ));
     }
-    fs::write(path, text).map_err(|error| format!("could not save profile: {error}"))
+    atomic_write_text(path, &text)
 }
 
 fn load_profile_file(path: &Path) -> Result<Profile, String> {
@@ -1909,14 +1905,23 @@ fn save_preferences(preferences: &Preferences) -> Result<(), String> {
     let Some(path) = preferences_path() else {
         return Ok(());
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create config folder: {error}"))?;
-    }
+    ensure_output_parent(&path).map_err(|error| format!("{}: {}", error.code, error.message))?;
     let text = serde_json::to_string_pretty(preferences)
         .map_err(|error| format!("could not encode preferences: {error}"))?;
-    fs::write(path, format!("{text}\n"))
-        .map_err(|error| format!("could not save preferences: {error}"))
+    atomic_write_text(&path, &format!("{text}\n"))
+}
+
+fn atomic_write_text(path: &Path, contents: &str) -> Result<(), String> {
+    let mut sink =
+        FileSink::open(path, true).map_err(|error| format!("{}: {}", error.code, error.message))?;
+    sink.record(OutputRecord {
+        ordinal: 0,
+        value: contents.to_string(),
+        fields: Vec::new(),
+    })
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    sink.commit()
+        .map_err(|error| format!("{}: {}", error.code, error.message))
 }
 
 fn remember_profile(preferences: &mut Preferences, path: &Path) {

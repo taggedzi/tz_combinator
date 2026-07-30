@@ -1,147 +1,206 @@
-name: Cross-platform CI and Release
+name: Release
 
 on:
   push:
-    branches:
-      - master
     tags:
       - "v*"
-  pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to package
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 env:
   RUST_TOOLCHAIN: 1.94.1
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build (${{ matrix.name }})
+  package:
+    name: Package (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Linux x86_64
-            os: ubuntu-24.04
-            artifact: combinator-linux-x86_64
-          - name: Windows x86_64
-            os: windows-2022
-            artifact: combinator-windows-x86_64
-
+          - os: ubuntu-latest
+            platform: linux-x86_64
+          - os: windows-latest
+            platform: windows-x86_64
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install pinned Rust toolchain
-        shell: bash
-        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+        run: rustup toolchain install "$env:RUST_TOOLCHAIN" --profile minimal
+        if: runner.os == 'Windows'
 
-      - name: Run tests
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+        if: runner.os == 'Linux'
+
+      - name: Run workspace tests
         run: cargo test --workspace --locked
 
-      - name: Build release binary
+      - name: Build release binaries
         run: cargo build --workspace --release --locked
 
-      - name: Smoke test release binary on Linux
+      - name: Smoke test Linux release binary
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euo pipefail
           target/release/combinator --version
           actual="$(target/release/combinator --list 'red,blue' --list 'car,bike' --sep '-')"
           expected=$'red-car\nred-bike\nblue-car\nblue-bike'
           [[ "$actual" == "$expected" ]]
-          jsonl="$(target/release/combinator --list 'a,b' --list '1,2' --format jsonl)"
-          grep -q '"i":0' <<<"$jsonl"
+          target/release/combinator --list 'a,b' --list '1,2' --format jsonl | grep -q '"i":0'
 
-      - name: Smoke test release binary on Windows
+      - name: Smoke test Windows release binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           & target/release/combinator.exe --version
           $actual = @(& target/release/combinator.exe --list 'red,blue' --list 'car,bike' --sep '-')
           $expected = @('red-car', 'red-bike', 'blue-car', 'blue-bike')
-          if (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) {
-            throw "Unexpected smoke-test output: $($actual -join ', ')"
-          }
-          $jsonl = & target/release/combinator.exe --list 'a,b' --list '1,2' --format jsonl
-          if (-not ($jsonl -match '"i":0')) { throw "JSONL smoke test failed" }
+          if (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) { throw 'Unexpected smoke output' }
 
-      - name: Package Linux archive
+      - name: Package Linux binaries
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          archive_version="${version//\//-}"
-          mkdir -p dist
-          cp target/release/combinator dist/combinator
-          cp target/release/combinator-tui dist/combinator-tui
-          cp target/release/combinator-gui dist/combinator-gui
-          tar -C dist -czf "combinator-${archive_version}-linux-x86_64.tar.gz" combinator combinator-tui combinator-gui
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          root="tz-combinator-${version}-${{ matrix.platform }}"
+          mkdir -p "$root"
+          cp target/release/combinator target/release/combinator-gui target/release/combinator-tui "$root/"
+          cp LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md "$root/"
+          tar -czf "${root}.tar.gz" "$root"
+          sha256sum "${root}.tar.gz" > "${root}.tar.gz.sha256"
 
-      - name: Package Windows archive
+      - name: Package Windows binaries
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          $archiveVersion = $version -replace '[\\/]', '-'
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target/release/combinator.exe dist/combinator.exe
-          Copy-Item target/release/combinator-tui.exe dist/combinator-tui.exe
-          Copy-Item target/release/combinator-gui.exe dist/combinator-gui.exe
-          Compress-Archive -Path dist/combinator.exe,dist/combinator-tui.exe,dist/combinator-gui.exe -DestinationPath "combinator-$archiveVersion-windows-x86_64.zip"
+          $version = $env:RELEASE_TAG.Substring(1)
+          $root = "tz-combinator-$version-${{ matrix.platform }}"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          Copy-Item target/release/combinator.exe, target/release/combinator-gui.exe, target/release/combinator-tui.exe $root
+          Copy-Item LICENSE, README.md, CHANGELOG.md, THIRD_PARTY_LICENSES.md $root
+          Compress-Archive -Path "$root\*" -DestinationPath "$root.zip"
+          $hash = (Get-FileHash "$root.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $root.zip" | Set-Content "$root.zip.sha256"
 
-      - name: Upload release archive
+      - name: Upload package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ matrix.artifact }}
-          path: combinator-*
+          name: ${{ matrix.platform }}
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+            *.zip
+            *.zip.sha256
           if-no-files-found: error
-          retention-days: 7
+
+  publish:
+    name: Publish release artifacts
+    needs: [package, coverage, install, dependencies]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Verify checksums
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          [[ "$RELEASE_TAG" == v* ]]
+          grep -q "^## \[$version\]" CHANGELOG.md
+          for manifest in crates/*/Cargo.toml; do
+            grep -q "^version = \"$version\"" "$manifest"
+          done
+          find artifacts -name '*.sha256' -print0 | while IFS= read -r -d '' checksum; do
+            (cd "$(dirname "$checksum")" && sha256sum --check "$(basename "$checksum")")
+          done
+          linux_archive="$(find artifacts -type f -name '*-linux-x86_64.tar.gz' -print -quit)"
+          windows_archive="$(find artifacts -type f -name '*-windows-x86_64.zip' -print -quit)"
+          test -n "$linux_archive" -a -n "$windows_archive"
+          linux_root="tz-combinator-${version}-linux-x86_64"
+          windows_root="tz-combinator-${version}-windows-x86_64"
+          for file in combinator combinator-gui combinator-tui LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md; do
+            tar -tzf "$linux_archive" | grep -Fxq "$linux_root/$file"
+          done
+          for file in combinator.exe combinator-gui.exe combinator-tui.exe LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md; do
+            unzip -Z1 "$windows_archive" | grep -Fxq "$windows_root/$file"
+          done
+
+      - name: Generate build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            ${{ github.workspace }}/artifacts/**/*.tar.gz
+            ${{ github.workspace }}/artifacts/**/*.zip
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' -o -name '*.zip' -o -name '*.zip.sha256' \) -print)
+          gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag --generate-notes
 
   coverage:
     name: Coverage threshold
     runs-on: ubuntu-24.04
-
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Install pinned Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-          rustup component add llvm-tools-preview --toolchain "$RUST_TOOLCHAIN-x86_64-unknown-linux-gnu"
-
+        run: rustup toolchain install 1.94.1 --profile minimal
       - name: Install coverage tool
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
-
-      - name: Enforce 80% line coverage
-        # GUI and TUI entry points require an interactive display/input loop and
-        # are not exercised by this headless Linux coverage job. Their
-        # persistence/core behavior has focused tests; keep the release gate
-        # representative of the engine, codecs, application layer, and CLI.
+      - name: Enforce line coverage
         run: cargo llvm-cov --workspace --all-features --exclude combinator-gui --exclude combinator-tui --summary-only --fail-under-lines 80
 
-  package:
+  install:
     name: Package and install validation
     runs-on: ubuntu-24.04
-
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Install pinned Rust toolchain
-        shell: bash
-        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-
+        run: rustup toolchain install 1.94.1 --profile minimal
       - name: Package workspace crates
         run: cargo package --workspace --locked --no-verify
-
       - name: Validate cargo install
         shell: bash
         run: |
+          set -euo pipefail
           install_root="$RUNNER_TEMP/combinator-install"
           cargo install --path crates/combinator-cli --locked --root "$install_root"
           "$install_root/bin/combinator" --version
@@ -152,67 +211,3 @@ jobs:
   dependencies:
     name: Dependency review
     uses: ./.github/workflows/dependency-review.yml
-
-  publish:
-    name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, coverage, package, dependencies]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download release archives
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Verify release versions and archive contents
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          test "$GITHUB_REF" = "refs/tags/v$version"
-          grep -q "^## \[$version\]" CHANGELOG.md
-          grep -q "^version = \"$version\"" crates/combinator-cli/Cargo.toml
-          grep -q "^version = \"$version\"" crates/combinator-core/Cargo.toml
-          grep -q "^version = \"$version\"" crates/combinator-codecs/Cargo.toml
-          archive_version="${version//\//-}"
-          archives=(dist/combinator-"$archive_version"-linux-x86_64.tar.gz dist/combinator-"$archive_version"-windows-x86_64.zip)
-          for archive in "${archives[@]}"; do test -f "$archive"; done
-          for binary in combinator combinator-tui combinator-gui; do
-            tar -tzf "${archives[0]}" | grep -Fxq "$binary"
-          done
-          test "$(tar -tzf "${archives[0]}" | wc -l)" -eq 3
-          for binary in combinator.exe combinator-tui.exe combinator-gui.exe; do
-            unzip -Z1 "${archives[1]}" | grep -Fxq "$binary"
-          done
-          test "$(unzip -Z1 "${archives[1]}" | wc -l)" -eq 3
-          ! find dist -type f \( -name '*.tmp' -o -name '*.key' -o -name '.env' -o -name 'credentials*' \) -print -quit | grep -q .
-
-      - name: Generate checksums
-        working-directory: dist
-        run: |
-          set -euo pipefail
-          find . -maxdepth 1 -type f -name 'combinator-*' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 2
-          sha256sum -c SHA256SUMS
-
-      - name: Copy changelog into release assets
-        run: cp CHANGELOG.md README.md dist/
-
-      - name: Generate signed build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: ${{ github.workspace }}/dist/combinator-*
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

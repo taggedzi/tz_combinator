@@ -6,6 +6,7 @@
 
 mod file_sink;
 mod join;
+mod path_safety;
 
 use combinator_codecs::{InputBudget, SizeEstimate, SizeInput};
 use combinator_core::{
@@ -184,6 +185,7 @@ pub type PreviewRecord = OutputRecord;
 
 pub use file_sink::FileSink;
 pub use join::{join_plan, join_preview, join_stream, JoinFormat, JoinKind, JoinPlan, JoinRequest};
+pub use path_safety::{ensure_output_parent, validate_output_path, OutputPathError};
 
 /// Progress information emitted after a record is accepted by a sink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

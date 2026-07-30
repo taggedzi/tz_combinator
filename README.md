@@ -22,6 +22,11 @@ This repository is a Cargo workspace with six crates:
 For the durable references, see [CLI usage](docs/cli-usage.md) and
 [library usage](docs/library-usage.md).
 
+Release builds and artifact verification are documented in
+[the release procedure](docs/release.md). Output destinations and GUI/TUI
+profile paths must use existing parent directories; symlink/reparse-point
+ancestors and `..` traversal are rejected.
+
 ## GUI profiles and preferences
 
 The desktop GUI is available as `combinator-gui`. Its `New`, `Open…`, `Save`,
@@ -74,7 +79,7 @@ TUI and GUI binaries are produced alongside it as `combinator-tui` and
 install it onto your `PATH`:
 
 ```
-cargo install --path crates/combinator-cli
+cargo install --path crates/combinator-cli --locked
 ```
 
 Requires Rust edition 2021 and Rust `1.94.1` (the minimum declared by all

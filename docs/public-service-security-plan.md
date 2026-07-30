@@ -1,5 +1,13 @@
 # Public-Service Security Hardening Plan
 
+The shared output writer now enforces existing safe parent directories,
+rejects `..` traversal, and rejects symlink/reparse-point destinations and
+ancestors. Generated output and GUI/TUI profile writes use secure sibling
+temporary files with atomic commit. A service wrapper must still constrain
+paths to an application-owned directory when an attacker can concurrently
+replace parent directories, because portable standard-library operations do
+not provide a universal directory-handle-relative no-follow commit primitive.
+
 This plan addresses the residual risks identified during the hostile-environment review. The goal is to make the CLI/library safe to invoke from untrusted clients, including concurrent or publicly exposed service wrappers.
 
 The implementation should remain narrowly scoped, preserve stable CLI error codes, and keep the existing product/zip/concat behavior unchanged unless explicitly noted.
@@ -175,7 +183,7 @@ Document safe defaults and required controls for wrappers that expose the CLI or
 cargo test --workspace --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo audit --locked
+cargo audit
 ```
 
 Where practical, add fuzz targets for bounded parsers, template parsing, join records, and output serialization. Fuzz runs must have explicit time and memory limits.

@@ -1,5 +1,10 @@
 # Pre-release Checklist Completion Plan
 
+The repository now contains the CI and release workflows, dependency policy,
+fuzz smoke job, release profile, packaging, checksum verification, and release
+procedure described by this plan. The final remaining step is to execute the
+workflow on the hosted Linux and Windows runners before publishing a tag.
+
 This plan addresses the remaining pre-release checklist gaps identified in the
 repository audit. macOS CI and release coverage is explicitly out of scope;
 the supported release platforms remain Linux and Windows.
@@ -143,4 +148,3 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo package --workspace --locked --no-verify
 ```
-

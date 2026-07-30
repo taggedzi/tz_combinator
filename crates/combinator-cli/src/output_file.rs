@@ -6,6 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::AppError;
+use combinator_app::validate_output_path;
 
 /// Owns an output file and commits it only after successful generation.
 pub struct OutputFile {
@@ -21,25 +22,8 @@ impl OutputFile {
     /// sibling temporary file for atomic replacement.
     pub fn open(path: &str, overwrite: bool) -> Result<Self, AppError> {
         let destination = PathBuf::from(path);
-        if let Ok(metadata) = fs::symlink_metadata(&destination) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to use a symbolic link or reparse point as output",
-                )
-                .with("path", path));
-            }
-        }
-        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
-        if let Ok(metadata) = fs::symlink_metadata(parent) {
-            if is_unsafe_target(&metadata) {
-                return Err(AppError::runtime(
-                    "UNSAFE_OUTPUT_PATH",
-                    "refusing to use a symbolic-link or reparse-point output directory",
-                )
-                .with("path", parent.display()));
-            }
-        }
+        validate_output_path(&destination)
+            .map_err(|error| AppError::runtime(error.code, error.message).with("path", path))?;
 
         let (temporary, file) = create_sibling_temp(&destination)?;
         Ok(Self {
@@ -91,20 +75,6 @@ impl OutputFile {
         self.committed = true;
         Ok(())
     }
-}
-
-#[cfg(not(windows))]
-fn is_unsafe_target(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
-#[cfg(windows)]
-fn is_unsafe_target(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 impl Drop for OutputFile {
