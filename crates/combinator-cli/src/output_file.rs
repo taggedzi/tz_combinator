@@ -35,22 +35,22 @@ impl OutputFile {
         })
     }
 
-    pub fn file_mut(&mut self) -> &mut File {
+    pub fn file_mut(&mut self) -> Result<&mut File, AppError> {
         self.file
             .as_mut()
-            .expect("output file remains open until commit")
+            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))
     }
 
     /// Commits the completed output. A staged overwrite is replaced atomically.
     pub fn commit(mut self) -> Result<(), AppError> {
-        self.file
+        let file = self
+            .file
             .as_ref()
-            .expect("output file remains open until commit")
-            .sync_all()
-            .map_err(|e| {
-                AppError::runtime("WRITE_FAILED", format!("could not sync output file: {e}"))
-                    .with("path", self.destination.display())
-            })?;
+            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))?;
+        file.sync_all().map_err(|e| {
+            AppError::runtime("WRITE_FAILED", format!("could not sync output file: {e}"))
+                .with("path", self.destination.display())
+        })?;
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
             let result = if self.overwrite {
@@ -218,7 +218,7 @@ mod tests {
         let _ = fs::remove_file(&destination);
         {
             let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-            output.file_mut().write_all(b"new").unwrap();
+            output.file_mut().unwrap().write_all(b"new").unwrap();
             output.commit().unwrap();
         }
         assert_eq!(fs::read(&destination).unwrap(), b"new");
@@ -228,7 +228,7 @@ mod tests {
         let _ = fs::remove_file(&destination);
         {
             let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-            output.file_mut().write_all(b"discarded").unwrap();
+            output.file_mut().unwrap().write_all(b"discarded").unwrap();
         }
         assert!(!destination.exists());
     }
@@ -239,7 +239,7 @@ mod tests {
         let _ = fs::remove_file(&destination);
         fs::write(&destination, b"old").unwrap();
         let mut output = OutputFile::open(destination.to_str().unwrap(), true).unwrap();
-        output.file_mut().write_all(b"new").unwrap();
+        output.file_mut().unwrap().write_all(b"new").unwrap();
         output.commit().unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"new");
         let _ = fs::remove_file(&destination);
@@ -250,7 +250,7 @@ mod tests {
         let destination = path("race");
         let _ = fs::remove_file(&destination);
         let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-        output.file_mut().write_all(b"new").unwrap();
+        output.file_mut().unwrap().write_all(b"new").unwrap();
         fs::write(&destination, b"existing").unwrap();
         let error = output.commit().unwrap_err();
         assert_eq!(error.code, "OUTPUT_EXISTS");
@@ -265,7 +265,7 @@ mod tests {
         let _ = fs::remove_dir_all(&destination);
         fs::create_dir(&destination).unwrap();
         let mut output = OutputFile::open(destination.to_str().unwrap(), false).unwrap();
-        output.file_mut().write_all(b"new").unwrap();
+        output.file_mut().unwrap().write_all(b"new").unwrap();
         let error = output.commit().unwrap_err();
         assert!(matches!(error.code, "OUTPUT_EXISTS" | "WRITE_FAILED"));
         assert!(destination.is_dir());

@@ -35,10 +35,11 @@ impl FileSink {
 
     /// Flushes and commits the staged file.
     pub fn commit(mut self) -> Result<(), AppError> {
-        self.file
+        let file = self
+            .file
             .as_ref()
-            .expect("file remains open until commit")
-            .sync_all()
+            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))?;
+        file.sync_all()
             .map_err(|error| AppError::runtime("WRITE_FAILED", error.to_string()))?;
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
@@ -67,7 +68,7 @@ impl OutputSink for FileSink {
     fn record(&mut self, record: OutputRecord) -> Result<(), AppError> {
         self.file
             .as_mut()
-            .expect("file remains open until commit")
+            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))?
             .write_all(record.value.as_bytes())
             .map_err(|error| AppError::runtime("WRITE_FAILED", error.to_string()))
     }

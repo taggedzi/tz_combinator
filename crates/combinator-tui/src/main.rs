@@ -2033,8 +2033,7 @@ fn terminal_text(value: &str, max_chars: usize) -> String {
             '\r' => rendered.push_str("\\r"),
             '\t' => rendered.push_str("\\t"),
             character if character.is_control() => {
-                write!(rendered, "\\u{{{:x}}}", u32::from(character))
-                    .expect("writing to a string cannot fail");
+                let _ = write!(rendered, "\\u{{{:x}}}", u32::from(character));
             }
             character => rendered.push(character),
         }

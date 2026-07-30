@@ -262,6 +262,12 @@ impl From<CoreError> for AppError {
 
 impl From<combinator_codecs::template::TemplateError> for AppError {
     fn from(error: combinator_codecs::template::TemplateError) -> Self {
+        if matches!(
+            error,
+            combinator_codecs::template::TemplateError::OutputEncoding
+        ) {
+            return Self::runtime("WRITE_FAILED", "failed encoding output record");
+        }
         Self {
             code: "TEMPLATE_INVALID",
             message: format!("invalid output template: {error:?}"),

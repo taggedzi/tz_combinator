@@ -25,6 +25,7 @@ pub enum TemplateError {
     DuplicateName { position: usize },
     NameCountMismatch { expected: usize, actual: usize },
     UnknownField { position: usize },
+    OutputEncoding,
 }
 
 impl Template {
