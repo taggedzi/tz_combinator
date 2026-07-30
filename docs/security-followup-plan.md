@@ -1,5 +1,17 @@
 # Security Follow-up Remediation Plan
 
+## Current implementation status
+
+The resource ceilings, aggregate input budget, secure random temporary names,
+locked toolchain, and failure cleanup described below are implemented in the
+current workspace. Output-path handling now rejects `..` traversal and walks
+all existing destination ancestors for symlink/reparse points. The remaining
+filesystem limitation is the unavoidable race between validation and a
+concurrent privileged replacement of an already-existing parent directory;
+callers handling hostile multi-user paths must constrain destinations to an
+application-owned directory. CI now enforces the locked test, format, Clippy,
+dependency-policy, audit, fuzz-smoke, and release-build gates.
+
 This plan addresses the residual findings from the post-remediation security scan. Each implementation item will be developed on a separate `security/*` branch, committed, merged into `master`, and verified before the next item begins.
 
 ## 1. Enforce non-overridable resource ceilings
@@ -15,7 +27,7 @@ Acceptance criteria:
 
 ## 2. Enforce aggregate input budgets during ingestion
 
-The current global item limit is checked only after all lists are loaded, and input bytes are limited per source rather than across the invocation. Pass a mutable aggregate budget into each reader and reject before reading/storing data that would exceed remaining bytes or items.
+Input bytes and item counts are now enforced through a shared aggregate budget while sources are read, so oversized invocations are rejected before additional data is stored. Keep regression coverage around the budget boundaries when changing parsers or input plumbing.
 
 Acceptance criteria:
 

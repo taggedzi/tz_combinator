@@ -164,3 +164,29 @@ fn version_output_matches_package_version() {
     );
     assert!(out.stderr.is_empty());
 }
+
+#[test]
+fn about_output_contains_release_and_bug_report_information() {
+    let out = run(&["--about"]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("tz_combinator"));
+    assert!(text.contains(env!("CARGO_PKG_VERSION")));
+    assert!(text.contains("MIT"));
+    assert!(text.contains("https://github.com/taggedzi/tz_combinator"));
+    assert!(text.contains("https://github.com/taggedzi/tz_combinator/issues"));
+    assert!(text.contains("Runtime:"));
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn help_contains_about_information_and_flag() {
+    let out = run(&["--help"]);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Version:"));
+    assert!(text.contains("License: MIT"));
+    assert!(text.contains("https://github.com/taggedzi/tz_combinator"));
+    assert!(text.contains("--about"));
+    assert!(out.stderr.is_empty());
+}

@@ -4,8 +4,10 @@
 //! and execution orchestration. It deliberately has no dependency on Clap,
 //! terminals, windows, processes, or filesystem paths.
 
+mod about;
 mod file_sink;
 mod join;
+mod path_safety;
 
 use combinator_codecs::{InputBudget, SizeEstimate, SizeInput};
 use combinator_core::{
@@ -182,8 +184,13 @@ pub struct OutputRecord {
 /// Compatibility name for records returned by the bounded preview helper.
 pub type PreviewRecord = OutputRecord;
 
+pub use about::{
+    about_text, ABOUT_HELP, PROJECT_DESCRIPTION, PROJECT_ISSUES, PROJECT_LICENSE, PROJECT_NAME,
+    PROJECT_REPOSITORY, PROJECT_VERSION,
+};
 pub use file_sink::FileSink;
 pub use join::{join_plan, join_preview, join_stream, JoinFormat, JoinKind, JoinPlan, JoinRequest};
+pub use path_safety::{ensure_output_parent, validate_output_path, OutputPathError};
 
 /// Progress information emitted after a record is accepted by a sink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,6 +262,12 @@ impl From<CoreError> for AppError {
 
 impl From<combinator_codecs::template::TemplateError> for AppError {
     fn from(error: combinator_codecs::template::TemplateError) -> Self {
+        if matches!(
+            error,
+            combinator_codecs::template::TemplateError::OutputEncoding
+        ) {
+            return Self::runtime("WRITE_FAILED", "failed encoding output record");
+        }
         Self {
             code: "TEMPLATE_INVALID",
             message: format!("invalid output template: {error:?}"),

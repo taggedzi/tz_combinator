@@ -22,6 +22,16 @@ This repository is a Cargo workspace with six crates:
 For the durable references, see [CLI usage](docs/cli-usage.md) and
 [library usage](docs/library-usage.md).
 
+Release builds and artifact verification are documented in
+[the release procedure](docs/release.md). Output destinations and GUI/TUI
+profile paths must use existing parent directories; symlink/reparse-point
+ancestors and `..` traversal are rejected.
+
+All interfaces include an About notice with the project description, version,
+MIT license, GitHub repository, and issue-reporting guidance. The CLI exposes
+it through both `--help` and `--about`; the GUI and TUI provide an About button
+near the profile controls.
+
 ## GUI profiles and preferences
 
 The desktop GUI is available as `combinator-gui`. Its `New`, `Open…`, `Save`,
@@ -74,7 +84,7 @@ TUI and GUI binaries are produced alongside it as `combinator-tui` and
 install it onto your `PATH`:
 
 ```
-cargo install --path crates/combinator-cli
+cargo install --path crates/combinator-cli --locked
 ```
 
 Requires Rust edition 2021 and Rust `1.94.1` (the minimum declared by all
@@ -199,6 +209,7 @@ All flags and their defaults, ground-truthed against `crates/combinator-cli/src/
 | `--timeout-ms <MS>` | none | Cancel execution after the specified number of milliseconds. |
 | `-h, --help` | — | Print help. |
 | `-V, --version` | — | Print version. |
+| `--about` | — | Print project information and troubleshooting guidance. |
 
 The `completions <shell>` subcommand generates a completion script for
 `bash`, `elvish`, `fish`, `powershell`, or `zsh`. The `man` subcommand writes

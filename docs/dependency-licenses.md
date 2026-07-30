@@ -38,3 +38,12 @@ Before releasing a binary or changing dependencies:
 The lockfile is committed so dependency versions and checksums are
 reproducible. A dependency with a license that is not approved by the project
 policy must not be added without an explicit licensing decision.
+
+CI enforces the approved license/source policy from `deny.toml` with
+`cargo deny check` and runs `cargo audit` against the committed
+lockfile. Release archives retain `THIRD_PARTY_LICENSES.md` alongside the
+project license. At the time of this release review, `cargo audit` reports two
+allowed upstream maintenance warnings with no safe upgrade available:
+`paste` through the platform-specific Metal renderer and `ttf-parser` through
+the iced font stack. They are explicitly recorded in `deny.toml` and must be
+re-reviewed whenever the GUI dependency graph changes.

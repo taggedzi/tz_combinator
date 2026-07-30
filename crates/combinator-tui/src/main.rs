@@ -9,15 +9,15 @@ use std::{
 };
 
 use combinator_app::{
-    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppError,
-    AppOperation, CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits,
-    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
-    PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
+    about_text, ensure_output_parent, join_plan, join_preview, join_stream, plan, preview,
+    read_input_source, stream, AppError, AppOperation, CancellationToken, ExecutionPlan, FileSink,
+    Format, InputFormat, InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest,
+    OutputRecord, OutputSink, PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +93,7 @@ enum Action {
     OpenProfile,
     SaveProfile,
     SaveAsProfile,
+    About,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -278,6 +279,7 @@ struct App {
     cancellation: Option<CancellationToken>,
     worker: Option<Receiver<WorkerMessage>>,
     progress: Option<ProgressEvent>,
+    about_open: bool,
 }
 
 impl Default for App {
@@ -353,6 +355,7 @@ impl Default for App {
             cancellation: None,
             worker: None,
             progress: None,
+            about_open: false,
         };
         app.sync_requests();
         app.refresh_plan();
@@ -403,6 +406,7 @@ impl App {
         frame.render_widget(self.header(), page[0]);
         if self.page == Page::Settings {
             frame.render_widget(self.settings_panel(page[1].height), page[1]);
+            self.draw_about(frame);
             return;
         }
         let columns = Layout::horizontal([Constraint::Percentage(48), Constraint::Percentage(52)])
@@ -424,6 +428,33 @@ impl App {
         }
         frame.render_widget(self.preview_panel(), right[1]);
         frame.render_widget(self.actions_panel(), right[2]);
+        self.draw_about(frame);
+    }
+
+    fn draw_about(&self, frame: &mut Frame<'_>) {
+        if !self.about_open {
+            return;
+        }
+        let area = frame.area();
+        let width = area.width.saturating_sub(8).min(88);
+        let height = area.height.saturating_sub(6).min(18);
+        let modal = Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width.max(1),
+            height.max(1),
+        );
+        frame.render_widget(Clear, modal);
+        frame.render_widget(
+            Paragraph::new(about_text())
+                .block(
+                    Block::default()
+                        .title(" About tz_combinator ")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: true }),
+            modal,
+        );
     }
 
     fn header(&self) -> Paragraph<'static> {
@@ -454,7 +485,7 @@ impl App {
             Page::Settings => "Settings",
         };
         Paragraph::new(format!(
-            "{}   {}   {}   {}   {}   {}   {}   Focus: {}\nTab navigate • Enter edit/activate • [/] list • Ctrl+O/S/N profile • 1/2/3 pages • q quit",
+            "{}   {}   {}   {}   {}   {}   {}   {}   Focus: {}\nTab navigate • Enter edit/activate • [/] list • Ctrl+O/S/N profile • 1/2/3 pages • q quit",
             tab(Page::Combine, "Combine"),
             tab(Page::Join, "Join"),
             tab(Page::Settings, "Settings"),
@@ -462,6 +493,7 @@ impl App {
             profile_button(Action::OpenProfile, "Open…"),
             profile_button(Action::SaveProfile, "Save"),
             profile_button(Action::SaveAsProfile, "Save as…"),
+            profile_button(Action::About, "About"),
             focus_label(self.focus)
         ))
         .style(Style::default().fg(Color::White))
@@ -942,6 +974,7 @@ impl App {
             Focus::Action(Action::OpenProfile),
             Focus::Action(Action::SaveProfile),
             Focus::Action(Action::SaveAsProfile),
+            Focus::Action(Action::About),
         ];
         match self.page {
             Page::Combine => {
@@ -1078,11 +1111,18 @@ impl App {
                     self.editing = Some(Field::ProfilePath);
                     self.status = "Enter a new profile path, then activate Save".into();
                 }
+                Action::About => self.about_open = true,
             },
         }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> bool {
+        if self.about_open {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+                self.about_open = false;
+            }
+            return false;
+        }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.cancel_generation();
             return false;
@@ -1810,10 +1850,6 @@ impl App {
 
 fn save_profile_file(path: &Path, mut profile: Profile) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create profile folder: {error}"))?;
-    }
     relativize_profile_paths(&mut profile, parent);
     let mut text = serde_json::to_string_pretty(&profile)
         .map_err(|error| format!("could not encode profile: {error}"))?;
@@ -1824,7 +1860,7 @@ fn save_profile_file(path: &Path, mut profile: Profile) -> Result<(), String> {
             MAX_PROFILE_BYTES
         ));
     }
-    fs::write(path, text).map_err(|error| format!("could not save profile: {error}"))
+    atomic_write_text(path, &text)
 }
 
 fn load_profile_file(path: &Path) -> Result<Profile, String> {
@@ -1909,14 +1945,23 @@ fn save_preferences(preferences: &Preferences) -> Result<(), String> {
     let Some(path) = preferences_path() else {
         return Ok(());
     };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("could not create config folder: {error}"))?;
-    }
+    ensure_output_parent(&path).map_err(|error| format!("{}: {}", error.code, error.message))?;
     let text = serde_json::to_string_pretty(preferences)
         .map_err(|error| format!("could not encode preferences: {error}"))?;
-    fs::write(path, format!("{text}\n"))
-        .map_err(|error| format!("could not save preferences: {error}"))
+    atomic_write_text(&path, &format!("{text}\n"))
+}
+
+fn atomic_write_text(path: &Path, contents: &str) -> Result<(), String> {
+    let mut sink =
+        FileSink::open(path, true).map_err(|error| format!("{}: {}", error.code, error.message))?;
+    sink.record(OutputRecord {
+        ordinal: 0,
+        value: contents.to_string(),
+        fields: Vec::new(),
+    })
+    .map_err(|error| format!("{}: {}", error.code, error.message))?;
+    sink.commit()
+        .map_err(|error| format!("{}: {}", error.code, error.message))
 }
 
 fn remember_profile(preferences: &mut Preferences, path: &Path) {
@@ -1988,8 +2033,7 @@ fn terminal_text(value: &str, max_chars: usize) -> String {
             '\r' => rendered.push_str("\\r"),
             '\t' => rendered.push_str("\\t"),
             character if character.is_control() => {
-                write!(rendered, "\\u{{{:x}}}", u32::from(character))
-                    .expect("writing to a string cannot fail");
+                let _ = write!(rendered, "\\u{{{:x}}}", u32::from(character));
             }
             character => rendered.push(character),
         }
@@ -2105,6 +2149,7 @@ fn focus_label(focus: Focus) -> &'static str {
         Focus::Action(Action::OpenProfile) => "Open profile",
         Focus::Action(Action::SaveProfile) => "Save profile",
         Focus::Action(Action::SaveAsProfile) => "Save profile as",
+        Focus::Action(Action::About) => "About",
         Focus::Field(_) => "form field",
     }
 }
@@ -2256,6 +2301,30 @@ mod tests {
         assert!(join_text.contains("Preview"));
         app.page = Page::Settings;
         terminal.draw(|frame| app.draw(frame)).unwrap();
+    }
+
+    #[test]
+    fn about_action_opens_and_escape_closes_modal() {
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut app = App {
+            focus: Focus::Action(Action::About),
+            ..App::default()
+        };
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.about_open);
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("About tz_combinator"));
+        assert!(text.contains("Bug reports:"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.about_open);
     }
 
     #[test]
