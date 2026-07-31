@@ -3,9 +3,9 @@
 use combinator_app::{
     join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
     CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits, InputSource,
-    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, PreviewRecord,
-    ProductRequest, ProgressEvent, UnequalPolicy, PROJECT_DESCRIPTION, PROJECT_ISSUES,
-    PROJECT_LICENSE, PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
+    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, ProductRequest,
+    ProgressEvent, UnequalPolicy, PROJECT_DESCRIPTION, PROJECT_ISSUES, PROJECT_LICENSE,
+    PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
 };
 use iced::widget::{
     button, checkbox, column, container, image, pick_list, row, scrollable, text, text_editor,
@@ -98,7 +98,7 @@ struct CombinatorGui {
     plan: Option<ExecutionPlan>,
     join_plan: Option<JoinPlan>,
     settings_mode: bool,
-    records: Vec<PreviewRecord>,
+    records: Vec<OutputRecord>,
     output_path: String,
     overwrite: bool,
     max_combinations: String,
@@ -1501,7 +1501,7 @@ fn status_view(state: &CombinatorGui) -> Element<'_, Message> {
     }
 }
 
-fn preview_view(records: &[PreviewRecord]) -> Element<'_, Message> {
+fn preview_view(records: &[OutputRecord]) -> Element<'_, Message> {
     let rows = records
         .iter()
         .map(|record| text(format!("{}  {}", record.ordinal, record.value.trim_end())))

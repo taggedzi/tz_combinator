@@ -52,7 +52,12 @@ Model selection is advisory. Do not claim that a particular model was used unles
 3. Make the smallest coherent change using `apply_patch` for manual edits.
 4. Add regression tests for security fixes, especially hostile inputs and filesystem races where practical.
 5. Run focused tests first, then the relevant workspace tests and static checks.
-6. Review the diff for accidental scope expansion, secret exposure, unsafe defaults, and missing error handling.
+6. Check whether the change requires updates to user-facing or developer documentation; update relevant documentation when needed, or record why no update is necessary.
+7. Review the diff for accidental scope expansion, secret exposure, unsafe defaults, and missing error handling.
+
+## Commit conventions
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/) for commit messages, such as `feat:`, `fix:`, `docs:`, or `refactor:`.
 
 ## Rust project conventions
 

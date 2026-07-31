@@ -181,9 +181,6 @@ pub struct OutputRecord {
     pub fields: Vec<String>,
 }
 
-/// Compatibility name for records returned by the bounded preview helper.
-pub type PreviewRecord = OutputRecord;
-
 pub use about::{
     about_text, ABOUT_HELP, PROJECT_DESCRIPTION, PROJECT_ISSUES, PROJECT_LICENSE, PROJECT_NAME,
     PROJECT_REPOSITORY, PROJECT_VERSION,
@@ -329,11 +326,27 @@ pub fn plan(request: &ProductRequest) -> Result<ExecutionPlan, AppError> {
 pub fn preview(
     request: &ProductRequest,
     preview_limit: u128,
-) -> Result<Vec<PreviewRecord>, AppError> {
+) -> Result<Vec<OutputRecord>, AppError> {
     let mut request = request.clone();
     request.options.offset = 0;
     request.options.limit = Some(preview_limit);
-    execute(&request)
+
+    struct Collector {
+        records: Vec<OutputRecord>,
+    }
+
+    impl OutputSink for Collector {
+        fn record(&mut self, record: OutputRecord) -> Result<(), AppError> {
+            self.records.push(record);
+            Ok(())
+        }
+    }
+
+    let mut collector = Collector {
+        records: Vec::new(),
+    };
+    stream(&request, &mut collector, None)?;
+    Ok(collector.records)
 }
 
 /// Streams a Product request to a caller-provided sink.
@@ -422,29 +435,6 @@ pub fn stream<S: OutputSink>(
     })
     .map_err(AppError::from)?;
     Ok(progress)
-}
-
-/// Executes a Product request and returns encoded records in memory.
-///
-/// This is primarily a convenience for bounded previews. Large or persistent
-/// output should use [`stream`] with a bounded sink instead.
-pub fn execute(request: &ProductRequest) -> Result<Vec<PreviewRecord>, AppError> {
-    struct Collector {
-        records: Vec<OutputRecord>,
-    }
-
-    impl OutputSink for Collector {
-        fn record(&mut self, record: OutputRecord) -> Result<(), AppError> {
-            self.records.push(record);
-            Ok(())
-        }
-    }
-
-    let mut collector = Collector {
-        records: Vec::new(),
-    };
-    stream(request, &mut collector, None)?;
-    Ok(collector.records)
 }
 
 fn validate_request(request: &ProductRequest) -> Result<(), AppError> {
@@ -805,7 +795,7 @@ mod tests {
         let plan = plan(&request).unwrap();
         assert_eq!(plan.total_combinations, Count::Exact(0));
         assert_eq!(plan.warnings[0].code, "EMPTY_LIST");
-        assert!(execute(&request).unwrap().is_empty());
+        assert!(preview(&request, 10).unwrap().is_empty());
     }
 
     /// Concat still emits the non-empty lists, so the warning must not tell a
@@ -825,7 +815,7 @@ mod tests {
             "concat generates 2 records; warning said: {}",
             plan.warnings[0].message
         );
-        assert_eq!(execute(&request).unwrap().len(), 2);
+        assert_eq!(preview(&request, 10).unwrap().len(), 2);
     }
 
     /// The CLI refuses a partial set of field names whether or not a template
@@ -867,7 +857,10 @@ mod tests {
     fn enforces_output_byte_limit() {
         let mut request = request();
         request.max_output_bytes = 1;
-        assert_eq!(execute(&request).unwrap_err().code, "OUTPUT_LIMIT_EXCEEDED");
+        assert_eq!(
+            preview(&request, 10).unwrap_err().code,
+            "OUTPUT_LIMIT_EXCEEDED"
+        );
     }
 
     #[test]
