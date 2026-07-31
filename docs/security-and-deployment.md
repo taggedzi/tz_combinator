@@ -40,8 +40,12 @@ memory.
 
 Without `--overwrite`, the output file is created exclusively and the
 operation fails if it already exists. With `--overwrite`, output is staged in
-a sibling temporary file and committed after successful generation. A failed
-write therefore preserves the previous destination.
+a sibling temporary file and committed after successful generation. The
+destination is rechecked immediately before commit, so a destination changed
+to a symbolic link or reparse point is rejected. A failed write therefore
+preserves the previous destination. Without overwrite, the final
+hard-link/exclusive-create step remains authoritative if another process
+creates the destination after opening.
 
 Output paths require an existing parent directory. The writer rejects:
 
@@ -50,8 +54,12 @@ Output paths require an existing parent directory. The writer rejects:
 - parent traversal using `..`.
 
 The writer assumes that a privileged attacker cannot concurrently replace the
-approved parent directory. Services operating across trust boundaries should
-restrict output to an application-owned directory.
+approved parent directory. Portable path-based replacement cannot hold an
+ancestor directory handle across Unix and Windows with identical semantics;
+the preflight and commit-time checks therefore reduce races but are not a
+complete defense against that privileged namespace attack. Services operating
+across trust boundaries must restrict output to an application-owned directory
+and deny untrusted users rename/write access to its ancestors.
 
 ## Preflight and runtime enforcement
 
