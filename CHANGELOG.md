@@ -1,11 +1,11 @@
 # Changelog
 
-This file records user-visible changes. Tagged releases also receive GitHub's
-automatically generated release notes.
+This file records user-visible changes. Release sections are generated during
+release preparation and synchronized from the reviewed sources in
+`release-notes/`. Tagged releases also receive GitHub's automatically generated
+release notes.
 
 ## [Unreleased]
-
-- Continue documenting release changes here before creating the next tag.
 
 ## [0.1.0] - 2026-07-26
 

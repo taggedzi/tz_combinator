@@ -63,8 +63,21 @@ public compatibility contract is in
 5. Run the smallest relevant checks, then broader checks when practical.
 6. Open a pull request explaining the problem, approach, and verification.
 
-Clear, ordinary commit messages are sufficient. No particular commit format,
-signed commit, or contributor agreement is required.
+Clear, ordinary commit messages are sufficient; a signed commit or contributor
+agreement is not required. When practical, use a Conventional Commit prefix
+for a user-visible change so automated release preparation can categorize it:
+
+```text
+feat: add a new user-visible capability
+fix: correct user-visible behavior
+security: harden a user-visible security boundary
+```
+
+Use `!` for a breaking change, such as `feat!: change a stable CLI contract`.
+Documentation, test, CI, refactoring, style, build, and chore commits are
+excluded from generated user-facing notes. Maintainers review the generated
+notes, so an imperfect or unconventional contributor commit message does not
+block a contribution.
 
 ## Project standards
 
