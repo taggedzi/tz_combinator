@@ -44,6 +44,12 @@ jobs:
         run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
         if: runner.os == 'Linux'
 
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-package-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          cache-bin: "false"
+
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
@@ -185,8 +191,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.94.1 --profile minimal
-      - name: Install coverage tool
-        run: cargo install cargo-llvm-cov --version 0.8.7 --locked
+
+      - name: Restore coverage build and tool cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: cargo-llvm-cov-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-tool-0.8.7-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install pinned coverage tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo llvm-cov --version 2>/dev/null | grep -Fq "0.8.7"; then
+            cargo install cargo-llvm-cov --version 0.8.7 --locked
+          fi
+          cargo llvm-cov --version | grep -Fq "0.8.7"
+
       - name: Enforce line coverage
         run: cargo llvm-cov --workspace --all-features --exclude combinator-gui --exclude combinator-tui --summary-only --fail-under-lines 80
 
@@ -198,6 +217,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.94.1 --profile minimal
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-install-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          cache-bin: "false"
+
       - name: Package workspace crates
         run: cargo package --workspace --locked --no-verify
       - name: Validate cargo install

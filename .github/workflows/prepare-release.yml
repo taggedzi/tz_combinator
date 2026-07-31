@@ -66,12 +66,24 @@ jobs:
             exit 1
           }
 
-      - name: Install pinned Rust toolchain and changelog generator
+      - name: Install pinned Rust toolchain
         shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-          cargo +"$RUST_TOOLCHAIN" install git-cliff --version "$GIT_CLIFF_VERSION" --locked
+
+      - name: Restore Rust build and changelog-tool cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: git-cliff-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-tool-${{ env.GIT_CLIFF_VERSION }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install pinned changelog generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git-cliff --version 2>/dev/null | grep -Fq "$GIT_CLIFF_VERSION"; then
+            cargo +"$RUST_TOOLCHAIN" install git-cliff --version "$GIT_CLIFF_VERSION" --locked
+          fi
           test "$(git-cliff --version)" = "git-cliff $GIT_CLIFF_VERSION"
 
       - name: Generate changelog and synchronize versions
