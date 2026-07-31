@@ -1,5 +1,8 @@
 # Security Follow-up Remediation Plan
 
+> Archived planning record. This document preserves historical remediation
+> work and is not the current security reference.
+
 ## Current implementation status
 
 The resource ceilings, aggregate input budget, secure random temporary names,

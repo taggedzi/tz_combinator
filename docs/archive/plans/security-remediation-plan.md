@@ -1,5 +1,8 @@
 # Security Remediation Plan
 
+> Archived planning record. This document preserves historical remediation
+> work and is not the current security reference.
+
 This project is intended to run in hostile or careless environments. The plan below addresses the security findings from the repository review in descending order of impact. Each implementation item is intended to be developed on its own `security/*` branch, committed, verified, and merged into `master` before the next item begins.
 
 ## Branch and merge policy

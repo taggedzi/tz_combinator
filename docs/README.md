@@ -31,9 +31,12 @@ boundary; the Rust APIs are not yet covered by semantic-versioning stability.
 
 - [Release procedure](release.md)
 - [Dependency licenses](dependency-licenses.md)
-- [Feature roadmap](feature-roadmap.md)
 - [Fuzzing guide](../fuzz/README.md)
 
-Files whose names end in `-plan.md`, plus documents under
-`docs/superpowers/`, are implementation records rather than user
-documentation. They are retained for project history and engineering work.
+## I need historical context
+
+The [documentation archive](archive/README.md) contains earlier feature
+roadmaps, brainstorming, design specifications, implementation plans,
+security-remediation notes, and release-planning records. These files are
+retained for project history and engineering research, but are not current
+user guidance.

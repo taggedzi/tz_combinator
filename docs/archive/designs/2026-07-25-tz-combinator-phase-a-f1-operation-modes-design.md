@@ -1,8 +1,13 @@
 # tz_combinator — Phase A / F1 Design: Explicit Operation Modes (product, zip, concat)
 
+> Archived design record. It is retained for historical engineering context,
+> not as the current behavior reference.
+
 **Date:** 2026-07-25
 **Status:** Approved design, ready for implementation planning
-**Scope:** F1 from `docs/feature-roadmap.md` only — the `product`/`zip`/`concat` subcommands,
+**Scope:** F1 from the archived
+[`feature-roadmap.md`](../plans/feature-roadmap.md) only — the
+`product`/`zip`/`concat` subcommands,
 their shared request model, and the CLI restructuring needed to support them. Uses the
 *existing* line/inline list reading only (no CSV/TSV, no templates, no dry-run/explain
 integration — those are F2/F3/F5, separate specs). `join` (F8) and the public Rust API

@@ -1,5 +1,8 @@
 # Public-Service Security Hardening Plan
 
+> Archived planning record. This document preserves historical security work
+> and is not current deployment guidance.
+
 The shared output writer now enforces existing safe parent directories,
 rejects `..` traversal, and rejects symlink/reparse-point destinations and
 ancestors. Generated output and GUI/TUI profile writes use secure sibling

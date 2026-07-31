@@ -1,8 +1,13 @@
 # tz_combinator — Phase A / F3 Design: Templates and Named Fields
 
-**Date:** 2026-07-25  
-**Status:** Proposed design, ready for implementation planning  
-**Scope:** F3 from `docs/feature-roadmap.md` only. This feature adds bounded
+> Archived design record. It is retained for historical engineering context,
+> not as the current behavior reference.
+
+**Date:** 2026-07-25
+
+**Status:** Proposed design, ready for implementation planning
+**Scope:** F3 from the archived
+[`feature-roadmap.md`](../plans/feature-roadmap.md) only. This feature adds bounded
 templates and optional field names to the existing `product`, `zip`, and
 `concat` operations.
 
@@ -259,4 +264,3 @@ cargo test --workspace --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
-

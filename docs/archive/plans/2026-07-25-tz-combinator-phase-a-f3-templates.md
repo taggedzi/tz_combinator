@@ -1,10 +1,14 @@
 # tz_combinator — Phase A / F3 Implementation Plan
 
+> Archived implementation plan. It is retained for historical engineering
+> context and should not be treated as current instructions.
+
 **Goal:** Add bounded positional templates and optional named fields to the
 `product`, `zip`, and `concat` operations while preserving all existing output
 and diagnostic contracts when the feature is unused.
 
-**Design:** `docs/superpowers/specs/2026-07-25-tz-combinator-phase-a-f3-templates-design.md`
+**Archived design:**
+[`../designs/2026-07-25-tz-combinator-phase-a-f3-templates-design.md`](../designs/2026-07-25-tz-combinator-phase-a-f3-templates-design.md)
 
 ## Scope boundaries
 
@@ -202,4 +206,3 @@ F3 is complete when:
 - black-box and hostile-input tests pass;
 - full workspace formatting, tests, and Clippy pass;
 - README and CLI help document the feature accurately.
-

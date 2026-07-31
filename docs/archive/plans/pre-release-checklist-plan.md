@@ -1,5 +1,8 @@
 # Pre-release Checklist Completion Plan
 
+> Archived planning record. This document preserves historical release work
+> and is not the current release procedure.
+
 The repository now contains the CI and release workflows, dependency policy,
 fuzz smoke job, release profile, packaging, checksum verification, and release
 procedure described by this plan. The final remaining step is to execute the

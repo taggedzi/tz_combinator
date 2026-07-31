@@ -1,5 +1,8 @@
 # tz_combinator Phase A / F1 (product/zip/concat) Implementation Plan
 
+> Archived implementation plan. It is retained for historical engineering
+> context and should not be treated as current instructions.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add explicit `zip` and `concat` operation subcommands alongside the existing (now-explicit) `product` subcommand, behind a shared, clap-free `Operation` request model in `combinator-core`, with zero behavior change to the existing bare-invocation product path.
@@ -10,7 +13,10 @@
 
 ## Global Constraints
 
-- Spec: `docs/superpowers/specs/2026-07-25-tz-combinator-phase-a-f1-operation-modes-design.md`. This plan implements that spec exactly; do not add scope beyond it (no CSV/templates/dry-run/joins/Rust-API work here).
+- Archived design:
+  [`../designs/2026-07-25-tz-combinator-phase-a-f1-operation-modes-design.md`](../designs/2026-07-25-tz-combinator-phase-a-f1-operation-modes-design.md).
+  This plan implements that design exactly; do not add scope beyond it (no
+  CSV/templates/dry-run/joins/Rust-API work here).
 - **Data → stdout only. Diagnostics (errors/warnings) → stderr only.** Unchanged from Phase 1.
 - **Exit codes:** `0` success, `2` usage/argument error, `1` runtime error. Unchanged.
 - **Stable error codes never change meaning.** This plan adds exactly one new code: `ZIP_LENGTH_MISMATCH` (runtime, exit 1). Every other existing code (`NO_LISTS`, `SOURCE_CONFLICT`, `EMPTY_LIST`, `BAD_DELIMITER`, `RESOURCE_LIMIT_TOO_HIGH`, `OUTPUT_EXISTS`, `INSUFFICIENT_SPACE`, `FILE_SIZE_LIMIT`, `COUNT_OVERFLOW`, `FILE_UNREADABLE`, `INPUT_TOO_LARGE`, `ITEM_TOO_LARGE`, `TOO_MANY_ITEMS`, `TOO_MANY_LISTS`, `COMBINATION_LIMIT_EXCEEDED`, `OUTPUT_LIMIT_EXCEEDED`, `CAPACITY_UNKNOWN`, `UNSAFE_OUTPUT_PATH`, `WRITE_FAILED`) keeps its current meaning and trigger.

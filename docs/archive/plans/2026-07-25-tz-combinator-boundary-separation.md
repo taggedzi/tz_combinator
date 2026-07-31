@@ -1,5 +1,8 @@
 # tz_combinator Core/Interface Boundary Separation Plan
 
+> Archived implementation plan. It is retained for historical engineering
+> context and should not be treated as current instructions.
+
 ## Goal
 
 Finish the architectural separation begun in

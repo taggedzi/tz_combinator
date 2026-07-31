@@ -1,5 +1,8 @@
 # tz_combinator — Phase 1 Design: Core Engine + CLI
 
+> Archived design record. It is retained for historical engineering context,
+> not as the current behavior reference.
+
 **Date:** 2026-07-25
 **Status:** Approved design, ready for implementation planning
 **Scope:** Phase 1 only (core engine library + CLI). Phases 2–4 (REST API, GUI/TUI, web frontend) are deferred to their own spec → plan → build cycles.

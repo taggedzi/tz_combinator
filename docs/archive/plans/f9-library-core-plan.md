@@ -1,5 +1,8 @@
 # F9 Library-Core Refactoring Plan
 
+> Archived planning record. This document preserves historical design context
+> and is not current user guidance.
+
 ## Objective
 
 Refactor `tz_combinator` so that its combination semantics and bounded data

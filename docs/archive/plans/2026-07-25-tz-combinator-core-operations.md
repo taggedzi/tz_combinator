@@ -1,5 +1,8 @@
 # tz_combinator Core Boundary and Operations Implementation Plan
 
+> Archived implementation plan. It is retained for historical engineering
+> context and should not be treated as current instructions.
+
 **Goal:** Make `combinator-core` the owner of interface-neutral combination
 semantics, keep `combinator-cli` responsible for command-line interaction and
 presentation, and then add permutations, combinations, variations, and typed
@@ -248,4 +251,3 @@ cargo test --workspace --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```
-

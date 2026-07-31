@@ -1,9 +1,13 @@
 # tz_combinator Feature Roadmap
 
+> Archived planning record. This document preserves historical product
+> direction and is not the current feature reference.
+
 This document converts the product recommendations for `tz_combinator` into an
 implementation roadmap. It is a historical planning document, not the current
-feature reference. For implemented behavior, use the [README](../README.md),
-[CLI usage](cli-usage.md), and [library usage](library-usage.md) documents.
+feature reference. For implemented behavior, use the
+[README](../../../README.md), [CLI usage](../../cli-usage.md), and
+[library usage](../../library-usage.md) documents.
 
 The current product has grown beyond the original Cartesian-product baseline:
 it now includes multiple list operations, structured joins, reusable
