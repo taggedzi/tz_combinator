@@ -3,6 +3,32 @@
 > Archived planning record. This document preserves historical product
 > direction and is not the current feature reference.
 
+## Status snapshot (2026-07-31)
+
+This roadmap is retained for historical context. The implementation review
+below records what was delivered after the roadmap was written; it is not a
+new commitment to complete every original proposal.
+
+| Feature | Current status | Notes |
+|---|---|---|
+| F1 — operation modes | Implemented | Product, zip, concat, and keyed join are available. |
+| F2 — input/output formats | Implemented | Bounded line, CSV, TSV, NUL, JSONL, and text/structured output paths are supported. |
+| F3 — templates and field-aware output | Implemented | Templates and structured output are implemented with bounded expansion. |
+| F4 — sharding and resumable work | Implemented | Deterministic bounded sharding and paging are available. |
+| F5 — dry-run and explain | Implemented | Human and versioned JSON summaries are available. |
+| F6 — pipeline ergonomics | Implemented in scoped form | Diagnostics, timeout/cancellation, broken-pipe handling, completions, and man-page generation are implemented; progress remains intentionally conservative. |
+| F7 — transformations | Implemented | The bounded transform pipeline is available. |
+| F8 — keyed relational joins | Implemented in scoped form | Bounded CSV/TSV/JSONL joins support inner, left, full, and anti semantics; larger-input sort/merge joins remain future work. |
+| F9 — Rust library APIs | Implemented as internal workspace APIs | The crates are reusable, but the Rust API is explicitly pre-1.0 and not semver-stable; see [compatibility](../../compatibility.md). |
+| F10 — distribution | Partially implemented | Linux x86_64 and Windows x86_64 archives, checksums, provenance, completions, and manuals are in scope; macOS and package-manager publication are deferred. |
+
+Remaining product work is limited to explicitly scoped follow-ups such as
+lower-memory join strategies, broader distribution targets, and any future
+decision to stabilize a Rust API. Those are separate decisions, not implied
+by the unchecked design steps below. The supported CLI contract, resource
+limits, deterministic behavior, and safe output policy are current product
+requirements.
+
 This document converts the product recommendations for `tz_combinator` into an
 implementation roadmap. It is a historical planning document, not the current
 feature reference. For implemented behavior, use the
