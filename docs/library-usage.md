@@ -143,6 +143,35 @@ for each record. `estimate_text_size` gives an exact text byte count;
 `estimate_jsonl_size` is a conservative planning estimate and must not
 replace runtime output limits.
 
+## Safe file output
+
+`combinator_app::FileSink` provides the staged file-output implementation used
+by the CLI, GUI, and TUI. It implements `std::io::Write`, so encoded bytes can
+be streamed through a `BufWriter` or written directly without exposing the
+underlying file handle. Call `commit()` only after generation and flushing
+succeed:
+
+```rust,no_run
+use combinator_app::FileSink;
+use std::io::Write;
+
+let mut sink = FileSink::open("output.txt", false).expect("open staged output");
+sink.write_all(b"generated output\n").expect("write output");
+sink.commit().expect("commit output");
+```
+
+Opening the sink validates the destination path and creates a secure sibling
+temporary file. `commit()` synchronizes the staged file, then installs it
+atomically. With `overwrite` set to `false`, commit fails with `OUTPUT_EXISTS`
+if another process creates the destination after the sink is opened. Dropping
+an uncommitted sink removes only its staged temporary file and leaves any
+existing destination unchanged.
+
+Callers that implement a different file sink remain responsible for equivalent
+path validation, exclusive creation, atomic replacement, and failure cleanup.
+The operating-system and attacker assumptions for `FileSink` are documented in
+[Security and deployment](security-and-deployment.md#safe-file-output).
+
 ## Errors and safety
 
 Core failures use `CoreError { code, message, context, kind }`; codec failures
@@ -150,8 +179,10 @@ use the analogous `CodecError`. `ErrorKind::Usage` identifies invalid input,
 while `Runtime` identifies execution/resource failures. Preserve codes and
 context when adapting errors to another API.
 
-The library does not enforce filesystem atomicity or process-level quotas.
-Applications must bound input bytes, item counts, output bytes, recursion and
-concurrency, use checked arithmetic, and implement safe file creation and
-replacement. Prefer a streaming sink, keep `Count::Overflow` fatal, and do
-not treat a preflight estimate as an atomic reservation.
+The core and codec crates do not perform filesystem operations;
+`combinator-app::FileSink` is the provided atomic file-output adapter. The
+libraries do not enforce process-level quotas. Applications must bound input
+bytes, item counts, output bytes, recursion, and concurrency, use checked
+arithmetic, and use `FileSink` or implement equally safe file creation and
+replacement. Prefer a streaming sink, keep `Count::Overflow` fatal, and do not
+treat a preflight estimate as an atomic reservation.
