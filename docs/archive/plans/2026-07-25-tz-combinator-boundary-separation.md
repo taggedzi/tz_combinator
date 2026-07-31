@@ -3,6 +3,27 @@
 > Archived implementation plan. It is retained for historical engineering
 > context and should not be treated as current instructions.
 
+## Status review (2026-07-31)
+
+The major crate split and neutral generation work described here are
+implemented on `master`; this section records the narrowly scoped follow-up
+that remains so the historical phases are not mistaken for pending work.
+
+| Phase | Status | Evidence or remaining work |
+|---|---|---|
+| 0 — freeze behavior and boundaries | Complete | Boundary tests and the dependency/source audit are in the workspace. |
+| 1 — neutral logical generation | Complete | Core exposes operation generation independently of CLI writers; application sinks adapt the results. |
+| 2 — reusable codecs | Complete | `combinator-codecs` owns bounded stream codecs and format adapters. |
+| 3 — typed transforms | Complete with a compatibility constant | Transform behavior is in core; the CLI still imports the shared transform-count ceiling for parser validation. |
+| 4 — CLI migration | Complete in the current architecture | CLI owns paths, process behavior, diagnostics, preflight, and destination policy; codecs/core own reusable processing. |
+| 5 — structured joins | Complete in scoped form | Join semantics are reusable and bounded; file/schema selection remains an application adapter. |
+| 6 — remove compatibility leaks | In progress, intentionally narrowed | Remove the remaining CLI compatibility import of `MAX_TRANSFORMS` if it can be replaced without duplicating the invariant, then update the boundary audit. No obsolete `input`, `output`, `template`, or `estimate` core modules remain. |
+
+The only named follow-up is the transform-count compatibility import and its
+corresponding audit decision. Publishing crates or stabilizing Rust APIs is
+outside this plan; the current API policy is documented in
+[`docs/compatibility.md`](../../compatibility.md).
+
 ## Goal
 
 Finish the architectural separation begun in
@@ -30,8 +51,9 @@ new core boundary requires an explicitly documented compatibility adapter.
 
 ## Current-state findings
 
-The current tree already has the core algorithms and new selection operations,
-but the separation is incomplete:
+The original inventory below records the starting point for the migration. It
+is retained to explain the design decisions and is not a list of current
+defects; consult **Status review** above for the current disposition.
 
 | Current responsibility | Current location | Target owner |
 | --- | --- | --- |
