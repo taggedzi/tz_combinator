@@ -112,6 +112,15 @@ pub fn join_stream<S: OutputSink>(
     cancel: Option<&dyn Fn() -> bool>,
 ) -> Result<ProgressEvent, AppError> {
     validate_request(request)?;
+    // A zero-page request is a validated no-op. Avoid opening or parsing
+    // either source so preview/count callers do not incur join residency for
+    // a page that cannot emit a record.
+    if request.limit == Some(0) {
+        return Ok(ProgressEvent {
+            records: 0,
+            bytes: 0,
+        });
+    }
     let (left, right) = load_inputs(request)?;
     let started = std::time::Instant::now();
     let timeout = request.timeout_ms;
@@ -400,5 +409,24 @@ mod tests {
         assert!(records[0].value.contains("value"));
         let _ = std::fs::remove_file(left);
         let _ = std::fs::remove_file(right);
+    }
+
+    #[test]
+    fn zero_limit_does_not_load_join_sources() {
+        let request = JoinRequest {
+            left_path: "missing-left.csv".into(),
+            right_path: "missing-right.csv".into(),
+            left_key: "id".into(),
+            right_key: "id".into(),
+            limit: Some(0),
+            ..Default::default()
+        };
+        let mut records = Vec::new();
+        let mut sink = VecSink {
+            records: &mut records,
+        };
+        let progress = join_stream(&request, &mut sink, None).unwrap();
+        assert_eq!(progress.records, 0);
+        assert_eq!(progress.bytes, 0);
     }
 }
