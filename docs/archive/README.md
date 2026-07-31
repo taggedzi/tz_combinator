@@ -14,6 +14,8 @@ take precedence over anything in this archive.
 ### Product and architecture
 
 - [Historical feature roadmap](plans/feature-roadmap.md)
+- [Performance benchmarking and optimization plan](plans/2026-07-31-performance-benchmarking-and-optimization-plan.md)
+- [Opt-in structured logging plan](plans/2026-07-31-opt-in-structured-logging-plan.md)
 - [Library-core refactoring plan](plans/f9-library-core-plan.md)
 - [Core/interface boundary separation](plans/2026-07-25-tz-combinator-boundary-separation.md)
 - [Core operations implementation](plans/2026-07-25-tz-combinator-core-operations.md)
