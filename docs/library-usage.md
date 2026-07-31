@@ -6,6 +6,14 @@ template, output, and size-estimation adapters. `combinator-app` provides
 shared planning, preview, streaming, join, and safe file-output workflows.
 These libraries do not own terminal event loops or command-line parsing.
 
+## Stability status
+
+The CLI is the supported stable integration boundary. The Rust APIs documented
+here are the current 0.x workspace APIs and are intentionally not covered by a
+semver-stability promise. They may change before a supported public API is
+selected. See the [compatibility policy](compatibility.md#rust-library-api-status)
+for the decision and the conditions for revisiting it.
+
 Add the crates from the workspace:
 
 ```toml

@@ -24,8 +24,10 @@ by an installed binary.
 
 ## I want to embed the Rust libraries
 
-Read [library usage](library-usage.md). The CLI is the stable integration
-boundary; the Rust APIs are not yet covered by semantic-versioning stability.
+Read [library usage](library-usage.md) and the [Rust library API status in the
+compatibility policy](compatibility.md#rust-library-api-status). The CLI is the
+stable integration boundary; the Rust APIs are intentionally not semver-stable
+before a concrete external consumer and supported API surface are identified.
 
 ## I maintain or release the project
 

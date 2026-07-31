@@ -4,6 +4,34 @@
 crates, especially `combinator-core`, are internal implementation components
 and are not a semver-stable public Rust API.
 
+## Rust library API status
+
+The project intentionally retains this policy for the pre-1.0 releases:
+
+- The `combinator` CLI is the only supported stable integration boundary.
+- `combinator-core`, `combinator-codecs`, and `combinator-app` are reusable
+  workspace crates, but their Rust APIs may change without a semver-stability
+  promise within the 0.x release line.
+- GUI and TUI Rust modules are application internals and are not supported as
+  libraries.
+- Examples in [library usage](library-usage.md) describe the current workspace
+  APIs; they do not constitute a compatibility guarantee.
+
+This policy is a deliberate scope decision, not an indication that the
+library crates are unusable. It avoids freezing a broad API before an external
+Rust consumer, the required surface, and the compatibility costs are known.
+
+Revisit stabilization when all of the following are true:
+
+1. At least one concrete external Rust consumer needs an in-process API.
+2. The smallest required request, execution, sink, and error surface is
+   understood and covered by compatibility tests.
+3. Migration guidance, semver expectations, and release/versioning policy have
+   been reviewed and documented.
+
+A future 1.0 release will not automatically stabilize every currently public
+   item. Any supported Rust API must be explicitly identified and documented.
+
 Within a major release:
 
 - Existing flags, defaults, exit codes, and error-code meanings are preserved.
