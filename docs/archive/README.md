@@ -41,5 +41,9 @@ take precedence over anything in this archive.
 - `designs/` contains conceptual specifications that preceded implementation.
 - Archived files retain their original names and most of their original
   wording so links, commit history, and design rationale remain traceable.
+- Archived implementation checklists are superseded historical records. Their
+  unchecked boxes describe the sequence originally proposed, not tasks
+  currently assigned to maintainers. Plans with landed work include a status
+  note identifying that fact and calling out any remaining work.
 - New user documentation and active policy documents belong in `docs/`, not
   in this archive.
