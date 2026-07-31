@@ -1,6 +1,10 @@
 # Release procedure
 
 The supported binary release platforms are Linux x86_64 and Windows x86_64.
+macOS binaries and package-manager publication are intentionally deferred;
+they are roadmap candidates rather than supported release targets. See the
+[distribution roadmap](compatibility.md#distribution-roadmap) for expansion
+criteria.
 Release preparation is a separate, human-reviewed step before tagging. It
 generates the changelog from Git history, synchronizes all workspace versions,
 and opens a pull request. The tag-triggered release workflow then builds the
