@@ -2,9 +2,38 @@ name: Dependency review
 
 on:
   workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/dependency-review.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/dependency-review.yml"
+  schedule:
+    - cron: "17 4 * * 0"
 
 permissions:
   contents: read
+
+concurrency:
+  group: dependency-review-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: 1.94.1
+  CARGO_AUDIT_VERSION: 0.22.2
+  CARGO_DENY_VERSION: 0.20.2
+  CARGO_TERM_COLOR: always
 
 jobs:
   audit:
@@ -15,14 +44,32 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.94.1 --profile minimal
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Restore dependency-tool cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: dependency-tools-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-audit-${{ env.CARGO_AUDIT_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          cache-targets: "false"
+
+      - name: Install pinned dependency tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo audit --version 2>/dev/null | grep -Fq "$CARGO_AUDIT_VERSION"; then
+            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          fi
+          cargo audit --version | grep -Fq "$CARGO_AUDIT_VERSION"
+          if [[ "$GITHUB_EVENT_NAME" != schedule ]]; then
+            if ! cargo deny --version 2>/dev/null | grep -Fq "$CARGO_DENY_VERSION"; then
+              cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+            fi
+            cargo deny --version | grep -Fq "$CARGO_DENY_VERSION"
+          fi
 
       - name: Audit dependencies
-        run: |
-          cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit
+        run: cargo audit
 
       - name: Check dependency policy
-        run: |
-          cargo install cargo-deny --version 0.20.2 --locked
-          cargo deny check
+        if: github.event_name != 'schedule'
+        run: cargo deny check
