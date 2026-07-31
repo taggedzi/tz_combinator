@@ -163,6 +163,16 @@ This Cargo workspace contains six crates:
 | `combinator-gui` | Desktop interface |
 | `combinator-tui` | Terminal interface |
 
+## Community and contributions
+
+Bug reports, documentation improvements, design feedback, and focused pull
+requests are welcome. This is a small, unpaid, single-maintainer project, so
+responses and reviews may take time.
+
+- [Contributing guide](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md)
+
 The workspace is licensed under the [MIT License](LICENSE). Third-party
 dependency licenses are listed in
 [docs/dependency-licenses.md](docs/dependency-licenses.md).

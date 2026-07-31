@@ -1,0 +1,41 @@
+name: Documentation
+description: Report unclear, missing, inaccessible, or incorrect documentation
+title: "[Docs]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Documentation and accessibility reports are welcome. You do not need to propose replacement wording.
+
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: Link to the page or name the file, heading, help screen, or command.
+      placeholder: README.md Quick start, `combinator join --help`, or a URL
+    validations:
+      required: false
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear, missing, or incorrect?
+      description: Explain what prevented you from finding or understanding the information.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+      description: Optional wording, structure, example, or accessibility improvement.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add your goal, experience level, assistive technology concern, or other context only if you wish.
+    validations:
+      required: false

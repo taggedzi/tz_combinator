@@ -1,0 +1,91 @@
+name: Bug report
+description: Report incorrect, unsafe, or unexpected behavior
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem. Partial reports are welcome; provide what you know.
+        Do not include secrets, private data, or security exploit details. Use the security policy for vulnerabilities.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Briefly describe the incorrect or unexpected behavior.
+      placeholder: The command or interface did...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: Describe the result you expected, if known.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Affected interface
+      description: Select the closest match.
+      options:
+        - CLI
+        - Desktop GUI
+        - Terminal UI
+        - Rust library
+        - Build, packaging, or release
+        - Documentation
+        - Unknown or multiple
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Provide the smallest command, input, profile, or sequence that demonstrates the problem.
+        Replace sensitive values with safe examples.
+      placeholder: |
+        1. Run...
+        2. Provide...
+        3. Observe...
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: For example, output from `combinator --version`, a release number, or a commit ID.
+      placeholder: 0.1.0, commit abc123, or unknown
+    validations:
+      required: false
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and architecture, if relevant.
+      placeholder: Windows 11 x86_64, Ubuntu 24.04 x86_64, or unknown
+    validations:
+      required: false
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Output or diagnostics
+      description: Paste the smallest useful output. Remove secrets and private paths.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add logs, screenshots, workarounds, or anything else that may help.
+    validations:
+      required: false

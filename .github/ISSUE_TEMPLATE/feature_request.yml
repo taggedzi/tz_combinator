@@ -1,0 +1,67 @@
+name: Feature or improvement
+description: Suggest a useful, maintainable change
+title: "[Idea]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the idea. A clear problem statement is more useful than a complete design.
+        Proposals may be deferred or declined because this is a small, unpaid project with limited maintenance capacity.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the task, limitation, or user need.
+      placeholder: I am trying to..., but...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested approach
+      description: Describe a possible behavior or interface, if you have one.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - Desktop GUI
+        - Terminal UI
+        - Rust library
+        - Input or output format
+        - Security or resource controls
+        - Build, packaging, or release
+        - Documentation
+        - Other or multiple
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples
+      description: Show an example command, workflow, input/output shape, or mockup if useful.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: What can users do today, and why is it insufficient?
+    validations:
+      required: false
+
+  - type: textarea
+    id: maintenance
+    attributes:
+      label: Maintenance considerations
+      description: Note compatibility, security, dependency, or long-term maintenance effects you foresee.
+    validations:
+      required: false
