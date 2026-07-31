@@ -3,7 +3,6 @@ mod error;
 mod input;
 mod normalize;
 mod output;
-mod output_file;
 mod preflight;
 mod sharding;
 
@@ -11,6 +10,7 @@ use std::io::{BufWriter, Read, Write};
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
+use combinator_app::FileSink;
 use combinator_codecs::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
@@ -28,11 +28,10 @@ use error::{exit_code, render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
 use normalize::MAX_TRANSFORMS;
 use output::{format_record_with, Format};
-use output_file::OutputFile;
 use sharding::{page as shard_page, range as shard_range, ShardError};
 
 enum OutputWriter<'a> {
-    File(&'a mut std::fs::File),
+    File(&'a mut FileSink),
     Stdout(std::io::Stdout),
 }
 
@@ -179,10 +178,13 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
     let mut output_file = common
         .output
         .as_deref()
-        .map(|path| OutputFile::open(path, common.overwrite))
+        .map(|path| {
+            FileSink::open(path, common.overwrite)
+                .map_err(|error| file_sink_error(error, Some(path)))
+        })
         .transpose()?;
     let mut writer = match output_file.as_mut() {
-        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut()?)),
+        Some(file) => BufWriter::new(OutputWriter::File(file)),
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let mut bytes = 0u64;
@@ -227,7 +229,8 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         .map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
     drop(writer);
     if let Some(file) = output_file {
-        file.commit()?;
+        file.commit()
+            .map_err(|error| file_sink_error(error, common.output.as_deref()))?;
     }
     Ok(())
 }
@@ -890,10 +893,13 @@ fn stream_core(
     let mut output_file = common
         .output
         .as_deref()
-        .map(|path| OutputFile::open(path, common.overwrite))
+        .map(|path| {
+            FileSink::open(path, common.overwrite)
+                .map_err(|error| file_sink_error(error, Some(path)))
+        })
         .transpose()?;
     let mut writer = match output_file.as_mut() {
-        Some(file) => BufWriter::new(OutputWriter::File(file.file_mut()?)),
+        Some(file) => BufWriter::new(OutputWriter::File(file)),
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let cancel = || deadline_expired(deadline);
@@ -969,7 +975,8 @@ fn stream_core(
     }
     drop(writer);
     if let Some(file) = output_file {
-        file.commit()?;
+        file.commit()
+            .map_err(|error| file_sink_error(error, common.output.as_deref()))?;
     }
     if common.summary {
         let _ = writeln!(
@@ -991,6 +998,14 @@ fn output_write_err(error: std::io::Error, stdout: bool) -> AppError {
         AppError::runtime("STDOUT_CLOSED", "stdout was closed while writing")
     } else {
         write_err(error)
+    }
+}
+
+fn file_sink_error(error: combinator_app::AppError, path: Option<&str>) -> AppError {
+    let error = AppError::runtime(error.code, error.message);
+    match path {
+        Some(path) => error.with("path", path),
+        None => error,
     }
 }
 

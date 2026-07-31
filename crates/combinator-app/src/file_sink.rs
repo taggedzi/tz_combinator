@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use crate::{AppError, OutputRecord, OutputSink};
 
 /// Writes encoded records to a sibling temporary file and commits on success.
+///
+/// The sink implements [`Write`] so callers can stream arbitrary encoded bytes
+/// without accessing the underlying file handle.
 pub struct FileSink {
     file: Option<File>,
     destination: PathBuf,
@@ -39,8 +42,12 @@ impl FileSink {
             .file
             .as_ref()
             .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))?;
-        file.sync_all()
-            .map_err(|error| AppError::runtime("WRITE_FAILED", error.to_string()))?;
+        file.sync_all().map_err(|error| {
+            AppError::runtime(
+                "WRITE_FAILED",
+                format!("could not sync output file: {error}"),
+            )
+        })?;
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
             let result = if self.overwrite {
@@ -56,7 +63,10 @@ impl FileSink {
                 } else {
                     "WRITE_FAILED"
                 };
-                return Err(AppError::runtime(code, error.to_string()));
+                return Err(AppError::runtime(
+                    code,
+                    format!("could not commit output file: {error}"),
+                ));
             }
         }
         self.committed = true;
@@ -64,12 +74,35 @@ impl FileSink {
     }
 }
 
-impl OutputSink for FileSink {
-    fn record(&mut self, record: OutputRecord) -> Result<(), AppError> {
+impl Write for FileSink {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
         self.file
             .as_mut()
-            .ok_or_else(|| AppError::runtime("WRITE_FAILED", "output file is already closed"))?
-            .write_all(record.value.as_bytes())
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "output file is already closed",
+                )
+            })?
+            .write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file
+            .as_mut()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "output file is already closed",
+                )
+            })?
+            .flush()
+    }
+}
+
+impl OutputSink for FileSink {
+    fn record(&mut self, record: OutputRecord) -> Result<(), AppError> {
+        self.write_all(record.value.as_bytes())
             .map_err(|error| AppError::runtime("WRITE_FAILED", error.to_string()))
     }
 }
@@ -101,7 +134,12 @@ fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> 
         {
             Ok(file) => return Ok((candidate, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(AppError::runtime("WRITE_FAILED", error.to_string())),
+            Err(error) => {
+                return Err(AppError::runtime(
+                    "WRITE_FAILED",
+                    format!("could not create temporary output file: {error}"),
+                ))
+            }
         }
     }
     Err(AppError::runtime(
@@ -112,8 +150,12 @@ fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), AppError> 
 
 fn random_suffix() -> Result<u128, AppError> {
     let mut bytes = [0u8; 16];
-    fill_random(&mut bytes)
-        .map_err(|error| AppError::runtime("WRITE_FAILED", error.to_string()))?;
+    fill_random(&mut bytes).map_err(|error| {
+        AppError::runtime(
+            "WRITE_FAILED",
+            format!("could not generate a secure temporary filename: {error}"),
+        )
+    })?;
     Ok(u128::from_le_bytes(bytes))
 }
 
@@ -204,7 +246,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         {
             let mut sink = FileSink::open(&path, false).unwrap();
-            sink.record(record("new")).unwrap();
+            sink.write_all(b"new").unwrap();
             sink.commit().unwrap();
         }
         assert_eq!(fs::read(&path).unwrap(), b"new");
@@ -214,7 +256,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         {
             let mut sink = FileSink::open(&path, false).unwrap();
-            sink.record(record("discarded")).unwrap();
+            sink.write_all(b"discarded").unwrap();
         }
         assert!(!path.exists());
     }
@@ -241,5 +283,55 @@ mod tests {
         assert_eq!(sink.commit().unwrap_err().code, "OUTPUT_EXISTS");
         assert_eq!(fs::read(&path).unwrap(), b"existing");
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn commit_to_directory_fails_without_replacing_it() {
+        let path = destination("directory");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir(&path).unwrap();
+        let mut sink = FileSink::open(&path, false).unwrap();
+        sink.write_all(b"new").unwrap();
+        let error = sink.commit().unwrap_err();
+        assert!(matches!(error.code, "OUTPUT_EXISTS" | "WRITE_FAILED"));
+        assert!(path.is_dir());
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlink_destination_and_parent() {
+        use std::os::unix::fs::symlink;
+
+        let target = destination("symlink-target");
+        let path = destination("symlink-destination");
+        let real_parent = destination("symlink-real-parent");
+        let link_parent = destination("symlink-link-parent");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&link_parent);
+        let _ = fs::remove_dir(&real_parent);
+
+        fs::write(&target, b"target").unwrap();
+        symlink(&target, &path).unwrap();
+        assert_eq!(
+            FileSink::open(&path, true).err().unwrap().code,
+            "UNSAFE_OUTPUT_PATH"
+        );
+
+        fs::create_dir(&real_parent).unwrap();
+        symlink(&real_parent, &link_parent).unwrap();
+        assert_eq!(
+            FileSink::open(link_parent.join("output.txt"), false)
+                .err()
+                .unwrap()
+                .code,
+            "UNSAFE_OUTPUT_PATH"
+        );
+
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(link_parent);
+        let _ = fs::remove_dir(real_parent);
+        let _ = fs::remove_file(target);
     }
 }
