@@ -3,6 +3,14 @@
 > Archived implementation plan. It is retained for historical engineering
 > context and should not be treated as current instructions.
 
+## Historical status (2026-07-31)
+
+This operation-modes checklist is superseded. Product, zip, and concat modes,
+their CLI wiring, bounded counts, tests, and documentation are implemented in
+the current workspace. The unchecked boxes below preserve the original
+design-to-implementation sequence and are not open work items. Any remaining
+join or operation work must be tracked separately from this archive.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add explicit `zip` and `concat` operation subcommands alongside the existing (now-explicit) `product` subcommand, behind a shared, clap-free `Operation` request model in `combinator-core`, with zero behavior change to the existing bare-invocation product path.

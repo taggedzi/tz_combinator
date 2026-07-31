@@ -3,6 +3,14 @@
 > Archived implementation plan. It is retained for historical engineering
 > context and should not be treated as current instructions.
 
+## Historical status (2026-07-31)
+
+This phase-one checklist is superseded. The workspace, core operations, CLI,
+resource limits, diagnostics, and verification work described here are present
+in the current source tree. The unchecked boxes below preserve the original
+implementation sequence and are not open work items. Current follow-up is
+tracked in a new issue or plan rather than by editing this historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a Rust engine library that streams every element of an ordered Cartesian product of text lists, wrapped by a Rust CLI that is the single, defensively-programmed interface to that engine.
