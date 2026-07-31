@@ -34,7 +34,14 @@ Each source is capped, and list operations also share the input byte budget
 across all sources in one request.
 Generation is streamed rather than materialized in full. Join generation is
 streamed, but parsed join inputs and the right-side hash index remain in
-memory.
+memory: the current bounded hash-join design retains both parsed sides, an
+index of right-side row positions, and (for full joins) matched-row markers.
+`--limit 1` avoids retaining joined output records, and count-only computes
+counts without constructing joined records, but neither mode removes the
+bounded input/index residency. For representative service workloads, size
+`--max-input-bytes`, `--max-item-bytes`, and `--max-join-records` together with
+an external memory/concurrency quota; the CLI ceilings are safety bounds, not
+a promise that the worst-case 1 MiB field limit fits in a service's memory.
 
 ## Safe file output
 
