@@ -2,21 +2,23 @@ mod cli;
 mod error;
 mod input;
 mod normalize;
-mod output;
 mod preflight;
-mod sharding;
 
 use std::io::{BufWriter, Read, Write};
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 use combinator_app::FileSink;
-use combinator_codecs::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
+use combinator_codecs::{
+    estimate_jsonl_size, estimate_text_size, format_record_with, Format, SizeEstimate, SizeInput,
+};
 use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
     generate_with, operation_count, operation_field_count, ConcatOptions, Constraint, Count,
-    GenerationLimits, GenerationRequest, Operation, ProductOptions, SelectionOptions, ZipOptions,
+    GenerationLimits, GenerationRequest, Operation, ProductOptions, SelectionOptions, ShardError,
+    ShardRange, ZipOptions,
 };
+use combinator_core::{shard_page, shard_range};
 
 use cli::{
     Cli, CommonArgs, ConcatArgs, InputFormat, JoinArgs, JoinFormat, JoinTypeArg, Mode, OutFormat,
@@ -27,8 +29,6 @@ use cli::{
 use error::{exit_code, render, render_warning, AppError};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
 use normalize::MAX_TRANSFORMS;
-use output::{format_record_with, Format};
-use sharding::{page as shard_page, range as shard_range, ShardError};
 
 enum OutputWriter<'a> {
     File(&'a mut FileSink),
@@ -1029,7 +1029,7 @@ fn explain(
     lists: &[Vec<String>],
     count: Count,
     estimate: SizeEstimate,
-    shard: Option<sharding::ShardRange>,
+    shard: Option<ShardRange>,
 ) -> Result<(), AppError> {
     let exact_count = match count {
         Count::Exact(value) => Some(value),
@@ -1187,7 +1187,7 @@ fn apply_shard(
     common: &mut CommonArgs,
     op: &mut Operation,
     count: Count,
-) -> Result<Option<sharding::ShardRange>, AppError> {
+) -> Result<Option<ShardRange>, AppError> {
     let (index, shard_count) = match (common.shard_index, common.shard_count) {
         (Some(index), Some(count)) => (index, count),
         _ => return Ok(None),
