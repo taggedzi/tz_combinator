@@ -50,6 +50,14 @@ impl FileSink {
         })?;
         self.file.take();
         if let Some(temporary) = self.temporary.take() {
+            // Re-check immediately before the namespace update. This closes
+            // the common case where a destination is replaced with a link
+            // after `open`; the parent-directory check remains advisory when
+            // a privileged attacker can rename an ancestor concurrently.
+            crate::validate_output_path(&self.destination).map_err(|error| {
+                let _ = fs::remove_file(&temporary);
+                AppError::runtime(error.code, error.message)
+            })?;
             let result = if self.overwrite {
                 replace_file(&temporary, &self.destination)
             } else {
@@ -283,6 +291,30 @@ mod tests {
         assert_eq!(sink.commit().unwrap_err().code, "OUTPUT_EXISTS");
         assert_eq!(fs::read(&path).unwrap(), b"existing");
         let _ = fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_rejects_destination_symlink_created_after_open() {
+        use std::os::unix::fs::symlink;
+
+        let target = destination("late-symlink-target");
+        let path = destination("late-symlink-destination");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_file(&path);
+        fs::write(&target, b"keep").unwrap();
+
+        let mut sink = FileSink::open(&path, true).unwrap();
+        sink.write_all(b"replace").unwrap();
+        symlink(&target, &path).unwrap();
+
+        let error = sink.commit().unwrap_err();
+        assert_eq!(error.code, "UNSAFE_OUTPUT_PATH");
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+        assert!(path.is_symlink());
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(&target);
     }
 
     #[test]
