@@ -12,7 +12,7 @@ use combinator_app::{
     about_text, ensure_output_parent, join_plan, join_preview, join_stream, plan, preview,
     read_input_source, stream, AppError, AppOperation, CancellationToken, ExecutionPlan, FileSink,
     Format, InputFormat, InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest,
-    OutputRecord, OutputSink, PreviewRecord, ProductRequest, ProgressEvent, UnequalPolicy,
+    OutputRecord, OutputSink, ProductRequest, ProgressEvent, UnequalPolicy,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -271,7 +271,7 @@ struct App {
     join_request: JoinRequest,
     plan: Option<ExecutionPlan>,
     join_plan: Option<JoinPlan>,
-    records: Vec<PreviewRecord>,
+    records: Vec<OutputRecord>,
     preview_scroll: u16,
     status: String,
     error: Option<String>,
