@@ -144,7 +144,9 @@ untrusted requests.
 ## Project status and compatibility
 
 Version 0.1.0 is an early public release. The CLI is the supported automation
-boundary. Library APIs and GUI/TUI behavior may change before version 1.0.0.
+boundary. Library APIs and GUI/TUI behavior may change before version 1.0.0;
+the [compatibility policy](docs/compatibility.md#rust-library-api-status)
+records the deliberate Rust API stability decision and its revisit criteria.
 Current GitHub binary releases target Linux x86_64 and Windows x86_64.
 
 Within a major release, existing CLI flags and defaults, exit-status meanings,

@@ -3,6 +3,10 @@
 //! This initial adapter preserves the established codec behavior while the
 //! implementation is being relocated out of `combinator-core`. It deliberately
 //! exposes no paths, terminals, process state, or CLI argument types.
+//!
+//! The `combinator` CLI is the supported stable integration boundary. This
+//! crate's Rust API is a reusable 0.x workspace API, not a semver-stable public
+//! API. See the repository compatibility policy before depending on it.
 
 pub mod estimate;
 pub mod input;

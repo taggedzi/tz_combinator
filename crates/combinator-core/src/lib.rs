@@ -3,6 +3,10 @@
 //! This crate owns the interface-neutral domain model and bounded combination
 //! algorithms. It does not parse files, format output, render diagnostics, or
 //! depend on terminal/process behavior.
+//!
+//! The `combinator` CLI is the supported stable integration boundary. This
+//! crate's Rust API is a reusable 0.x workspace API, not a semver-stable public
+//! API. See the repository compatibility policy before depending on it.
 
 pub mod concat;
 pub mod constraint;
