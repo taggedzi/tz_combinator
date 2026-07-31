@@ -101,7 +101,7 @@ pub struct CommonArgs {
     #[arg(long = "input-format", value_enum)]
     pub input_format: Option<InputFormat>,
 
-    /// Permit combining --list and --file sources in their explicit argument order.
+    /// Permit combining --list and --file sources; inline lists precede files.
     #[arg(long = "allow-mixed-inputs")]
     pub allow_mixed_inputs: bool,
 
@@ -186,7 +186,7 @@ pub struct CommonArgs {
     #[arg(long, visible_alias = "force", short = 'f')]
     pub overwrite: bool,
 
-    /// Optional filesystem max file size (bytes) for pre-flight.
+    /// Optional filesystem max file size (bytes) for preflight.
     #[arg(long = "max-file-size")]
     pub max_file_size: Option<u64>,
 
@@ -218,7 +218,7 @@ pub struct CommonArgs {
     #[arg(long = "max-combinations", default_value_t = DEFAULT_MAX_COMBINATIONS)]
     pub max_combinations: u128,
 
-    /// Skip pre-flight validation for file output.
+    /// Skip preflight validation for file output.
     #[arg(long = "no-preflight")]
     pub no_preflight: bool,
 

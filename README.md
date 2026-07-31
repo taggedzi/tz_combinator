@@ -1,4 +1,4 @@
-![Combinator Header](assets/images/header.jpg)
+![Combinator header](assets/images/header.jpg)
 
 # tz_combinator
 
@@ -8,704 +8,168 @@
 [![License](https://img.shields.io/github/license/taggedzi/tz_combinator)](LICENSE)
 [![Release targets](https://img.shields.io/badge/release%20targets-Linux%20x86__64%20%7C%20Windows%20x86__64-blue)](docs/release.md)
 
-`combinator` is a command-line tool for safely combining one or more text
-lists and structured data. It supports Cartesian products, positional zip,
-concatenation, permutations, combinations, variations, and keyed joins. It
-streams plain text, JSON Lines, CSV, TSV, or NUL-delimited output and provides
-the reference CLI contract used by the application, GUI, and TUI.
+`tz_combinator` safely combines text lists and structured data. Use the
+`combinator` command-line interface (CLI) for scripts and automation, the
+desktop graphical user interface (GUI) for visual workflows, or the terminal
+user interface (TUI) for keyboard-driven work.
 
-This repository is a Cargo workspace with six crates:
+The tool can generate:
 
-- `crates/combinator-core` — the engine: counting, size estimation, and the
-  lazy product iterator. No I/O.
-- `crates/combinator-cli` — the `combinator` binary: argument parsing, input
-  gathering, formatting, pre-flight checks, and stdout/stderr/file output.
-- `crates/combinator-codecs` — bounded, reusable input, template, output, and
-  estimate codecs used by the CLI.
-- `crates/combinator-app` — shared application workflows for planning,
-  previewing, streaming, joins, and safe file output.
-- `crates/combinator-gui` — the desktop GUI.
-- `crates/combinator-tui` — the keyboard-first terminal UI.
+- a [Cartesian product](docs/glossary.md#cartesian-product) of several lists;
+- positional zips and sequential concatenations;
+- permutations, combinations, and variations from one input pool; and
+- keyed joins between CSV, TSV, or JSON Lines files.
 
-For the durable references, see [CLI usage](docs/cli-usage.md) and
-[library usage](docs/library-usage.md).
+All interfaces provide bounded input and output, deterministic ordering,
+streaming generation, and safe file replacement.
 
-Release builds and artifact verification are documented in
-[the release procedure](docs/release.md). Output destinations and GUI/TUI
-profile paths must use existing parent directories; symlink/reparse-point
-ancestors and `..` traversal are rejected.
+## Quick start
 
-All interfaces include an About notice with the project description, version,
-MIT license, GitHub repository, and issue-reporting guidance. The CLI exposes
-it through both `--help` and `--about`; the GUI and TUI provide an About button
-near the profile controls.
-
-## GUI profiles and preferences
-
-![Combinator GUI](assets/screenshots/combinator-gui_default-operation-dropdown.png)
-
-![Combinator GUI](assets/screenshots/combinator-gui_example-usage.png)
-
-The desktop GUI is available as `combinator-gui`. Its `New`, `Open…`, `Save`,
-and `Save as…` controls manage versioned JSON profiles containing both the
-Combine and Join workflows, shared safety limits, and the active tab. Loading
-a profile only restores the form; preview and file generation remain explicit
-user actions.
-
-When a profile is saved, paths inside the profile folder are stored relative
-to that folder. This makes a profile and its input files portable as a small
-project/workspace. Paths outside the folder remain absolute. The Settings tab
-also stores a default output directory and up to eight recent profiles in the
-platform user configuration directory. The GUI and TUI share these preferences;
-they do not affect CLI invocations.
-
-Run the GUI from the workspace with:
+Build all three interfaces:
 
 ```text
-cargo run -p combinator-gui --locked
-```
-
-## Keyboard-first TUI
-
-![Combinator GUI](assets/screenshots/combinator-tui_example-usage.png)
-
-The terminal interface is available as `combinator-tui`:
-
-```text
-cargo run -p combinator-tui --locked
-```
-
-It follows the desktop GUI's Combine, Join, and Settings page structure. The
-TUI is keyboard-first: Tab and Shift-Tab move through every visible field,
-selector, checkbox, and action; Enter edits or activates the focused control.
-The same pages provide execution plans, bounded previews, background file
-generation, progress, cancellation, and resource-limit controls. Shortcuts
-include `p` preview, `g` generate, `c` cancel, `a`/`d` list management, and
-`1`/`2`/`3` page selection. `Ctrl+O`, `Ctrl+S`, and `Ctrl+N` operate on the
-profile path configured in Settings; Page Up and Page Down scroll the preview.
-Profiles use the same format as the GUI and can be opened in either interface.
-
-## Building / installing
-
-```
 cargo build --release --locked
 ```
 
-This builds the workspace. The command-line binary is produced at
-`target/release/combinator` (`target/release/combinator.exe` on Windows). The
-TUI and GUI binaries are produced alongside it as `combinator-tui` and
-`combinator-gui` (with `.exe` suffixes on Windows). Run the CLI directly, or
-install it onto your `PATH`:
+The binaries are written to `target/release/`:
 
+| Interface | Binary | Best for |
+|---|---|---|
+| CLI | `combinator` | Scripts, pipelines, and automation |
+| GUI | `combinator-gui` | Visual setup, previews, and reusable profiles |
+| TUI | `combinator-tui` | Keyboard-first terminal workflows |
+
+Create every color-and-vehicle pair with the CLI:
+
+```console
+$ combinator --list "red,blue" --list "car,bike" --sep "-"
+red-car
+red-bike
+blue-car
+blue-bike
 ```
+
+Each repeated `--list` supplies one input list. The default operation selects
+one item from each list and emits every possible record. The rightmost list
+changes fastest.
+
+Install only the CLI on your `PATH`:
+
+```text
 cargo install --path crates/combinator-cli --locked
 ```
 
-Requires Rust edition 2021 and Rust `1.94.1` (the minimum declared by all
-workspace manifests).
+The workspace uses Rust 2021 and requires Rust 1.94.1 or later.
 
-## Compatibility and release scope
+## Choose an operation
 
-Version `0.1.0` is the first early public release. The project has automated
-tests and release validation, but has not yet received broad independent
-testing. The CLI is the supported integration boundary and should be preferred
-for automation. The library crates, GUI, and TUI are usable, but their APIs and
-behavior may still change before the `1.0.0` release.
+| Operation | Purpose |
+|---|---|
+| `product` (default) | Select one item from every input list |
+| `zip` | Pair items at the same position in each list |
+| `concat` | Emit each list in sequence |
+| `permutations` | Emit every ordering of one input pool |
+| `combinations` | Emit unordered selections of a chosen size |
+| `variations` | Emit ordered selections without replacement |
+| `join` | Match structured records by named keys |
 
-GitHub binary releases currently support Linux and Windows x86_64 and include
-the CLI, TUI, and GUI binaries. Within a major version, CLI flags and defaults,
-exit-code meanings, existing error codes, stdout/stderr ownership, and the
-meanings of JSONL fields remain compatible. New JSONL fields are additive. The
-machine-readable `--explain --format json` response is versioned by
-`schema_version`; incompatible changes require a new schema version.
+For examples and option details, read the
+[CLI user manual](docs/cli-usage.md). Run `combinator --help` or
+`combinator <operation> --help` to inspect the installed version.
 
-Product ordering and sharding use version 1 deterministic algorithms, with
-stable ordering for stable inputs. `combinator-core` is an internal/future
-direction and is not a semver-stable public Rust API. Release artifacts are
-GitHub archives only; crates.io publication is not promised. See the full
-policy in [`docs/compatibility.md`](docs/compatibility.md).
+## Desktop and terminal interfaces
 
-The workspace is MIT-licensed. Third-party dependency licensing, including the
-`csv` crate used for CSV/TSV parsing, is documented in
-[`docs/dependency-licenses.md`](docs/dependency-licenses.md).
+![Combinator GUI showing the operation selector](assets/screenshots/combinator-gui_default-operation-dropdown.png)
 
-## Quick example
+The GUI and TUI support Combine, Join, and Settings workflows. Both can
+preview a bounded result, generate a file in the background, cancel work, and
+save versioned JSON profiles. A profile stores the form state; loading one
+does not automatically preview data or create a file.
 
-```
-$ combinator --list "red,blue" --list "car,bike" --sep "-"
-red-car
-red-bike
-blue-car
-blue-bike
-```
+Paths inside a profile's directory are stored relative to that directory, so
+the profile and its inputs can move together. Paths outside it remain
+absolute. The interfaces also share the default output directory and a list
+of up to eight recent profiles.
 
-Two lists (`red,blue` and `car,bike`) produce 2×2 = 4 combinations. The
-**rightmost** list varies fastest by default. Use `--reverse-fields` to make
-the **leftmost** list vary fastest, or `--reverse` to emit the complete output
-sequence backwards.
-
-## Input formats and sources
-
-Every list comes from exactly one of two sources, and you must pick one — not
-both — for the whole invocation:
-
-- `--list <VALUE>` — an inline list, split on `--list-delim` (default `,`).
-  Repeatable; each occurrence adds one list, in the order given on the
-  command line.
-- `--file <PATH>` — a list read from a file, one item per line (trailing
-  `\r` is stripped, so CRLF files work). Repeatable, same ordering rule.
-  Pass `--file -` to read that list from **stdin** — stdin is only read when
-  `-` is given explicitly; the tool never reads it implicitly.
-
-Mixing `--list` and `--file` requires `--allow-mixed-inputs`; inline lists are
-processed first, followed by file sources. Stdin (`--file -`) may appear only
-once. Running `combinator` with no arguments displays help; an invocation that
-includes arguments but provides neither source is rejected as `NO_LISTS`.
-
-`--input-format` selects bounded file/stdin parsing: `lines` (the default),
-`csv`, `tsv`, or `nul`. CSV/TSV sources are single-column records, with quoted
-delimiters and doubled quotes supported. NUL sources are byte-delimited before
-UTF-8 validation, so newlines are ordinary data. Use `--input-format inline`
-with `--list` to enable escaped values: `\\n`, `\\r`, `\\t`, `\\0`, `\\xNN`,
-`\\\\`, and escaped list delimiters are supported. Malformed escapes, malformed
-CSV, invalid UTF-8, and oversized records fail before output-file replacement.
-
-```
-$ printf "a\nb\n" | combinator --file -
-a
-b
-```
-
-## Flags
-
-All flags and their defaults, ground-truthed against `crates/combinator-cli/src/cli.rs`:
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `--list <VALUE>` | — | Inline list, split by `--list-delim`. Repeatable. |
-| `--file <PATH>` | — | List from a file using `--input-format` (`-` = stdin). Repeatable. |
-| `--input-format <lines\|csv\|tsv\|nul\|inline>` | source default | Select bounded file/stdin parsing, or escaped inline parsing. |
-| `--allow-mixed-inputs` | off | Permit `--list` and `--file` together; lists precede files. |
-| `--template <TEMPLATE>` | none | Render each value with a bounded positional or named template. Mutually exclusive with `--template-file`. |
-| `--template-file <PATH>` | none | Read the UTF-8 output template from a bounded file. Mutually exclusive with `--template`. |
-| `--name <NAME>` | none | Name one input field; repeat once per input list, in list order. |
-| `--sep <SEP>` | `""` (empty) | Field separator joining the items within one combination. |
-| `--rec-sep <SEP>` | `"\n"` | Record separator between combinations. Text format only. |
-| `--list-delim <DELIM>` | `","` | Delimiter used to split each inline `--list` value. Must be non-empty. |
-| `--transform <EXPR>` | none | Apply a bounded per-list normalization transform; repeatable and applied left-to-right. |
-| `--reverse` | off | Emit combinations in reverse of the default order. Mutually exclusive with `--reverse-fields`. |
-| `--reverse-fields` | off | Vary the **leftmost** list fastest instead of the rightmost. Mutually exclusive with `--reverse`. |
-| `--offset <N>` | `0` | Skip this many leading combinations before emitting. |
-| `--limit <N>` | unlimited | Emit at most this many combinations. |
-| `--shard-index <N>` | none | Select a zero-based contiguous shard; requires `--shard-count`. |
-| `--shard-count <N>` | none | Partition the ordered output into this many contiguous shards; requires `--shard-index`. |
-| `--count-only` | off | Print only the total combination count and exit; generates nothing. |
-| `--explain` | off | Print a validated execution summary and generate nothing. Use `--format json` for JSON. |
-| `--dry-run` | off | Validate the request and print a summary without generating records or creating output files. |
-| `--filter <EXPR>` | none | Apply a typed candidate filter; repeatable and ANDed. |
-| `--format <text\|jsonl\|json\|csv\|tsv\|nul>` | `text` | Output format. `json` is for `--explain`/`--dry-run`; CSV/TSV quote fields as needed; NUL terminates each record with `\\0`. |
-| `--lean-output` | off | In `jsonl` format, emit only the value as a bare JSON string per line, instead of the full `{"i":...,"value":...,"fields":[...]}` object. |
-| `-o, --output <PATH>` | stdout | Write output to this file instead of stdout. |
-| `-f, --overwrite` (alias `--force`) | off | Allow overwriting `--output` if it already exists. |
-| `--max-file-size <BYTES>` | none | Optional file-output cap. It is checked during pre-flight and enforced while writing. |
-| `--max-output-bytes <BYTES>` | `1073741824` | Maximum output bytes for every invocation, including stdout. |
-| `--max-input-bytes <BYTES>` | `67108864` | Maximum bytes read from each file, stdin stream, or inline list. |
-| `--max-item-bytes <BYTES>` | `1048576` | Maximum bytes in one list item. |
-| `--max-items-per-list <N>` | `1000000` | Maximum items accepted from one list. |
-| `--max-lists <N>` | `128` | Maximum number of lists accepted. |
-| `--max-total-items <N>` | `5000000` | Maximum total items across all lists. |
-| `--max-combinations <N>` | `10000000` | Maximum combinations generated unless `--count-only` is used. |
-| `--max-join-records <N>` | `100000` | Join-only maximum records read from either side; compiled ceiling `250000`. |
-| `--max-join-key-fanout <N>` | `10000` | Join-only maximum duplicate-key expansion for one matching key; checked before output. |
-| `--no-preflight` | off | Skip pre-flight validation for file output. Runtime output limits still apply. |
-| `--quiet` | off | Suppress non-fatal warnings; fatal diagnostics are unaffected. |
-| `--warnings-as-errors` | off | Convert the first non-fatal warning into a runtime error. Takes precedence over `--quiet`. |
-| `--summary` | off | Print `records` and `bytes` to stderr after successful generated output. |
-| `--timeout-ms <MS>` | none | Cancel execution after the specified number of milliseconds. |
-| `-h, --help` | — | Print help. |
-| `-V, --version` | — | Print version. |
-| `--about` | — | Print project information and troubleshooting guidance. |
-
-The `completions <shell>` subcommand generates a completion script for
-`bash`, `elvish`, `fish`, `powershell`, or `zsh`. The `man` subcommand writes
-the generated roff manual page to stdout. Both are derived from the CLI
-definition and keep stdout free of diagnostics.
-
-## Operation modes
-
-`combinator` supports seven operation modes. The bare invocation with no
-subcommand — everything shown above — means `product`, and behaves
-identically to `combinator product ...`:
-
-```
-combinator [OPTIONS]           # product (default)
-combinator product [OPTIONS]   # same as above, explicit
-combinator zip [OPTIONS]       # positional pairing
-combinator concat [OPTIONS]    # sequential concatenation
-combinator permutations [OPTIONS]  # orderings of one input pool
-combinator combinations [OPTIONS]  # unordered selections
-combinator variations [OPTIONS]    # ordered selections without replacement
-combinator join [OPTIONS]      # keyed relational join
-```
-
-- **`product`** — the ordered Cartesian product described throughout this
-  document: one item from each list per combination.
-- **`zip`** — pairs lists positionally: item 0 from every list, then item 1,
-  and so on. Requires a policy for unequal-length lists via
-  `--on-unequal <error|truncate|cycle>` (default `error`, which refuses to
-  silently drop data): `truncate` stops at the shortest list's length,
-  `cycle` wraps shorter lists to match the longest.
-
-  ```
-  $ combinator zip --list "a,b,c" --list "x,y" --sep "-" --on-unequal cycle
-  a-x
-  b-y
-  c-x
-  ```
-- **`concat`** — emits every item from list 1, then every item from list 2,
-  and so on, preserving order. Each output record has exactly one field, so
-  `concat` has **no `--sep` flag** (there is nothing to join within a
-  record); passing `--sep` to `concat` is a usage error.
-
-  ```
-  $ combinator concat --list "a,b" --list "x,y,z"
-  a
-  b
-  x
-  y
-  z
-  ```
-- **`permutations`** — emits every ordering of one input pool.
-- **`combinations`** — emits unordered selections of a fixed size using
-  `--choose`.
-- **`variations`** — emits ordered selections without replacement using
-  `--length`.
-
-Flags that only make sense for one mode are rejected at parse time (exit 2)
-under the others: `--reverse-fields` only exists under `product`,
-`--on-unequal` only exists under `zip`, and `--sep` does not exist under
-`concat`. `--reverse`, `--offset`, `--limit`, `--count-only`, and every
-output/format/resource-limit flag in the table above apply to the list-based
-modes; join uses its own `--left` and `--right` sources.
-
-### Keyed joins
-
-`join` is distinct from the Cartesian product: it combines structured records
-from two files by named keys. CSV/TSV inputs use their first row as headers;
-JSONL inputs must contain one object of string fields per line. Join output is
-JSONL and preserves left-file order, with duplicate keys expanded in right-file
-order. Empty keys do not match, and colliding right-hand fields receive a
-`_right` suffix.
+Run either interface from the workspace:
 
 ```text
-combinator join --left users.csv --right accounts.csv \
-  --left-key user_id --right-key user_id --type left --format jsonl
+cargo run -p combinator-gui --locked
+cargo run -p combinator-tui --locked
 ```
 
-`--type` accepts `inner`, `left`, `full`, and `anti`. `--max-combinations`
-also bounds the complete join result before output begins; input byte, item,
-and output byte limits apply as usual. Joins additionally cap records per
-input and check each duplicate-key Cartesian expansion before building the
-right-side index or emitting output. These defaults are intentionally lower
-than the general list-operation ceilings; a public wrapper should still set
-smaller per-request limits and enforce process memory and concurrency quotas.
-
-## Templates and named fields
-
-Use `--template` when the output value needs a fixed structure rather than a
-simple separator:
-
-```
-$ combinator product --list "server1,server2" --list "80,443" \
-    --template "https://{0}:{1}"
-https://server1:80
-https://server1:443
-https://server2:80
-https://server2:443
-```
-
-Templates contain literal text and positional placeholders such as `{0}` or
-`{1}`. Double braces produce literal braces: `{{` emits `{` and `}}` emits
-`}`. Templates do not evaluate expressions, invoke commands, read the
-environment, or access files. `--template-file` reads the same syntax from a
-bounded UTF-8 file.
-
-Field names are optional and follow input-list order:
-
-```
-$ combinator product --name host --name port \
-    --list server1 --list 443 --template "{host}:{port}" \
-    --format jsonl
-{"i":0,"value":"server1:443","fields":["server1","443"],"named":{"host":"server1","port":"443"}}
-```
-
-Names must be unique identifiers and exactly one name must be supplied for
-each input list. Without names, only positional placeholders are available.
-With names, full JSONL output adds the ordered `named` object while retaining
-the existing `fields` array. `--lean-output` still emits only the rendered
-value.
-
-### Normalization transforms (F7)
-
-Transforms run independently on every input list after parsing and before
-counting or generation. They are applied in the order supplied. Supported
-expressions are `trim`, `skip-empty`, `deduplicate`, `reject-duplicates`,
-`sort`, `lower`, `upper`, `filter=<glob>`, `replace=<from>=><to>`,
-`prefix=<value>`, and `suffix=<value>`. Glob filters support only `*` (any
-sequence) and `?` (one Unicode scalar); other characters are literals. Sorting
-uses deterministic Unicode scalar ordering. Transformed values remain subject
-to the item and total-item resource limits.
-
-A template replaces `--sep`; combining a template with a non-empty `--sep` is
-rejected as `TEMPLATE_SEPARATOR_CONFLICT`. Template syntax and field errors
-are usage errors, and are validated before output-file creation. Templates are
-supported by `product`, `zip`, and `concat`; a concat record has one field, so
-only `{0}` or its assigned name is valid there.
-
-## Output formats
-
-### Text (default)
-
-Each combination's items are joined with `--sep` and terminated with
-`--rec-sep`:
-
-```
-$ combinator --list "red,blue" --list "car,bike" --sep "-"
-red-car
-red-bike
-blue-car
-blue-bike
-```
-
-With `--sep ""` (the default), items are concatenated directly.
-
-### JSON Lines (`--format jsonl`)
-
-One JSON object per line, in this exact key order — `i` (the combination's
-0-based index, honoring `--offset`), `value` (the joined string, using
-`--sep`), and `fields` (the individual items as a JSON array):
-
-```
-$ combinator --list "red,blue" --list "car,bike" --sep "-" --format jsonl
-{"i":0,"value":"red-car","fields":["red","car"]}
-{"i":1,"value":"red-bike","fields":["red","bike"]}
-{"i":2,"value":"blue-car","fields":["blue","car"]}
-{"i":3,"value":"blue-bike","fields":["blue","bike"]}
-```
-
-### `--lean-output` (jsonl only)
-
-Emits just the joined value as a bare JSON string per line — no index, no
-fields array:
-
-```
-$ combinator --list "red,blue" --list "car,bike" --sep "-" --format jsonl --lean-output
-"red-car"
-"red-bike"
-"blue-car"
-"blue-bike"
-```
-
-## `--reverse`, `--reverse-fields`, `--offset`, `--limit`, `--count-only`
-
-By default the rightmost list varies fastest (standard odometer order).
-`--reverse-fields` changes that so the leftmost list varies fastest:
-
-```
-$ combinator --list "red,blue" --list "car,bike" --sep "-" --reverse-fields
-red-car
-blue-car
-red-bike
-blue-bike
-```
-
-`--reverse` emits the ordinary product sequence from last to first:
-
-```
-$ combinator --list "red,blue" --list "car,bike" --sep "-" --reverse
-blue-bike
-blue-car
-red-bike
-red-car
-```
-
-`--reverse` and `--reverse-fields` are mutually exclusive.
-
-`--offset` and `--limit` page through the product without materializing
-skipped combinations; the JSONL `i` field reflects the true index, not a
-position within the page:
-
-```
-$ combinator --list "a,b" --list "c,d" --format jsonl --offset 1 --limit 2
-{"i":1,"value":"ad","fields":["a","d"]}
-{"i":2,"value":"bc","fields":["b","c"]}
-```
-
-`--shard-index` and `--shard-count` split the selected output ordering into
-balanced, contiguous half-open ranges. Earlier shards receive one extra
-record when the count is not evenly divisible. Existing `--offset` and
-`--limit` are intersected with the shard range, so they can resume or further
-page a shard without changing its boundaries. The same rule applies to
-`zip` and `concat`; with `--reverse`, ranges are assigned in reverse output
-order. The range algorithm is version 1 and is deterministic for stable
-inputs:
-
-```
-$ combinator --list "a,b" --list "1,2,3" --sep "-" --shard-index 1 --shard-count 2
-b-1
-b-2
-b-3
-```
-
-Use `--explain --format json` to obtain the full count plus the effective
-offset, limit, shard range, ordering, and output estimate without generating
-records.
-
-`--count-only` prints just the total combination count and exits, without
-generating any combinations:
-
-```
-$ combinator --list "a,b" --list "c,d,e" --count-only
-6
-```
-
-## Dry-run and explain
-
-Use `--dry-run` to validate inputs, limits, counts, and estimates without
-creating an output file or generating records. It prints a human-readable
-summary. Use `--explain --format json` for a versioned machine-readable plan:
-
-```
-$ combinator --list "a,b" --list "c,d,e" --limit 2 --explain --format json
-{"schema_version":1,"operation":"product", ...}
-```
-
-The JSON summary reports input list sizes, total combinations, effective
-offset/limit, records to emit, a conservative output-byte estimate, the
-selected output destination (`stdout` or `file`), and effective resource
-limits. It never includes input values or creates the requested output file.
-`--format json` is valid only with `--explain` or `--dry-run`.
-
-## Security and resource behavior
-
-Inputs are bounded by default. Files and stdin are read incrementally rather
-than loaded without limit; use the `--max-*` flags to tune limits for a trusted
- workload. The compiled hard ceilings cannot be raised by command-line flags.
-Generation is bounded by `--max-combinations` and
-`--max-output-bytes`; provide an explicit `--limit` for especially large or
-attacker-controlled requests.
-
-File output is created exclusively when overwrite is disabled. Overwrites are
-staged in a sibling temporary file and committed only after successful writing,
-so failures preserve the previous destination. Symlink output targets are
-rejected. The pre-flight disk-space check is advisory and is not a reservation;
-the runtime byte limit remains authoritative. `--no-preflight` disables only
-the early capacity estimate.
-
-For automation, run the binary with `--format jsonl`, capture stdout and stderr
-separately, and treat all input and output paths as untrusted unless the caller
-has constrained them to an approved directory.
-
-## stdout / stderr discipline
-
-- **stdout** carries only generated data: combination records (text or
-  jsonl), or the single number printed by `--count-only`. Nothing else is
-  ever written there.
-- **stderr** carries all diagnostics: errors, warnings, and optional
-  `--summary` output.
-  Each diagnostic is one line. When `--format jsonl` is in effect, error
-  lines are also JSON, with an `error` object containing `code`, `context`,
-  and `message` fields (key order is not part of the contract — parse by
-  field name); otherwise they're the plain-text form
-  `error[CODE]: message (key=value, ...)`.
-
-This means a consumer can always safely capture stdout alone and get nothing
-but generated output (or nothing, on error), and can always safely capture
-stderr alone and get nothing but diagnostics.
-
-## Error codes
-
-`combinator` uses stable, machine-readable codes. Usage
-errors (bad arguments/input) exit **2**; runtime errors (I/O, capacity, and
-similar failures encountered while executing an otherwise-valid command) exit
-**1**. `EMPTY_LIST` is the sole non-fatal warning: it is written to stderr but
-does not change the exit code (the run still exits **0**). For every operation
-except `concat` an empty list means zero combinations; under `concat` the empty
-list simply contributes no records and the remaining lists are still emitted,
-and the warning says so. `--quiet` suppresses it; `--warnings-as-errors`
-reports it as a runtime error with exit **1**.
-
-| Code | Exit | Meaning |
-|---|---|---|
-| `NO_LISTS` | 2 | Arguments were provided, but neither `--list` nor `--file` was given. |
-| `SOURCE_CONFLICT` | 2 | Both `--list` and `--file` were given; only one source is allowed. |
-| `DUPLICATE_STDIN` | 2 | Stdin was selected more than once as an input source. |
-| `INPUT_FORMAT_INVALID` | 2 | The selected input format is incompatible with the requested source type. |
-| `INLINE_ESCAPE_INVALID` | 2 | Escaped inline input contains an unknown or incomplete escape. |
-| `CSV_MALFORMED` | 2 | CSV/TSV input contains an unterminated or malformed quoted field. |
-| `CSV_MULTIPLE_FIELDS` | 2 | A CSV/TSV input record contains more than one field. |
-| `INPUT_NOT_UTF8` | 2 | A text, CSV, TSV, or NUL-delimited record is not valid UTF-8. |
-| `TEMPLATE_CONFLICT` | 2 | Both `--template` and `--template-file` were given. |
-| `TEMPLATE_SEPARATOR_CONFLICT` | 2 | A template was combined with a non-empty `--sep`. |
-| `TEMPLATE_INVALID` | 2 | Template syntax or a template reference is invalid. |
-| `TEMPLATE_UNKNOWN_FIELD` | 2 | A template references an unknown field. |
-| `TEMPLATE_NAMES_MISMATCH` | 2 | The number of `--name` values does not match the number of fields in a record. That is the input-list count for `product` and `zip`, always 1 for `concat`, the pool size for `permutations`, and `--choose`/`--length` for `combinations`/`variations`. |
-| `TEMPLATE_DUPLICATE_NAME` | 2 | A field name was supplied more than once. |
-| `TEMPLATE_INVALID_NAME` | 2 | A field name is not a valid identifier. |
-| `TEMPLATE_TOO_LARGE` | 2 | The template exceeds its 1 MiB security ceiling or configured input limit. |
-| `TEMPLATE_FILE_UNREADABLE` | 2 | The template file could not be read or is not valid UTF-8. |
-| `FORMAT_UNSUPPORTED` | 2 | `--format json` was used without `--explain` or `--dry-run`. |
-| `TRANSFORM_INVALID` | 2 | A `--transform` expression is malformed or uses unsupported syntax. |
-| `TRANSFORM_LIMIT` | 2 | The invocation contains too many transformation expressions. |
-| `DUPLICATE_ITEM` | 1 | `reject-duplicates` found a duplicate within an input list. |
-| `MODE_CONFLICT` | 2 | Mutually exclusive generation-summary modes were combined. |
-| `SHARD_ARGUMENTS_INCOMPLETE` | 2 | `--shard-index` and `--shard-count` must be provided together. |
-| `SHARD_COUNT_INVALID` | 2 | `--shard-count` must be positive. |
-| `SHARD_INDEX_INVALID` | 2 | `--shard-index` must be less than `--shard-count`. |
-| `SHARD_COUNT_OVERFLOW` | 1 | The shard range could not be computed safely. |
-| `EMPTY_LIST` | 0 (warning) | One of the input lists has zero items. Every operation except `concat` therefore produces no combinations; under `concat` that list contributes no records and the others are still emitted. Written to stderr; not a failure. |
-| `BAD_DELIMITER` | 2 | `--sep`, `--rec-sep`, or `--list-delim` exceeds the 4096-byte cap, or `--list-delim` is empty. |
-| `RESOURCE_LIMIT_TOO_HIGH` | 2 | A configurable resource limit exceeds the compiled security ceiling. |
-| `OUTPUT_EXISTS` | 1 | `--output` names a file that already exists and `--overwrite` was not passed. |
-| `INSUFFICIENT_SPACE` | 1 | Pre-flight estimate of the output size exceeds available disk space. |
-| `FILE_SIZE_LIMIT` | 1 | Pre-flight estimate of the output size exceeds `--max-file-size`. |
-| `COUNT_OVERFLOW` | 1 | The total combination count (for `--count-only`, or for the pre-flight size estimate) is too large to represent exactly. |
-| `FILE_UNREADABLE` | 1 | A `--file` path (or stdin, for `--file -`) could not be read. |
-| `INPUT_TOO_LARGE` | 1 | A file, stdin stream, or inline list exceeds the input byte limit. |
-| `ITEM_TOO_LARGE` | 1 | A list item exceeds the item byte limit. |
-| `TOO_MANY_ITEMS` | 1 | A list or the combined inputs exceed an item-count limit. |
-| `TOO_MANY_LISTS` | 1 | The invocation exceeds the maximum list count. |
-| `COMBINATION_LIMIT_EXCEEDED` | 1 | Generation would exceed the configured combination limit. |
-| `ZIP_LENGTH_MISMATCH` | 1 | `zip` with `--on-unequal error` (the default) and input lists of different lengths. |
-| `JOIN_LIMIT_EXCEEDED` | 1 | The bounded join result exceeds `--max-combinations`. |
-| `JOIN_FANOUT_LIMIT_EXCEEDED` | 1 | A duplicate-key join expansion exceeds `--max-join-key-fanout`. |
-| `JOIN_FORMAT_INVALID` | 2 | Join output must use `--format jsonl`. |
-| `JSONL_MALFORMED` | 2 | A JSONL join record is malformed. |
-| `JOIN_SCHEMA_INVALID` | 2 | Structured join headers or rows are invalid. |
-| `OUTPUT_LIMIT_EXCEEDED` | 1 | The generated output would exceed the configured byte limit. |
-| `CANCELLED` | 1 | Execution reached `--timeout-ms` or was cancelled by an embedding caller. |
-| `CAPACITY_UNKNOWN` | 1 | Available disk capacity could not be determined during pre-flight. |
-| `UNSAFE_OUTPUT_PATH` | 1 | The output path is a symbolic link or otherwise unsafe to overwrite. |
-| `WRITE_FAILED` | 1 | Creating or writing to the output file failed. |
-
-With no arguments, the CLI displays help and exits successfully:
-
-```
-$ combinator
-Usage: combinator [OPTIONS] [COMMAND]
-```
-
-Example (`NO_LISTS`, plain-text rendering — the default):
-
-```
-$ combinator product
-error[NO_LISTS]: no input lists were provided
-$ echo $?
-2
-```
-
-The same error under `--format jsonl` is rendered as JSON instead:
-
-```
-$ combinator --format jsonl
-{"error":{"code":"NO_LISTS","context":{},"message":"no input lists were provided"}}
-$ echo $?
-2
-```
-
-Example (`EMPTY_LIST`, a warning — note the exit code stays 0):
-
-```
-$ combinator --file empty.txt
-error[EMPTY_LIST]: a list is empty; zero combinations will be produced (list_index=0)
-$ echo $?
-0
-```
-
-## Consuming from other programs
-
-Treat `combinator` as a subprocess you spawn and stream from — this is the
-intended integration point for any higher-level consumer (REST API, GUI,
-etc.):
-
-1. Spawn the binary with the desired flags, redirecting stdout to a pipe.
-2. Read stdout line by line (text mode) or, for structured consumption, run
-   with `--format jsonl` and parse each line as a JSON object
-   (`{"i": <index>, "value": <string>, "fields": [<string>, ...]}`, or a bare
-   JSON string per line if `--lean-output` was also passed).
-3. Read stderr separately; a non-empty stderr line means a diagnostic (error,
-   warning, or optional summary) — check the process exit code to tell an
-   error (1 or 2) from a clean run that merely warned (0).
-4. Do not rely on any output before the process exits other than what has
-   already been read from the pipe — the tool streams records as they're
-   produced, so a consumer can begin processing before generation finishes,
-   but should still check the final exit code once the process ends.
-
-This keeps the contract narrow and stable: one binary, two channels (stdout
-for data, stderr for diagnostics), one exit-code convention, and one JSON
-shape.
-
-## Public-service deployment
-
-The CLI has bounded defaults and a compiled one-hour maximum for
-`--timeout-ms`, but the compiled ceilings are intentionally too large to be a
-complete multi-tenant service policy. A network-facing wrapper should impose
-smaller per-request limits and enforce them outside the process as well.
-
-At minimum, a public wrapper should:
-
-- authenticate and authorize requests before accepting filesystem paths or
-  output destinations;
-- restrict input and output paths to an application-owned directory, or avoid
-  arbitrary paths entirely;
-- set a finite `--timeout-ms` and also enforce wall-clock, CPU, memory,
-  concurrency, input-rate, output-rate, and disk quotas with the supervisor;
-- run each request with a low-privilege identity and, where possible, process
-  or container isolation;
-- apply per-client and global concurrency limits;
-- keep runtime output limits enabled even when `--no-preflight` is used;
-- treat pre-flight capacity checks as advisory because they do not reserve
-  disk space.
-
-Join requests are streamed during result generation, but the right-side hash
-index and both parsed inputs remain in memory. Set service-specific input,
-item, record, and output limits below the CLI hard ceilings when handling
-untrusted clients.
-## New selection operations and typed filters
-
-In addition to the default Cartesian product, the CLI exposes selection
-operations over exactly one logical input pool:
-
-```text
-combinator permutations --list a,b,c
-combinator combinations --list a,b,c --choose 2
-combinator variations --list a,b,c --length 2
-```
-
-Permutations emit deterministic lexicographic order of input positions;
-combinations emit increasing index selections; variations emit lexicographic
-ordered selections without replacement. Duplicate input values remain distinct
-positions, so duplicate output values are expected. `--reverse`, `--offset`,
-`--limit`, count limits, and sharding use the same checked paging semantics as
-the existing operations. `--choose 0` emits one empty selection, while an
-invalid selection length produces zero records.
-
-Candidate filters are typed and side-effect-free. Repeat `--filter` options to
-AND predicates together:
-
-```text
-combinator permutations --list aa,ab,ba --filter prefix:0=a --filter length:0=2..2
-```
-
-Supported forms are `eq:FIELD=VALUE`, `neq:FIELD=VALUE`, `prefix:FIELD=VALUE`,
-`suffix:FIELD=VALUE`, `glob:FIELD=PATTERN` (`*` and `?`), and
-`length:FIELD=MIN..MAX`. Filtered `--count-only`, `--explain`, and `--dry-run`
-requests are rejected because those modes must not report an unevaluated
-logical count as an accepted-record count.
+The TUI uses Tab and Shift+Tab to move between controls and Enter to edit or
+activate the focused control. Its main shortcuts are:
+
+| Key | Action |
+|---|---|
+| `p` | Preview |
+| `g` | Generate |
+| `c` | Cancel |
+| `a` / `d` | Add or delete a list |
+| `1` / `2` / `3` | Open Combine, Join, or Settings |
+| `Ctrl+O` / `Ctrl+S` / `Ctrl+N` | Open, save, or create a profile |
+| Page Up / Page Down | Scroll the preview |
+
+## Documentation
+
+Start with the [documentation guide](docs/README.md), which routes readers by
+task. The main references are:
+
+- [CLI user manual](docs/cli-usage.md) — inputs, operations, output, paging,
+  templates, limits, and automation
+- [Glossary](docs/glossary.md) — project-specific and combinatorics terms
+- [Error reference](docs/error-reference.md) — exit statuses, diagnostics,
+  warnings, and stable error codes
+- [Security and deployment](docs/security-and-deployment.md) — resource
+  controls, filesystem behavior, and guidance for public services
+- [Library usage](docs/library-usage.md) — reusable Rust crates and APIs
+- [Compatibility policy](docs/compatibility.md) — supported public contract
+- [Release procedure](docs/release.md) — maintainer release checks
+
+## Safety at a glance
+
+Inputs, item counts, generated records, output bytes, and execution time can
+all be bounded. Files are not overwritten unless `--overwrite` is explicit.
+Replacement output is staged in a sibling temporary file and committed only
+after a successful write. Symlinks, reparse points, and unsafe output paths
+are rejected.
+
+Preflight estimates are advisory; runtime limits remain authoritative. A
+network-facing service must also enforce its own authentication, path,
+memory, CPU, concurrency, and rate limits. See
+[Security and deployment](docs/security-and-deployment.md) before processing
+untrusted requests.
+
+## Project status and compatibility
+
+Version 0.1.0 is an early public release. The CLI is the supported automation
+boundary. Library APIs and GUI/TUI behavior may change before version 1.0.0.
+Current GitHub binary releases target Linux x86_64 and Windows x86_64.
+
+Within a major release, existing CLI flags and defaults, exit-status meanings,
+error-code meanings, standard output/error ownership, and existing JSON Lines
+fields remain compatible. See the [compatibility policy](docs/compatibility.md)
+for the complete contract.
+
+This Cargo workspace contains six crates:
+
+| Crate | Responsibility |
+|---|---|
+| `combinator-core` | Lazy algorithms, counting, and size estimation; no I/O |
+| `combinator-codecs` | Bounded input, template, output, and estimate codecs |
+| `combinator-app` | Shared planning, preview, join, streaming, and file workflows |
+| `combinator-cli` | Argument parsing and the `combinator` executable |
+| `combinator-gui` | Desktop interface |
+| `combinator-tui` | Terminal interface |
+
+The workspace is licensed under the [MIT License](LICENSE). Third-party
+dependency licenses are listed in
+[docs/dependency-licenses.md](docs/dependency-licenses.md).
 
 ## AI assistance disclosure
 
-AI tools were used during the development of this project, including OpenAI
-OpenAI Codex, Anthropic Claude, and xAI Grok. Their assistance included brainstorming,
-code and documentation drafting, and review. The project maintainer reviewed
-and tested the resulting work and is responsible for the final contents.
+AI tools were used during development, including OpenAI Codex, Anthropic
+Claude, and xAI Grok. They assisted with brainstorming, code and documentation
+drafting, and review. The project maintainer reviewed and tested the resulting
+work and is responsible for the final contents.

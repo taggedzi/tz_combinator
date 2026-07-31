@@ -1,8 +1,11 @@
 # `combinator` CLI usage
 
-This is the reference for the `combinator` executable. Examples use the
-binary from `cargo run -p combinator-cli --`; after installation, remove that
-prefix and use `combinator`.
+This is the user manual for the `combinator` executable. The examples assume
+the binary is installed. To run them from the workspace, replace `combinator`
+with `cargo run -p combinator-cli --`.
+
+Terms specific to combinatorics, streaming formats, and filesystem safety are
+defined in the [glossary](glossary.md).
 
 ## Invocation shape
 
@@ -18,7 +21,9 @@ warning unless `--warnings-as-errors` is used.
 
 Inspect the installed interface with `combinator --help`,
 `combinator <mode> --help`, `combinator completions <shell>`, or
-`combinator man`.
+`combinator man`. The `completions` command supports Bash, Elvish, Fish,
+PowerShell, and Zsh. `combinator --about` prints project and troubleshooting
+information.
 
 ## Input options
 
@@ -27,7 +32,7 @@ Inspect the installed interface with `combinator --help`,
 | `--list VALUE` | Inline list; repeat for fields. Default delimiter is comma. |
 | `--file PATH` | One item per line; repeat for fields. `-` reads stdin. |
 | `--input-format lines\|csv\|tsv\|nul\|inline` | Select decoding. |
-| `--allow-mixed-inputs` | Allow `--list` and `--file` together, in argument order. |
+| `--allow-mixed-inputs` | Allow `--list` and `--file` together; inline lists are processed before files. |
 | `--list-delim TEXT` | Literal inline-list delimiter; default `,`. |
 
 ```text
@@ -46,6 +51,16 @@ combinator --allow-mixed-inputs --list a,b --file more.txt
 CSV/TSV input accepts one field per record for list operations. `--file -`
 may be used only once. Inputs are bounded by the `--max-*` options and the
 compiled ceilings described below.
+
+Line input removes a trailing carriage return, so Windows-style CRLF files
+work. NUL input is split on zero bytes before UTF-8 validation, so an item may
+contain newlines. `--input-format inline` enables escaped inline values:
+`\n`, `\r`, `\t`, `\0`, `\xNN`, `\\`, and an escaped list delimiter.
+Malformed input is rejected before an output file is replaced.
+
+When mixed inputs are enabled, all inline lists are processed first, followed
+by all file sources. Order within each source type follows the corresponding
+option order.
 
 ## Operation modes
 
@@ -93,8 +108,8 @@ d
 
 ### Selection modes
 
-These modes use one logical input pool (the supplied lists are normalized into
-one pool):
+These modes require exactly one input list, which becomes the logical input
+pool:
 
 ```text
 combinator permutations --list a,b,c
@@ -120,7 +135,10 @@ cb
 ```
 
 `--choose 0` emits one empty selection. A selection length greater than the
-pool emits no records. Duplicate values remain distinct positions.
+pool emits no records. Duplicate values remain distinct positions, so equal
+output values can occur. Permutations and variations use deterministic
+lexicographic order of input positions; combinations use increasing input
+positions.
 
 ### Join
 
@@ -137,11 +155,24 @@ Required options are `--left`, `--right`, `--left-key`, and `--right-key`.
 input format (`csv`, `tsv`, or `jsonl`, default `csv`). Join safety controls
 are `--max-join-records` and `--max-join-key-fanout`.
 
+CSV and TSV inputs use the first row as headers. Each JSON Lines input record
+must be an object whose field values are strings. Output preserves left-input
+order; duplicate matches expand in right-input order. Empty keys do not match.
+If a right-side field name collides with a left-side name, the output gives
+the right-side field a `_right` suffix.
+
 ## Rendering and templates
 
 `--format` is `text` (default), `jsonl`, `json` (only with `--explain` or
 `--dry-run`), `csv`, `tsv`, or `nul`. `--rec-sep` terminates text records;
 `--lean-output` makes JSONL emit only a JSON string per line.
+
+- Text joins fields with `--sep` and ends records with `--rec-sep`.
+- Full JSON Lines emits `i`, `value`, and `fields` in that order. The `i`
+  field is the zero-based logical index, including any offset.
+- CSV and TSV quote fields when required by their format.
+- NUL output ends each record with a zero byte.
+- JSON is reserved for machine-readable `--explain` and `--dry-run` plans.
 
 ```text
 combinator --list red,blue --list car,bike --sep - --format jsonl
@@ -165,6 +196,11 @@ combinator --name host --name port --list server1 --list 443 \
   --template '{host}:{port}' --format jsonl
 ```
 
+A template replaces `--sep`; using one with a non-empty separator is an error.
+Templates are parsed before output creation and cannot execute expressions,
+commands, environment lookups, or file access. `--template-file` reads the
+same bounded UTF-8 syntax from an explicit path.
+
 Transforms are repeated and applied left-to-right per list:
 `trim`, `skip-empty`, `deduplicate`, `reject-duplicates`, `sort`, `lower`,
 `upper`, `filter=GLOB`, `replace=FROM=>TO`, `prefix=VALUE`, and
@@ -178,6 +214,12 @@ combinator --list ' B ,a,b ' --transform trim --transform lower \
 combinator permutations --list aa,ab,ba \
   --filter prefix:0=a --filter length:0=2..2
 ```
+
+Transform glob patterns support `*` for any sequence and `?` for one Unicode
+scalar value. Other characters are literal. Typed filters are
+side-effect-free; every repeated filter must match. Filters cannot be combined
+with `--count-only`, `--explain`, or `--dry-run`, because those modes cannot
+report an unevaluated accepted-record count.
 
 ## Paging, counts, shards, and validation
 
@@ -206,11 +248,24 @@ b3
 combinator --list a,b --limit 2 --explain --format json
 ```
 
+Shards are balanced, contiguous, half-open ranges. Earlier shards receive one
+extra record when the total is not evenly divisible. Offset and limit are
+intersected with the selected shard, so they can resume or further page it
+without changing shard boundaries. Ordering and sharding use deterministic
+version 1 algorithms for stable inputs.
+
+`--explain --format json` reports the full count, effective offset and limit,
+shard range, ordering, destination, effective resource limits, and a
+conservative output estimate. The response includes a `schema_version` and
+never includes input values. `--dry-run` provides a human-readable validation
+summary. Neither mode generates records or creates the requested output file.
+
 ## Output files and resource controls
 
 `-o PATH`/`--output PATH` writes to a file. Existing files require
-`--overwrite` (alias `--force`, short `-f`). `--max-file-size` limits the
-pre-flight estimate; `--no-preflight` skips only that advisory check.
+`--overwrite` (alias `--force`, short `-f`). `--max-file-size` caps file
+output and its preflight estimate; `--no-preflight` skips only the advisory
+capacity check, not the runtime cap.
 
 Limits are `--max-output-bytes`, `--max-input-bytes`, `--max-item-bytes`,
 `--max-items-per-list`, `--max-lists`, `--max-total-items`,
@@ -221,10 +276,15 @@ raised; the timeout ceiling is one hour. `--quiet` suppresses warnings,
 `--warnings-as-errors` promotes them, and `--summary` reports records/bytes
 on stderr.
 
+Existing output files are preserved unless `--overwrite` is explicit.
+Replacement output is staged and committed only after a successful write.
+Read [security and deployment](security-and-deployment.md) for path-safety,
+preflight, and service-hardening details.
+
 ## Errors and automation
 
 Use JSONL for subprocess integration. Stdout contains only data; stderr
-contains diagnostics. Plain errors look like:
+contains diagnostics.
 
 With no arguments, `combinator` prints help and exits successfully. An
 explicit operation without an input source reports a usage error:
@@ -244,5 +304,15 @@ Stable codes include `NO_LISTS`, `SOURCE_CONFLICT`, `INPUT_TOO_LARGE`,
 `TEMPLATE_INVALID`, `TRANSFORM_INVALID`, `COMBINATION_LIMIT_EXCEEDED`,
 `ZIP_LENGTH_MISMATCH`, `JOIN_LIMIT_EXCEEDED`, `OUTPUT_LIMIT_EXCEEDED`,
 `OUTPUT_EXISTS`, `UNSAFE_OUTPUT_PATH`, `FILE_UNREADABLE`, and `WRITE_FAILED`.
-See the complete code table in `README.md` and always check the final exit
-status after draining stdout/stderr.
+See the [error reference](error-reference.md) for the complete contract and
+always check the final exit status after draining stdout and stderr.
+
+When spawning `combinator` from another program:
+
+1. Redirect standard output and standard error to separate pipes.
+2. Consume standard output incrementally; use JSON Lines when structured
+   records are required.
+3. Drain standard error concurrently so neither pipe blocks the child
+   process.
+4. After both streams close, check the exit status. Output may have been
+   streamed before a later runtime failure.

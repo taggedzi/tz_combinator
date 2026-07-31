@@ -1,0 +1,105 @@
+# Security and deployment
+
+`tz_combinator` is designed to process untrusted text without unbounded work.
+Its built-in limits are a safety baseline, not a complete policy for a
+multi-user service.
+
+## Resource controls
+
+The CLI bounds input bytes, item bytes, items per list, the number of lists,
+total items, generated records, and output bytes. Join operations also bound
+records per side and the expansion caused by duplicate keys.
+
+The default limits are:
+
+| Resource | Default |
+|---|---:|
+| Output bytes | 1 GiB |
+| Input byte budget | 64 MiB |
+| Bytes per item | 1 MiB |
+| Items per list | 1,000,000 |
+| Input lists | 128 |
+| Total items | 5,000,000 |
+| Generated combinations | 10,000,000 |
+| Join records per side | 100,000 |
+| Duplicate-key join expansion | 10,000 |
+| Timeout | None |
+
+Use the corresponding `--max-*` options and `--timeout-ms` to lower these
+limits. The compiled ceilings cannot be raised by command-line options; the
+maximum accepted timeout is one hour.
+
+Files and standard input are read incrementally under byte and item limits.
+Each source is capped, and list operations also share the input byte budget
+across all sources in one request.
+Generation is streamed rather than materialized in full. Join generation is
+streamed, but parsed join inputs and the right-side hash index remain in
+memory.
+
+## Safe file output
+
+Without `--overwrite`, the output file is created exclusively and the
+operation fails if it already exists. With `--overwrite`, output is staged in
+a sibling temporary file and committed after successful generation. A failed
+write therefore preserves the previous destination.
+
+Output paths require an existing parent directory. The writer rejects:
+
+- a destination that is a symbolic link or reparse point;
+- a parent path containing a symbolic link or reparse point; and
+- parent traversal using `..`.
+
+The writer assumes that a privileged attacker cannot concurrently replace the
+approved parent directory. Services operating across trust boundaries should
+restrict output to an application-owned directory.
+
+## Preflight and runtime enforcement
+
+Preflight validates the request and estimates output size before creating the
+destination. Available disk space can change after this check, so the estimate
+is advisory rather than a reservation. Output-byte enforcement during writing
+is authoritative.
+
+`--no-preflight` disables the early capacity check only. It does not disable
+runtime input, combination, or output limits.
+
+Use `--dry-run` for a human-readable validation summary or
+`--explain --format json` for a versioned machine-readable plan. Neither mode
+generates records or creates the requested output file.
+
+## Processing untrusted input
+
+For local automation:
+
+- use explicit limits that match the expected workload;
+- supply a finite timeout for attacker-controlled requests;
+- constrain all paths to directories controlled by the application;
+- prefer JSON Lines output and parse diagnostics by field name; and
+- keep standard output and standard error on separate pipes.
+
+Templates and filters are data-only. They do not execute commands, evaluate
+general expressions, read environment variables, or load arbitrary files.
+Template files are read only when explicitly selected and are subject to input
+limits.
+
+## Public-service checklist
+
+A network-facing wrapper must impose stricter policy outside the process. At
+minimum:
+
+1. Authenticate and authorize requests before accepting paths or output
+   destinations.
+2. Restrict input and output to an application-owned directory, or do not
+   expose arbitrary paths.
+3. Set a finite `--timeout-ms` and enforce independent wall-clock and CPU
+   limits.
+4. Enforce memory, concurrency, request-rate, input-rate, output-rate, and disk
+   quotas.
+5. Run each request with a low-privilege identity and use process or container
+   isolation where practical.
+6. Apply both per-client and global concurrency limits.
+7. Keep runtime limits enabled even when preflight is disabled.
+8. Set join limits below the CLI ceilings for untrusted clients.
+
+Preflight checks must not be used as the service's only resource-control
+mechanism.

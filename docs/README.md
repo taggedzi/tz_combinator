@@ -1,0 +1,39 @@
+# Documentation guide
+
+This page routes readers to the shortest document that answers their question.
+The generated CLI help remains the authority for the exact options supported
+by an installed binary.
+
+## I want to use the application
+
+1. Read the [README quick start](../README.md#quick-start).
+2. Choose the CLI, GUI, or TUI.
+3. For CLI work, continue with the [CLI user manual](cli-usage.md).
+4. Look up unfamiliar terms in the [glossary](glossary.md).
+
+## I am writing automation
+
+- Use the [CLI user manual](cli-usage.md) for input, output, templates,
+  paging, and machine-readable plans.
+- Use the [error reference](error-reference.md) for exit statuses and
+  diagnostics.
+- Read the [compatibility policy](compatibility.md) before depending on output
+  ordering or JSON fields.
+- Read [security and deployment](security-and-deployment.md) before handling
+  untrusted input or exposing the tool through a service.
+
+## I want to embed the Rust libraries
+
+Read [library usage](library-usage.md). The CLI is the stable integration
+boundary; the Rust APIs are not yet covered by semantic-versioning stability.
+
+## I maintain or release the project
+
+- [Release procedure](release.md)
+- [Dependency licenses](dependency-licenses.md)
+- [Feature roadmap](feature-roadmap.md)
+- [Fuzzing guide](../fuzz/README.md)
+
+Files whose names end in `-plan.md`, plus documents under
+`docs/superpowers/`, are implementation records rather than user
+documentation. They are retained for project history and engineering work.
