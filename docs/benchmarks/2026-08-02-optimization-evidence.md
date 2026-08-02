@@ -52,10 +52,29 @@ cargo bench -p combinator-benchmarks --bench core --locked -- --noplot "core/joi
 Correctness coverage for the optimized paths includes the core unit and
 boundary tests, exhaustive small combination-order checks, collision-preserving
 full-join tests, and the existing cancellation, limit, fanout, and ordering
-tests. The normal Linux and Windows quality jobs now also compile every locked
-benchmark target. Timing results from other operating systems and architectures
-remain required before making a cross-platform performance claim.
+tests. The normal Linux and Windows quality jobs type-check every target through
+all-target clippy; release-profile benchmark compilation remains in the manual
+benchmark workflows. Timing results from other operating systems and
+architectures remain required before making a cross-platform performance claim.
 
 The [optimization benchmark matrix workflow](../../.github/workflows/optimization-benchmarks.yml)
 provides the manual Linux/Windows timing run for that follow-up. It intentionally
 does not save baselines, render reports, or upload artifacts.
+
+The matrix completed successfully for both suites on commit `7d521ec`:
+[selection matrix run](https://github.com/taggedzi/tz_combinator/actions/runs/30748031991)
+and [join matrix run](https://github.com/taggedzi/tz_combinator/actions/runs/30748136902).
+Representative Criterion medians from those hosted runners were:
+
+| Case | Ubuntu 24.04 | Windows 2022 |
+|---|---:|---:|
+| Selection: 12-item permutation page | 12.228 µs | 23.138 µs |
+| Selection: 32-choose-6 combination page | 31.252 µs | 51.986 µs |
+| Selection: 64-choose-8 combination page | 67.587 µs | 102.45 µs |
+| Selection: 24P4 variation page | 12.270 µs | 26.040 µs |
+| Join: skewed duplicate stream | 604.53 µs | 1.1427 ms |
+
+These hosted-runner measurements confirm that the benchmark targets compile and
+execute on both operating systems. They are directional cross-platform evidence,
+not a replacement for the controlled Windows reference measurements or a release
+performance threshold.
