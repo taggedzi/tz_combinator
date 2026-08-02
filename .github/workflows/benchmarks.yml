@@ -1,0 +1,211 @@
+name: Performance benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Ephemeral run, save a baseline, or compare with one
+        required: true
+        default: discard
+        type: choice
+        options:
+          - discard
+          - save
+          - compare
+      baseline_name:
+        description: Named baseline (letters, digits, dot, underscore, hyphen)
+        required: true
+        default: base
+        type: string
+      baseline_run_id:
+        description: Workflow run containing the named baseline (compare only)
+        required: false
+        type: string
+      report:
+        description: Generate and upload the readable comparison report
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: performance-benchmarks
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.94.1
+  CARGO_TERM_COLOR: always
+  MAX_ARTIFACT_KIB: 102400
+
+jobs:
+  benchmark:
+    name: Bounded benchmark run
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate explicit output request
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          BASELINE_NAME: ${{ inputs.baseline_name }}
+          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+          REPORT: ${{ inputs.report }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASELINE_NAME" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+            echo "baseline_name must contain 1-64 safe ASCII characters" >&2
+            exit 2
+          fi
+          if [[ "$OPERATION" == "compare" && ! "$BASELINE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "compare requires a numeric baseline_run_id" >&2
+            exit 2
+          fi
+          if [[ "$OPERATION" != "compare" && -n "$BASELINE_RUN_ID" ]]; then
+            echo "baseline_run_id is valid only for compare" >&2
+            exit 2
+          fi
+          if [[ "$REPORT" == "true" && "$OPERATION" != "compare" ]]; then
+            echo "a readable report requires the compare operation" >&2
+            exit 2
+          fi
+
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: benchmark-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          cache-bin: "false"
+
+      - name: Download requested baseline
+        if: inputs.operation == 'compare'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: benchmark-baseline-${{ inputs.baseline_name }}
+          path: target/criterion
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.baseline_run_id }}
+
+      - name: Preserve baseline metadata
+        if: inputs.operation == 'compare'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f target/criterion/benchmark-metadata.json
+          cp target/criterion/benchmark-metadata.json target/criterion/baseline-metadata.json
+
+      - name: Build release CLI
+        run: cargo build -p combinator-cli --release --locked
+
+      - name: Run bounded benchmarks
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          BASELINE_NAME: ${{ inputs.baseline_name }}
+          REPORT: ${{ inputs.report }}
+        run: |
+          set -euo pipefail
+          cargo_options=(-p combinator-benchmarks --locked)
+          criterion_options=(--noplot)
+          case "$OPERATION" in
+            discard)
+              criterion_options+=(--discard-baseline)
+              ;;
+            save)
+              criterion_options+=(--save-baseline "$BASELINE_NAME")
+              ;;
+            compare)
+              criterion_options+=(--baseline "$BASELINE_NAME")
+              ;;
+          esac
+          if [[ "$REPORT" == "true" ]]; then
+            cargo_options+=(--features benchmark-report)
+            criterion_options=(--baseline "$BASELINE_NAME")
+          fi
+          cargo bench "${cargo_options[@]}" -- "${criterion_options[@]}"
+
+      - name: Record sanitized comparison metadata
+        if: inputs.operation == 'save' || inputs.report
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          BASELINE_NAME: ${{ inputs.baseline_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/criterion
+          rustc_version="$(rustc --version)"
+          rust_target="$(rustc -vV | sed -n 's/^host: //p')"
+          cpu_model="$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
+          cpu_count="$(getconf _NPROCESSORS_ONLN)"
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg rustc "$rustc_version" \
+            --arg target "$rust_target" \
+            --arg runner_os "$RUNNER_OS" \
+            --arg runner_arch "$RUNNER_ARCH" \
+            --arg runner_image "${ImageOS:-unknown}/${ImageVersion:-unknown}" \
+            --arg cpu_model "$cpu_model" \
+            --argjson cpu_count "$cpu_count" \
+            --arg operation "$OPERATION" \
+            --arg baseline "$BASELINE_NAME" \
+            '{commit:$commit,rustc:$rustc,target:$target,runner_os:$runner_os,runner_arch:$runner_arch,runner_image:$runner_image,cpu_model:$cpu_model,cpu_count:$cpu_count,operation:$operation,baseline:$baseline}' \
+            > target/criterion/benchmark-metadata.json
+          cp LICENSE target/criterion/PROJECT_LICENSE.txt
+          cp THIRD_PARTY_LICENSES.md target/criterion/THIRD_PARTY_LICENSES.md
+
+      - name: Build readable artifact entry point
+        if: inputs.report
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f target/criterion/report/index.html
+          baseline_environment="$(jq -c '{rustc,target,runner_os,runner_arch,runner_image,cpu_model,cpu_count}' target/criterion/baseline-metadata.json)"
+          current_environment="$(jq -c '{rustc,target,runner_os,runner_arch,runner_image,cpu_model,cpu_count}' target/criterion/benchmark-metadata.json)"
+          if [[ "$baseline_environment" == "$current_environment" ]]; then
+            warning="Comparable environment metadata matches. Host load and shared-runner noise can still affect results."
+          else
+            warning="WARNING: Baseline and current environment metadata differ. Do not attribute changes solely to the code under test."
+          fi
+          jq -nr \
+            --arg warning "$warning" \
+            --arg baseline "$baseline_environment" \
+            --arg current "$current_environment" \
+            '"<!doctype html><meta charset=\"utf-8\"><title>tz_combinator benchmark comparison</title><style>body{font:16px system-ui;max-width:72rem;margin:3rem auto;padding:0 1rem}aside{border-left:.4rem solid #b45309;background:#fffbeb;padding:1rem}code{overflow-wrap:anywhere}</style><h1>tz_combinator benchmark comparison</h1><aside><strong>Comparability:</strong> " + ($warning|@html) + "</aside><p><a href=\"report/index.html\">Open the Criterion comparison report</a></p><h2>Baseline environment</h2><code>" + ($baseline|@html) + "</code><h2>Current environment</h2><code>" + ($current|@html) + "</code>"' \
+            > target/criterion/OPEN_ME.html
+
+      - name: Enforce artifact size bound
+        if: inputs.operation == 'save' || inputs.report
+        shell: bash
+        run: |
+          set -euo pipefail
+          size_kib="$(du -sk target/criterion | cut -f1)"
+          if (( size_kib > MAX_ARTIFACT_KIB )); then
+            echo "benchmark artifact is ${size_kib} KiB; limit is ${MAX_ARTIFACT_KIB} KiB" >&2
+            exit 1
+          fi
+
+      - name: Upload explicitly saved baseline
+        if: inputs.operation == 'save'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-baseline-${{ inputs.baseline_name }}
+          path: target/criterion
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
+
+      - name: Upload explicitly requested readable report
+        if: inputs.report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-report-${{ github.run_id }}
+          path: target/criterion
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9

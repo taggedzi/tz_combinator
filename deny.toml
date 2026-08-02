@@ -12,6 +12,7 @@ wildcards = "deny"
 [licenses]
 version = 2
 confidence-threshold = 0.8
+include-dev = true
 allow = [
     "Apache-2.0",
     "BSL-1.0",

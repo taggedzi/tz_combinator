@@ -33,6 +33,7 @@ before a concrete external consumer and supported API surface are identified.
 
 - [Release procedure](release.md)
 - [Dependency licenses](dependency-licenses.md)
+- [Benchmarking guide](benchmarking.md)
 - [Fuzzing guide](../fuzz/README.md)
 
 ## I need historical context

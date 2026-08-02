@@ -25,12 +25,36 @@ distributes the dependency notices required by the selected licenses; legal
 review should confirm whether the Unlicense option is acceptable for a given
 distribution policy.
 
+## Benchmark development tooling
+
+The non-published `combinator-benchmarks` package keeps its tools outside the
+production dependency graph. The exact locked direct/report dependencies are:
+
+| Crate | Version | License | Use |
+|---|---:|---|---|
+| `criterion` | 0.8.2 | MIT or Apache-2.0 | Statistical benchmark harness and optional HTML reports |
+| `criterion-plot` | 0.8.2 | MIT or Apache-2.0 | Criterion plot-data support |
+| `plotters` | 0.3.7 | MIT | Opt-in SVG charts for readable reports |
+| `plotters-backend` | 0.3.7 | MIT | Plotters rendering interface |
+| `plotters-svg` | 0.3.7 | MIT | SVG report rendering |
+| `tempfile` | 3.27.0 | MIT or Apache-2.0 | Dedicated directories for file benchmarks |
+
+Criterion and Tempfile are used under their MIT option. Plotters is enabled
+only by the `benchmark-report` feature. These dependencies do not change the
+MIT license of the workspace or any first-party source. `deny.toml` includes
+development dependencies, and CI checks all features so future benchmark and
+report dependency changes fail closed against the approved license/source
+policy. Non-Cargo workflow actions and report assets still require manual
+review. See the [benchmarking guide](benchmarking.md) for the selection record
+and opt-in report commands.
+
 ## Audit procedure
 
 Before releasing a binary or changing dependencies:
 
 1. Review `Cargo.lock` for the exact resolved dependency set.
-2. Run a license inventory tool such as `cargo license` or `cargo-about`.
+2. Run `cargo deny --all-features check` and a license inventory tool such as
+   `cargo license` or `cargo-about`.
 3. Review every normal and platform-specific dependency, including
    transitive dependencies.
 4. Preserve the generated third-party notices with the release artifacts.

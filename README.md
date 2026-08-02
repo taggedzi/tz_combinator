@@ -164,6 +164,7 @@ This Cargo workspace contains six crates:
 | `combinator-cli` | Argument parsing and the `combinator` executable |
 | `combinator-gui` | Desktop interface |
 | `combinator-tui` | Terminal interface |
+| `combinator-benchmarks` | Non-published, bounded performance harness |
 
 ## Community and contributions
 
