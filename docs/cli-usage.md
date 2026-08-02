@@ -276,6 +276,36 @@ raised; the timeout ceiling is one hour. `--quiet` suppresses warnings,
 `--warnings-as-errors` promotes them, and `--summary` reports records/bytes
 on stderr.
 
+## Opt-in operational logging
+
+Operational logs are disabled by default and are always written to stderr;
+they never enter generated stdout or a selected output file. Enable a bounded,
+phase-level stream with:
+
+```text
+combinator --list a,b --log-level info
+combinator --list a,b --log-level debug --log-format json
+```
+
+`--log-level` accepts `off`, `error`, `warn`, `info`, `debug`, or `trace`.
+`--log-format` accepts `text` or `json` and defaults to `text`. Text events are
+one escaped physical line each. JSON events are JSON Lines with `kind: "log"`,
+`level`, `event`, and safe phase fields. Events contain only operation kinds,
+format/destination kinds, bounded counts, byte totals, stable error codes, and
+durations; they do not contain records, list items, templates, environment
+values, or raw paths. No per-record events are emitted.
+
+`COMBINATOR_LOG` may provide the level when `--log-level` is omitted. It must
+be exactly one documented level and is length-bounded; the CLI option takes
+precedence. `--quiet` remains independent and controls warnings only.
+
+For `--format json` or `--format jsonl`, enabled logging requires
+`--log-format json` before input is read or an output file is opened. In that
+explicit mode stderr is a JSON Lines event stream: operational logs use
+`kind: "log"`, warnings use `kind: "warning"`, summaries use
+`kind: "summary"`, and fatal diagnostics use `kind: "diagnostic"`. Logging
+does not change stdout or the exit status.
+
 Existing output files are preserved unless `--overwrite` is explicit.
 Replacement output is staged and committed only after a successful write.
 Read [security and deployment](security-and-deployment.md) for path-safety,
@@ -284,7 +314,8 @@ preflight, and service-hardening details.
 ## Errors and automation
 
 Use JSONL for subprocess integration. Stdout contains only data; stderr
-contains diagnostics.
+contains diagnostics. If operational logs are enabled for a machine-readable
+invocation, consume stderr as the documented JSON Lines event stream.
 
 With no arguments, `combinator` prints help and exits successfully. An
 explicit operation without an input source reports a usage error:

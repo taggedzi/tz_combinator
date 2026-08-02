@@ -29,6 +29,22 @@ pub enum OutFormat {
     Nul,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    Text,
+    Json,
+}
+
 impl From<OutFormat> for combinator_codecs::Format {
     fn from(value: OutFormat) -> Self {
         match value {
@@ -233,6 +249,19 @@ pub struct CommonArgs {
     /// Print a one-line record/byte summary to stderr after successful output.
     #[arg(long)]
     pub summary: bool,
+
+    /// Enable opt-in operational logging. The default is off; COMBINATOR_LOG
+    /// is used only when this option is omitted.
+    #[arg(long, value_enum)]
+    pub log_level: Option<LogLevel>,
+
+    /// Operational log framing written to stderr.
+    #[arg(long = "log-format", value_enum, default_value_t = LogFormat::Text)]
+    pub log_format: LogFormat,
+
+    /// Resolved CLI-owned logging state; not a command-line argument.
+    #[arg(skip)]
+    pub resolved_log: Option<crate::logging::ResolvedLogConfig>,
 
     /// Cancel execution after this many milliseconds.
     #[arg(long = "timeout-ms")]

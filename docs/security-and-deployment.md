@@ -97,6 +97,14 @@ general expressions, read environment variables, or load arbitrary files.
 Template files are read only when explicitly selected and are subject to input
 limits.
 
+Operational logging is opt-in and disabled by default. Logs are phase-level
+only and exclude generated values, list items, join keys, templates, raw paths,
+environment values, and credentials. `COMBINATOR_LOG` accepts only the
+documented bounded level vocabulary; a command-line level takes precedence.
+The initial implementation has no persistent file, network, shell, dynamic
+loading, or telemetry destination. Treat explicitly enabled stderr logs as
+diagnostic data and keep stderr separate from generated stdout.
+
 ## Public-service checklist
 
 A network-facing wrapper must impose stricter policy outside the process. At

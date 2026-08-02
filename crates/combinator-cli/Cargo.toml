@@ -18,6 +18,7 @@ clap_complete = "4"
 clap_mangen = "0.2"
 csv = "1.4"
 serde_json = "1"
+tracing = "0.1"
 fs2 = "0.4"
 windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
 combinator-core = { version = "0.1.0", path = "../combinator-core" }

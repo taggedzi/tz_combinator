@@ -5,7 +5,9 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 
 fn command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_combinator"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_combinator"));
+    command.env_remove("COMBINATOR_LOG");
+    command
 }
 
 /// Drain both child pipes independently. This is intentionally not based on
@@ -13,6 +15,36 @@ fn command() -> Command {
 /// stdout pipe.
 fn run(args: &[&str]) -> Output {
     let mut child = command()
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn combinator");
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let out_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut reader = stdout;
+        reader.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let err_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut reader = stderr;
+        reader.read_to_end(&mut bytes).unwrap();
+        bytes
+    });
+    let status = child.wait().expect("wait combinator");
+    Output {
+        status,
+        stdout: out_reader.join().unwrap(),
+        stderr: err_reader.join().unwrap(),
+    }
+}
+
+fn run_with_log_env(args: &[&str], value: &str) -> Output {
+    let mut child = command()
+        .env("COMBINATOR_LOG", value)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -155,6 +187,127 @@ fn jsonl_errors_are_json_and_large_dual_pipe_runs_complete() {
 }
 
 #[test]
+fn opt_in_text_logs_are_stderr_only_and_phase_bounded() {
+    let out = run(&[
+        "--list",
+        "a,b",
+        "--list",
+        "1,2",
+        "--sep",
+        "-",
+        "--log-level",
+        "debug",
+    ]);
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"a-1\na-2\nb-1\nb-2\n");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let lines: Vec<_> = stderr.lines().collect();
+    assert!(lines.iter().any(|line| line.contains("invocation_started")));
+    assert!(lines.iter().any(|line| line.contains("input_complete")));
+    assert!(lines
+        .iter()
+        .any(|line| line.contains("generation_complete")));
+    assert!(lines.iter().all(|line| !line.contains("a-1")));
+    assert!(lines.len() <= 6);
+}
+
+#[test]
+fn opt_in_json_logs_and_diagnostics_are_independent_json_lines() {
+    let success = run(&[
+        "--list",
+        "a,b",
+        "--format",
+        "jsonl",
+        "--log-level",
+        "debug",
+        "--log-format",
+        "json",
+    ]);
+    assert!(success.status.success());
+    assert_eq!(success.stdout, b"{\"i\":0,\"value\":\"a\",\"fields\":[\"a\"]}\n{\"i\":1,\"value\":\"b\",\"fields\":[\"b\"]}\n");
+    let success_lines: Vec<serde_json::Value> = String::from_utf8(success.stderr)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(success_lines.iter().all(|line| line["kind"] == "log"));
+    assert!(success_lines
+        .iter()
+        .any(|line| line["event"] == "input_complete"));
+    assert!(success_lines
+        .iter()
+        .any(|line| line["event"] == "generation_complete"));
+
+    let failure = run(&[
+        "--format",
+        "jsonl",
+        "--log-level",
+        "debug",
+        "--log-format",
+        "json",
+    ]);
+    assert_eq!(failure.status.code(), Some(2));
+    let failure_lines: Vec<serde_json::Value> = String::from_utf8(failure.stderr)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(failure_lines
+        .iter()
+        .any(|line| line["kind"] == "diagnostic"));
+    assert!(failure_lines.iter().all(|line| line.get("kind").is_some()));
+
+    let warning_path = std::env::temp_dir().join(format!(
+        "combinator-logging-empty-{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&warning_path, b"").unwrap();
+    let warning_path = warning_path.to_string_lossy().into_owned();
+    let warning_summary = run(&[
+        "--file",
+        warning_path.as_str(),
+        "--format",
+        "jsonl",
+        "--summary",
+        "--log-level",
+        "debug",
+        "--log-format",
+        "json",
+    ]);
+    assert!(warning_summary.status.success());
+    let warning_lines: Vec<serde_json::Value> = String::from_utf8(warning_summary.stderr)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(warning_lines.iter().any(|line| line["kind"] == "warning"));
+    assert!(warning_lines.iter().any(|line| line["kind"] == "summary"));
+    assert!(warning_lines.iter().all(|line| line.get("kind").is_some()));
+    let _ = std::fs::remove_file(warning_path);
+}
+
+#[test]
+fn logging_configuration_is_bounded_and_cli_precedes_environment() {
+    let invalid = run_with_log_env(&["--list", "a"], "not-a-level");
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(invalid.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&invalid.stderr).contains("LOG_LEVEL_INVALID"));
+
+    let explicit = run_with_log_env(&["--list", "a", "--log-level", "off"], "not-a-level");
+    assert!(explicit.status.success());
+    assert_eq!(explicit.stdout, b"a\n");
+    assert!(explicit.stderr.is_empty());
+}
+
+#[test]
+fn machine_output_requires_json_log_framing_when_logging_is_enabled() {
+    let out = run(&["--list", "a", "--format", "jsonl", "--log-level", "info"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("LOG_FORMAT_REQUIRED"));
+}
+
+#[test]
 fn version_output_matches_package_version() {
     let out = run(&["--version"]);
     assert!(out.status.success());
@@ -188,5 +341,7 @@ fn help_contains_about_information_and_flag() {
     assert!(text.contains("License: MIT"));
     assert!(text.contains("https://github.com/taggedzi/tz_combinator"));
     assert!(text.contains("--about"));
+    assert!(text.contains("--log-level"));
+    assert!(text.contains("--log-format"));
     assert!(out.stderr.is_empty());
 }

@@ -66,6 +66,8 @@ These conditions normally exit with status 2.
 | `JOIN_SCHEMA_INVALID` | Join headers or row widths are invalid. |
 | `JOIN_SOURCE_INVALID` | One or both join sources are missing or invalid. |
 | `JSONL_MALFORMED` | A JSON Lines join record is not valid JSON. |
+| `LOG_FORMAT_REQUIRED` | Enabled logging for machine-readable output requires JSON log framing. |
+| `LOG_LEVEL_INVALID` | The logging level or `COMBINATOR_LOG` value is invalid or too long. |
 | `MODE_CONFLICT` | Mutually exclusive generation or summary modes were combined. |
 | `NO_LISTS` | No input list source was provided. |
 | `ONE_LIST_REQUIRED` | A selection operation did not resolve to exactly one logical input pool. |

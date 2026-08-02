@@ -23,7 +23,25 @@ pub fn exit_code(error: &AppError) -> i32 {
 }
 
 pub fn render(err: &AppError, json: bool) -> String {
-    render_line(err.code, &err.message, &err.context, json)
+    render_line(
+        err.code,
+        &err.message,
+        &err.context,
+        json,
+        false,
+        "diagnostic",
+    )
+}
+
+pub fn render_streamed(err: &AppError, json: bool, event_stream: bool) -> String {
+    render_line(
+        err.code,
+        &err.message,
+        &err.context,
+        json,
+        event_stream,
+        "diagnostic",
+    )
 }
 
 pub fn render_warning(
@@ -32,16 +50,41 @@ pub fn render_warning(
     context: &[(String, String)],
     json: bool,
 ) -> String {
-    render_line(code, message, context, json)
+    render_line(code, message, context, json, false, "warning")
 }
 
-fn render_line(code: &str, message: &str, context: &[(String, String)], json: bool) -> String {
+pub fn render_warning_streamed(
+    code: &str,
+    message: &str,
+    context: &[(String, String)],
+    json: bool,
+    event_stream: bool,
+) -> String {
+    render_line(code, message, context, json, event_stream, "warning")
+}
+
+fn render_line(
+    code: &str,
+    message: &str,
+    context: &[(String, String)],
+    json: bool,
+    event_stream: bool,
+    kind: &str,
+) -> String {
     if json {
         let ctx: serde_json::Map<String, serde_json::Value> = context
             .iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
-        serde_json::json!({"error":{"code":code,"message":message,"context":ctx}}).to_string()
+        if event_stream {
+            if kind == "diagnostic" {
+                serde_json::json!({"kind":"diagnostic","error":{"code":code,"message":message,"context":ctx}}).to_string()
+            } else {
+                serde_json::json!({"kind":"warning","warning":{"code":code,"message":message,"context":ctx}}).to_string()
+            }
+        } else {
+            serde_json::json!({"error":{"code":code,"message":message,"context":ctx}}).to_string()
+        }
     } else if context.is_empty() {
         format!("error[{}]: {}", escape_text(code), escape_text(message))
     } else {
@@ -95,5 +138,16 @@ mod tests {
         assert_eq!(json["error"]["code"], "FAILED");
         assert_eq!(json["error"]["context"]["item"], "x");
         assert!(render_warning("WARN", "careful", &[], false).starts_with("error[WARN]"));
+    }
+
+    #[test]
+    fn streamed_json_escapes_synthetic_control_characters() {
+        let error = AppError::runtime("FAILED", "synthetic\nmessage").with("value", "x\t\"");
+        let rendered = render_streamed(&error, true, true);
+        let json: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(json["kind"], "diagnostic");
+        assert_eq!(json["error"]["message"], "synthetic\nmessage");
+        assert_eq!(json["error"]["context"]["value"], "x\t\"");
+        assert!(!rendered.contains('\n'));
     }
 }
