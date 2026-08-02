@@ -11,6 +11,14 @@ to identify material bottlenecks, and make narrowly scoped optimizations
 without weakening resource limits, deterministic ordering, output safety, or
 CLI compatibility.
 
+The long-term optimization goal is broad general-user performance across the
+platforms and architectures the project supports, not peak performance on one
+AMD64/Windows host. Portable release builds must remain the default and should
+be efficient without local CPU-specific compilation. Experienced users may
+opt into native builds for additional local performance. Any target-specific
+fast path must retain a portable fallback, preserve the same safety and
+compatibility contracts, and be evaluated on the affected targets.
+
 The first deliverable is measurement infrastructure and a recorded baseline.
 Optimization work begins only after a benchmark or profile demonstrates a
 meaningful bottleneck.
@@ -50,6 +58,10 @@ unbounded stress tests part of normal CI.
   follow attacker-controlled links or overwrite unrelated files.
 - Performance measurements must use release settings and record enough host
   context to make comparisons honest.
+- A result from one operating-system and architecture combination must not be
+  treated as universal evidence. Optimization decisions must identify the
+  representative platform/architecture set they are intended to improve and
+  check for unacceptable regressions on the other supported combinations.
 - Routine and smoke runs must not generate plots, persistent reports, saved
   baselines, or uploaded artifacts. Each of those outputs requires an explicit
   request.
@@ -292,12 +304,16 @@ For each confirmed bottleneck:
    path.
 3. Make one coherent optimization at a time without unrelated refactoring.
 4. Run the focused benchmark before and after on the same host and toolchain.
-5. Run focused tests, then the full workspace verification appropriate to the
+5. Repeat the focused comparison on at least one representative target from
+   each affected operating-system and architecture family. For target-specific
+   code, test both the fast path and the portable fallback; a Windows x86-64
+   improvement alone is not sufficient to establish a general optimization.
+6. Run focused tests, then the full workspace verification appropriate to the
    affected trust boundary.
-6. Review the diff for unchecked arithmetic, accidental materialization,
+7. Review the diff for unchecked arithmetic, accidental materialization,
    cancellation latency, changed ordering, and new attacker-controlled memory
    growth.
-7. Keep the change only when the improvement is repeatable and worth its
+8. Keep the change only when the improvement is repeatable and worth its
    complexity. Record neutral or negative findings so they are not repeatedly
    rediscovered.
 
@@ -362,5 +378,8 @@ distributed report.
   changing the workspace's MIT license.
 - Normal CI verifies benchmark code without relying on noisy timing gates.
 - Each accepted optimization has before/after evidence and correctness tests.
+- Portable release performance remains acceptable across the supported target
+  matrix, while any native-only tuning is documented as an opt-in build or
+  runtime-selected fast path with a tested fallback.
 - Resource ceilings, deterministic output, CLI contracts, and filesystem
   safety remain unchanged unless separately approved and documented.
