@@ -36,8 +36,17 @@ release_date="${headings[0]##* - }"
 date -u -d "$release_date" +%F 2>/dev/null | grep -Fxq "$release_date" ||
     die "CHANGELOG.md contains an invalid release date for $version"
 
-mapfile -t manifests < <(find crates -mindepth 2 -maxdepth 2 -name Cargo.toml -type f -print | sort)
-[[ ${#manifests[@]} -gt 0 ]] || die "no workspace crate manifests found"
+manifests=(
+    crates/combinator-app/Cargo.toml
+    crates/combinator-cli/Cargo.toml
+    crates/combinator-codecs/Cargo.toml
+    crates/combinator-core/Cargo.toml
+    crates/combinator-gui/Cargo.toml
+    crates/combinator-tui/Cargo.toml
+)
+for manifest in "${manifests[@]}"; do
+    [[ -f "$manifest" && ! -L "$manifest" ]] || die "$manifest must be a regular file"
+done
 for manifest in "${manifests[@]}"; do
     package_matches="$(grep -c "^version = \"$version\"$" "$manifest")"
     [[ "$package_matches" == 1 ]] ||

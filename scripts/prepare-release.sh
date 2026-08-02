@@ -36,8 +36,17 @@ git rev-parse --verify --quiet "refs/tags/v$version" >/dev/null &&
 [[ -f Cargo.lock && ! -L Cargo.lock ]] ||
     die "Cargo.lock must be a regular file"
 
-mapfile -t manifests < <(find crates -mindepth 2 -maxdepth 2 -name Cargo.toml -type f -print | sort)
-[[ ${#manifests[@]} -gt 0 ]] || die "no workspace crate manifests found"
+manifests=(
+    crates/combinator-app/Cargo.toml
+    crates/combinator-cli/Cargo.toml
+    crates/combinator-codecs/Cargo.toml
+    crates/combinator-core/Cargo.toml
+    crates/combinator-gui/Cargo.toml
+    crates/combinator-tui/Cargo.toml
+)
+for manifest in "${manifests[@]}"; do
+    [[ -f "$manifest" && ! -L "$manifest" ]] || die "$manifest must be a regular file"
+done
 
 old_version=""
 for manifest in "${manifests[@]}"; do
