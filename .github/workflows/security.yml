@@ -46,6 +46,9 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
+      - name: Compile benchmark targets
+        run: cargo bench --workspace --no-run --locked
+
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 

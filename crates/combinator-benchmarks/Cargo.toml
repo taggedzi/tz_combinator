@@ -1,0 +1,36 @@
+[package]
+name = "combinator-benchmarks"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.94.1"
+license = "MIT"
+publish = false
+description = "Non-published benchmark harness for tz_combinator"
+
+[lib]
+bench = false
+
+[features]
+default = []
+benchmark-report = ["criterion/html_reports", "criterion/plotters"]
+
+[dependencies]
+combinator-app = { version = "0.1.0", path = "../combinator-app" }
+combinator-codecs = { version = "0.1.0", path = "../combinator-codecs" }
+combinator-core = { version = "0.1.0", path = "../combinator-core" }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+tempfile = "3.23"
+
+[[bench]]
+name = "core"
+harness = false
+
+[[bench]]
+name = "codec_app"
+harness = false
+
+[[bench]]
+name = "cli"
+harness = false

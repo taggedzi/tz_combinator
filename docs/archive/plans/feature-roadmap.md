@@ -48,6 +48,14 @@ shell scripts, administrators, build systems, test generators, and programs.
 It should support several precise meanings of “join” without making the
 existing Cartesian product ambiguous or breaking existing invocations.
 
+The long-term end-state is a simple, portable, fast, and secure utility that is
+easy to install through the normal release and package channels on the user's
+platform. It should be broadly useful to people who regularly work with this
+kind of data without requiring local compilation for good general-purpose
+performance. Experienced users may compile a native build for peak performance
+on their own hardware, but platform-specific tuning must remain optional and
+must not make the portable release experience less reliable or secure.
+
 The central design principles are:
 
 - Existing invocations keep their behavior and exit-code contract.
@@ -56,6 +64,10 @@ The central design principles are:
 - Every operation is bounded by input, item, output, CPU, and memory limits.
 - Streaming, deterministic ordering, and machine-readable diagnostics remain
   first-class properties.
+- Portable release builds prioritize predictable general-user performance
+  across supported operating systems and CPU architectures; target-specific
+  fast paths require a portable fallback and evidence from the affected
+  platforms.
 - Features that need different semantics are implemented as subcommands or
   clearly named modes rather than overloaded flags.
 - The CLI remains language-agnostic while the Rust library offers an efficient

@@ -154,7 +154,7 @@ error-code meanings, standard output/error ownership, and existing JSON Lines
 fields remain compatible. See the [compatibility policy](docs/compatibility.md)
 for the complete contract.
 
-This Cargo workspace contains six crates:
+This Cargo workspace contains seven crates:
 
 | Crate | Responsibility |
 |---|---|
@@ -164,6 +164,10 @@ This Cargo workspace contains six crates:
 | `combinator-cli` | Argument parsing and the `combinator` executable |
 | `combinator-gui` | Desktop interface |
 | `combinator-tui` | Terminal interface |
+| `combinator-benchmarks` | Non-published, bounded performance harness |
+
+See the [benchmarking guide](docs/benchmarking.md) for bounded routine runs,
+named baselines, and opt-in comparison reports.
 
 ## Community and contributions
 

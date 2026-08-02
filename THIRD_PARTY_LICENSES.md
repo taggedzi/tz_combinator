@@ -57,3 +57,24 @@ dependency audit procedure.
 This inventory is generated from the locked dependency graph. Recheck it
 after dependency updates, especially if a dependency introduces a different
 license expression or a bundled native component.
+
+## Benchmark and report tooling
+
+The following development-only packages are owned by the non-published
+`combinator-benchmarks` workspace package. They are not linked into release
+binaries. Criterion's generated HTML and Plotters SVG output may be included in
+an explicitly requested benchmark artifact, so this notice accompanies that
+artifact.
+
+| Package | Version | License and package information |
+|---|---:|---|
+| `criterion` | 0.8.2 | MIT or Apache-2.0; MIT selected — [crates.io](https://crates.io/crates/criterion/0.8.2) |
+| `criterion-plot` | 0.8.2 | MIT or Apache-2.0; MIT selected — [crates.io](https://crates.io/crates/criterion-plot/0.8.2) |
+| `plotters` | 0.3.7 | MIT — [crates.io](https://crates.io/crates/plotters/0.3.7) |
+| `plotters-backend` | 0.3.7 | MIT — [crates.io](https://crates.io/crates/plotters-backend/0.3.7) |
+| `plotters-svg` | 0.3.7 | MIT — [crates.io](https://crates.io/crates/plotters-svg/0.3.7) |
+| `tempfile` | 3.27.0 | MIT or Apache-2.0; MIT selected — [crates.io](https://crates.io/crates/tempfile/3.27.0) |
+
+The remaining transitive development dependencies are checked from the exact
+lockfile by `cargo deny --all-features check`. They are benchmark build/runtime
+inputs and are not copied into the generated report.

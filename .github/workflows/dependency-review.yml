@@ -72,4 +72,4 @@ jobs:
 
       - name: Check dependency policy
         if: github.event_name != 'schedule'
-        run: cargo deny check
+        run: cargo deny --all-features check
