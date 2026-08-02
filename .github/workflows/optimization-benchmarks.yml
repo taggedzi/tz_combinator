@@ -1,0 +1,55 @@
+name: Optimization benchmark matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Focused release benchmark suite
+        required: true
+        default: selection
+        type: choice
+        options:
+          - selection
+          - join
+
+permissions:
+  contents: read
+
+concurrency:
+  group: optimization-benchmarks
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.94.1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  focused-benchmark:
+    name: ${{ inputs.suite }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2022
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: optimization-benchmarks-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          cache-bin: "false"
+
+      - name: Run selection benchmarks
+        if: inputs.suite == 'selection'
+        run: cargo bench -p combinator-benchmarks --bench core --locked -- --noplot --discard-baseline "core/selection/unrank"
+
+      - name: Run join benchmarks
+        if: inputs.suite == 'join'
+        run: cargo bench -p combinator-benchmarks --bench core --locked -- --noplot --discard-baseline "core/join"
