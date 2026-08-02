@@ -46,15 +46,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --locked
 
-      - name: Compile benchmark targets
-        run: cargo bench --workspace --no-run --locked
-
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
   windows:
     name: Verify (windows-2022)
-    needs: linux
     runs-on: windows-2022
     steps:
       - name: Check out source
@@ -72,9 +68,6 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --locked
-
-      - name: Compile benchmark targets
-        run: cargo bench --workspace --no-run --locked
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings

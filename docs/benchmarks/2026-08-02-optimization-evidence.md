@@ -52,9 +52,10 @@ cargo bench -p combinator-benchmarks --bench core --locked -- --noplot "core/joi
 Correctness coverage for the optimized paths includes the core unit and
 boundary tests, exhaustive small combination-order checks, collision-preserving
 full-join tests, and the existing cancellation, limit, fanout, and ordering
-tests. The normal Linux and Windows quality jobs now also compile every locked
-benchmark target. Timing results from other operating systems and architectures
-remain required before making a cross-platform performance claim.
+tests. The normal Linux and Windows quality jobs type-check every target through
+all-target clippy; release-profile benchmark compilation remains in the manual
+benchmark workflows. Timing results from other operating systems and
+architectures remain required before making a cross-platform performance claim.
 
 The [optimization benchmark matrix workflow](../../.github/workflows/optimization-benchmarks.yml)
 provides the manual Linux/Windows timing run for that follow-up. It intentionally

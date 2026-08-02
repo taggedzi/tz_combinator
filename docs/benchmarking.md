@@ -50,6 +50,9 @@ cargo bench -p combinator-benchmarks --no-run --locked
 
 The CLI benchmark finds `target/release/combinator` (or `combinator.exe`). Set
 `COMBINATOR_BENCH_BIN` only when intentionally measuring another release binary.
+The required Linux and Windows quality jobs type-check benchmark targets through
+`cargo clippy --all-targets`; the release-profile benchmark build is reserved
+for the manual benchmark workflows below.
 
 ## Exact fixture conventions
 
