@@ -74,12 +74,28 @@ fn window(total: Count, options: SelectionOptions) -> Result<(u128, u128, bool),
     Ok((start, amount, options.reverse))
 }
 
-fn unrank_permutation(n: usize, mut rank: u128) -> Option<Vec<usize>> {
-    let mut available: Vec<usize> = (0..n).collect();
+fn reset_available(available: &mut Vec<usize>, n: usize) {
+    if available.len() != n {
+        available.clear();
+        available.extend(0..n);
+    } else {
+        for (value, item) in available.iter_mut().enumerate() {
+            *item = value;
+        }
+    }
+}
+
+fn unrank_permutation(
+    n: usize,
+    mut rank: u128,
+    blocks: &[u128],
+    available: &mut Vec<usize>,
+) -> Option<Vec<usize>> {
+    reset_available(available, n);
     let mut output = Vec::with_capacity(n);
-    for width in (1..=n).rev() {
-        let block = factorial(width - 1).exact()?;
-        let position = (rank / block) as usize;
+    for position in 0..n {
+        let block = blocks[n - position - 1];
+        let position = usize::try_from(rank / block).ok()?;
         rank %= block;
         output.push(available.remove(position));
     }
@@ -103,12 +119,17 @@ fn unrank_combination(n: usize, k: usize, mut rank: u128) -> Option<Vec<usize>> 
     Some(output)
 }
 
-fn unrank_variation(n: usize, k: usize, mut rank: u128) -> Option<Vec<usize>> {
-    let mut available: Vec<usize> = (0..n).collect();
+fn unrank_variation(
+    n: usize,
+    k: usize,
+    mut rank: u128,
+    blocks: &[u128],
+    available: &mut Vec<usize>,
+) -> Option<Vec<usize>> {
+    reset_available(available, n);
     let mut output = Vec::with_capacity(k);
-    for position in 0..k {
-        let block = falling_factorial(n - position - 1, k - position - 1).exact()?;
-        let selected = (rank / block) as usize;
+    for &block in blocks.iter().take(k) {
+        let selected = usize::try_from(rank / block).ok()?;
         rank %= block;
         output.push(available.remove(selected));
     }
@@ -127,41 +148,127 @@ impl ExactCount for Count {
     }
 }
 
-macro_rules! selection_iterator {
-    ($name:ident, $rank:ident, $count:ident, $unrank:ident $(, $arg:ident)*) => {
-        #[derive(Debug)]
-        pub struct $name { next: u128, remaining: u128, reverse: bool, $( $arg: usize, )* }
-        impl Iterator for $name {
-            type Item = Vec<usize>;
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.remaining == 0 { return None; }
-                let rank = self.next;
-                self.remaining -= 1;
-                self.next = if self.reverse { self.next.saturating_sub(1) } else { self.next.saturating_add(1) };
-                $unrank($(self.$arg,)* rank)
-            }
+fn factorial_blocks(n: usize) -> Option<Vec<u128>> {
+    let mut blocks = Vec::with_capacity(n);
+    let mut value = 1u128;
+    for width in 0..n {
+        if width > 0 {
+            value = value.checked_mul(width as u128)?;
         }
-    };
+        blocks.push(value);
+    }
+    Some(blocks)
 }
 
-selection_iterator!(Permutations, factorial, factorial, unrank_permutation, n);
-selection_iterator!(Combinations, binomial, binomial, unrank_combination, n, k);
-selection_iterator!(
-    Variations,
-    falling_factorial,
-    falling_factorial,
-    unrank_variation,
-    n,
-    k
-);
+fn variation_blocks(n: usize, k: usize) -> Option<Vec<u128>> {
+    if k > n {
+        return Some(Vec::new());
+    }
+    (0..k)
+        .map(|position| falling_factorial(n - position - 1, k - position - 1).exact())
+        .collect()
+}
+
+#[derive(Debug)]
+pub struct Permutations {
+    next: u128,
+    remaining: u128,
+    reverse: bool,
+    n: usize,
+    blocks: Vec<u128>,
+    available: Vec<usize>,
+}
+
+impl Iterator for Permutations {
+    type Item = Vec<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let rank = self.next;
+        self.remaining -= 1;
+        self.next = if self.reverse {
+            self.next.saturating_sub(1)
+        } else {
+            self.next.saturating_add(1)
+        };
+        unrank_permutation(self.n, rank, &self.blocks, &mut self.available)
+    }
+}
+
+#[derive(Debug)]
+pub struct Combinations {
+    next: u128,
+    remaining: u128,
+    reverse: bool,
+    n: usize,
+    k: usize,
+}
+
+impl Iterator for Combinations {
+    type Item = Vec<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let rank = self.next;
+        self.remaining -= 1;
+        self.next = if self.reverse {
+            self.next.saturating_sub(1)
+        } else {
+            self.next.saturating_add(1)
+        };
+        unrank_combination(self.n, self.k, rank)
+    }
+}
+
+#[derive(Debug)]
+pub struct Variations {
+    next: u128,
+    remaining: u128,
+    reverse: bool,
+    n: usize,
+    k: usize,
+    blocks: Vec<u128>,
+    available: Vec<usize>,
+}
+
+impl Iterator for Variations {
+    type Item = Vec<usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let rank = self.next;
+        self.remaining -= 1;
+        self.next = if self.reverse {
+            self.next.saturating_sub(1)
+        } else {
+            self.next.saturating_add(1)
+        };
+        unrank_variation(self.n, self.k, rank, &self.blocks, &mut self.available)
+    }
+}
 
 pub fn permutations(n: usize, options: SelectionOptions) -> Result<Permutations, CoreError> {
     let (next, remaining, reverse) = window(factorial(n), options)?;
+    let blocks = if remaining == 0 {
+        Vec::new()
+    } else {
+        factorial_blocks(n).ok_or_else(|| {
+            CoreError::runtime("COUNT_OVERFLOW", "permutation rank blocks overflowed")
+        })?
+    };
     Ok(Permutations {
         next,
         remaining,
         reverse,
         n,
+        blocks,
+        available: Vec::new(),
     })
 }
 pub fn combinations(
@@ -180,12 +287,21 @@ pub fn combinations(
 }
 pub fn variations(n: usize, k: usize, options: SelectionOptions) -> Result<Variations, CoreError> {
     let (next, remaining, reverse) = window(falling_factorial(n, k), options)?;
+    let blocks = if remaining == 0 {
+        Vec::new()
+    } else {
+        variation_blocks(n, k).ok_or_else(|| {
+            CoreError::runtime("COUNT_OVERFLOW", "variation rank blocks overflowed")
+        })?
+    };
     Ok(Variations {
         next,
         remaining,
         reverse,
         n,
         k,
+        blocks,
+        available: Vec::new(),
     })
 }
 
@@ -238,6 +354,39 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn combinations_match_lexicographic_reference_for_small_inputs() {
+        fn visit(
+            next: usize,
+            n: usize,
+            remaining: usize,
+            current: &mut Vec<usize>,
+            output: &mut Vec<Vec<usize>>,
+        ) {
+            if remaining == 0 {
+                output.push(current.clone());
+                return;
+            }
+            for candidate in next..=n - remaining {
+                current.push(candidate);
+                visit(candidate + 1, n, remaining - 1, current, output);
+                current.pop();
+            }
+        }
+
+        for n in 0..=8 {
+            for k in 0..=n {
+                let mut expected = Vec::new();
+                visit(0, n, k, &mut Vec::new(), &mut expected);
+                assert_eq!(
+                    combinations(n, k, opts()).unwrap().collect::<Vec<_>>(),
+                    expected,
+                    "n={n}, k={k}"
+                );
+            }
+        }
+    }
     #[test]
     fn variation_matches_permutation_at_n() {
         assert_eq!(
@@ -258,5 +407,29 @@ mod tests {
     fn large_factorials_fail_closed() {
         assert_eq!(factorial(35), Count::Overflow);
         assert_eq!(falling_factorial(40, 40), Count::Overflow);
+    }
+
+    #[test]
+    fn empty_windows_do_not_allocate_rank_scratch() {
+        let permutations = permutations(
+            8,
+            SelectionOptions {
+                limit: Some(0),
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert!(permutations.blocks.is_empty());
+
+        let variations = variations(
+            8,
+            4,
+            SelectionOptions {
+                offset: u128::MAX,
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert!(variations.blocks.is_empty());
     }
 }

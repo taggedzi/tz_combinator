@@ -164,6 +164,16 @@ environment dump, or fixture content.
 The initial complete local report tree, including several test baselines, was
 about 15.4 MB; CI still fails closed at the documented 100 MiB limit.
 
+## Cross-platform optimization runs
+
+The manually dispatched **Optimization benchmark matrix** workflow runs one
+focused suite (`selection` or `join`) on both the Ubuntu and Windows x86_64
+release runners. It uses `--noplot --discard-baseline`, writes no report or
+artifact, and is intended for before/after comparisons of accepted
+optimizations. Record the console medians with the commit, toolchain, target,
+and runner details in the optimization evidence note; do not treat a single
+shared-runner result as a release gate.
+
 ## Interpreting and recording results
 
 Use the median estimate and confidence interval rather than the fastest sample.
@@ -188,3 +198,5 @@ to the normal benchmark suite merely to collect optional evidence.
 
 The initial complete run and its reliability notes are recorded in the
 [2026-08-02 Windows reference baseline](benchmarks/2026-08-02-windows-reference.md).
+The first optimization comparison, including a rejected combination candidate,
+is recorded in the [2026-08-02 optimization evidence note](benchmarks/2026-08-02-optimization-evidence.md).

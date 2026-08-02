@@ -117,6 +117,16 @@ where
             index.entry(key).or_default().push(i);
         }
     }
+    // Joined field names depend only on the schemas, not on the values.  Only
+    // prepare the collision mapping when a key expands to multiple outputs;
+    // for one-to-one joins the setup cost is not repaid by avoiding a single
+    // HashSet construction.
+    let prepared_names =
+        if kind != JoinType::Anti && index.values().any(|indices| indices.len() > 1) {
+            prepare_names(left, right)
+        } else {
+            None
+        };
     let mut matched_right = HashSet::new();
     let mut produced = 0u128;
     let mut selected = 0u128;
@@ -159,13 +169,25 @@ where
             (_, Some(indices)) => {
                 for &right_index in indices {
                     matched_right.insert(right_index);
-                    if emit(combine(left_record, Some(right_index), right, right_key))? {
+                    if emit(combine(
+                        left_record,
+                        Some(right_index),
+                        right,
+                        right_key,
+                        prepared_names.as_ref(),
+                    ))? {
                         return Ok(selected);
                     }
                 }
             }
             (JoinType::Left | JoinType::Full, None) => {
-                if emit(combine(left_record, None, right, right_key))? {
+                if emit(combine(
+                    left_record,
+                    None,
+                    right,
+                    right_key,
+                    prepared_names.as_ref(),
+                ))? {
                     return Ok(selected);
                 }
             }
@@ -175,7 +197,14 @@ where
     if kind == JoinType::Full {
         for (i, right_record) in right.iter().enumerate() {
             check_cancel(cancel)?;
-            if !matched_right.contains(&i) && emit(combine_right(right_record, left))? {
+            if !matched_right.contains(&i)
+                && emit(combine_right(
+                    right_record,
+                    i,
+                    left,
+                    prepared_names.as_ref(),
+                ))?
+            {
                 return Ok(selected);
             }
         }
@@ -339,11 +368,55 @@ fn field<'a>(record: &'a Record, name: &str) -> Option<&'a str> {
         .map(|(_, value)| value.as_str())
 }
 
+struct PreparedNames {
+    right: Vec<Vec<String>>,
+    missing_right: Vec<String>,
+}
+
+fn prepare_names(left: &[Record], right: &[Record]) -> Option<PreparedNames> {
+    let left_schema: Vec<&str> = left
+        .first()
+        .map(|record| record.fields.iter().map(|(key, _)| key.as_str()).collect())
+        .unwrap_or_default();
+    if !left.iter().all(|record| {
+        record
+            .fields
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .eq(left_schema.iter().copied())
+    }) {
+        return None;
+    }
+
+    let right_names = right
+        .iter()
+        .map(|record| unique_right_names(&left_schema, &record.fields))
+        .collect::<Vec<_>>();
+    let missing_right = right_names.first().cloned().unwrap_or_default();
+    Some(PreparedNames {
+        right: right_names,
+        missing_right,
+    })
+}
+
+fn unique_right_names(left_schema: &[&str], right_fields: &[(String, String)]) -> Vec<String> {
+    let mut names: HashSet<String> = left_schema.iter().map(|key| (*key).to_string()).collect();
+    right_fields
+        .iter()
+        .map(|(key, _)| {
+            let name = unique_name(key, &names);
+            names.insert(name.clone());
+            name
+        })
+        .collect()
+}
+
 fn combine(
     left: &Record,
     right_index: Option<usize>,
     right: &[Record],
     right_key: &str,
+    prepared: Option<&PreparedNames>,
 ) -> JoinedRecord {
     let mut fields = left
         .fields
@@ -351,9 +424,17 @@ fn combine(
         .map(|(k, v)| (k.clone(), Some(v.clone())))
         .collect::<Vec<_>>();
     if let Some(index) = right_index {
-        append_right(&mut fields, &right[index], right_key);
+        if let Some(prepared) = prepared {
+            append_named_right(&mut fields, &right[index], &prepared.right[index]);
+        } else {
+            append_right(&mut fields, &right[index], right_key);
+        }
     } else {
-        append_missing_right(&mut fields, right, right_key);
+        if let Some(prepared) = prepared {
+            append_named_missing(&mut fields, right, &prepared.missing_right);
+        } else {
+            append_missing_right(&mut fields, right, right_key);
+        }
     }
     JoinedRecord { fields }
 }
@@ -368,7 +449,12 @@ fn combine_left(left: &Record) -> JoinedRecord {
     }
 }
 
-fn combine_right(right: &Record, left: &[Record]) -> JoinedRecord {
+fn combine_right(
+    right: &Record,
+    right_index: usize,
+    left: &[Record],
+    prepared: Option<&PreparedNames>,
+) -> JoinedRecord {
     let mut fields = left.first().map_or_else(Vec::new, |record| {
         record
             .fields
@@ -376,13 +462,47 @@ fn combine_right(right: &Record, left: &[Record]) -> JoinedRecord {
             .map(|(k, _)| (k.clone(), None))
             .collect()
     });
-    let mut names: HashSet<String> = fields.iter().map(|(k, _)| k.clone()).collect();
-    for (key, value) in &right.fields {
-        let name = unique_name(key, &names);
-        names.insert(name.clone());
-        fields.push((name, Some(value.clone())));
+    if let Some(prepared) = prepared {
+        append_named_right(&mut fields, right, &prepared.right[right_index]);
+    } else {
+        let mut names: HashSet<String> = fields.iter().map(|(k, _)| k.clone()).collect();
+        for (key, value) in &right.fields {
+            let name = unique_name(key, &names);
+            names.insert(name.clone());
+            fields.push((name, Some(value.clone())));
+        }
     }
     JoinedRecord { fields }
+}
+
+fn append_named_right(
+    fields: &mut Vec<(String, Option<String>)>,
+    right: &Record,
+    names: &[String],
+) {
+    fields.extend(
+        right
+            .fields
+            .iter()
+            .zip(names)
+            .map(|((_, value), name)| (name.clone(), Some(value.clone()))),
+    );
+}
+
+fn append_named_missing(
+    fields: &mut Vec<(String, Option<String>)>,
+    right: &[Record],
+    names: &[String],
+) {
+    if let Some(record) = right.first() {
+        fields.extend(
+            record
+                .fields
+                .iter()
+                .zip(names)
+                .map(|((_, _), name)| (name.clone(), None)),
+        );
+    }
 }
 
 fn append_right(fields: &mut Vec<(String, Option<String>)>, right: &Record, _right_key: &str) {
@@ -598,5 +718,41 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.code, "JOIN_FANOUT_LIMIT_EXCEEDED");
+    }
+
+    #[test]
+    fn prepared_names_preserve_full_join_collision_order() {
+        let left = [r(&[("id", "1"), ("value", "left")])];
+        let right = [
+            r(&[("id", "1"), ("value", "matched")]),
+            r(&[("id", "2"), ("value", "unmatched")]),
+        ];
+        let out = join(&left, &right, "id", "id", JoinType::Full, 4).unwrap();
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].fields[2].0, "id_right");
+        assert_eq!(out[0].fields[3].0, "value_right");
+        assert_eq!(out[1].fields[2].0, "id_right");
+        assert_eq!(out[1].fields[3].1.as_deref(), Some("unmatched"));
+    }
+
+    #[test]
+    fn varying_left_schemas_use_the_join_name_fallback() {
+        let left = [
+            r(&[("id", "1"), ("left", "a")]),
+            r(&[("left", "b"), ("id", "2")]),
+        ];
+        let right = [
+            r(&[("id", "1"), ("right", "x")]),
+            r(&[("id", "2"), ("right", "y")]),
+        ];
+
+        assert_eq!(
+            join_count(&left, &right, "id", "id", JoinType::Inner, 4).unwrap(),
+            2
+        );
+        let out = join(&left, &right, "id", "id", JoinType::Inner, 4).unwrap();
+        assert_eq!(out[1].fields[0].1.as_deref(), Some("b"));
+        assert_eq!(out[1].fields[3].1.as_deref(), Some("y"));
     }
 }
