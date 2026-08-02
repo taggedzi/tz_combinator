@@ -44,6 +44,11 @@ Within a major release:
   Incompatible shape or meaning changes require a new schema version.
 - Product ordering and sharding algorithm version 1 are deterministic for
   stable inputs. A future incompatible algorithm must be explicitly versioned.
+- Operational logging is disabled by default, so existing stdout, stderr,
+  files, and exit statuses remain byte-identical when logging is not enabled.
+  Explicit logging is an opt-in stderr behavior with a non-stable phase-event
+  schema. JSON logging for JSON/JSONL data invocations intentionally changes
+  stderr to the documented JSON Lines event stream.
 
 ## Distribution roadmap
 

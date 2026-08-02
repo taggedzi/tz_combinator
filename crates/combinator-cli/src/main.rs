@@ -1,6 +1,7 @@
 mod cli;
 mod error;
 mod input;
+mod logging;
 mod normalize;
 mod preflight;
 
@@ -26,7 +27,9 @@ use cli::{
     HARD_MAX_ITEM_BYTES, HARD_MAX_JOIN_KEY_FANOUT, HARD_MAX_JOIN_RECORDS, HARD_MAX_LISTS,
     HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS, HARD_MAX_TOTAL_ITEMS,
 };
-use error::{exit_code, render, render_warning, AppError};
+use error::{
+    exit_code, render, render_streamed, render_warning, render_warning_streamed, AppError,
+};
 use input::{InputBudget, InputLimits, MAX_TEMPLATE_BYTES};
 use normalize::MAX_TRANSFORMS;
 
@@ -85,8 +88,32 @@ fn main() {
                 return;
             }
             Mode::Join(args) => {
-                if let Err(e) = run_join(args) {
-                    eprintln!("{}", render(&e, false));
+                let config = match logging::resolve(&args.common) {
+                    Ok(config) => config,
+                    Err(error) => {
+                        eprintln!("{}", render(&error, false));
+                        std::process::exit(exit_code(&error));
+                    }
+                };
+                logging::initialize(config);
+                let invocation_started_at = Instant::now();
+                logging::event_started(
+                    "join",
+                    logging::input_name(&args.common),
+                    args.common.format,
+                    logging::output_destination(&args.common),
+                );
+                if let Err(e) = run_join(args, config) {
+                    if e.code == "CANCELLED" {
+                        logging::invocation_cancelled(
+                            e.code,
+                            invocation_started_at.elapsed().as_millis(),
+                        );
+                    }
+                    eprintln!(
+                        "{}",
+                        render_streamed(&e, true, config.json_stderr(args.common.format))
+                    );
                     std::process::exit(exit_code(&e));
                 }
                 return;
@@ -99,21 +126,42 @@ fn main() {
             | Mode::Variations(_) => {}
         }
     }
-    let (common, sep, op) = match resolve(cli) {
+    let (mut common, sep, op) = match resolve(cli) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("{}", render(&error, false));
             std::process::exit(exit_code(&error));
         }
     };
+    let config = match logging::resolve(&common) {
+        Ok(config) => config,
+        Err(error) => {
+            let json_errors = matches!(common.format, OutFormat::Jsonl | OutFormat::Json);
+            eprintln!("{}", render(&error, json_errors));
+            std::process::exit(exit_code(&error));
+        }
+    };
+    common.resolved_log = Some(config);
+    logging::initialize(config);
+    let invocation_started_at = Instant::now();
+    logging::event_started(
+        operation_name(&op),
+        logging::input_name(&common),
+        common.format,
+        logging::output_destination(&common),
+    );
     let json_errors = matches!(common.format, OutFormat::Jsonl | OutFormat::Json);
+    let json_stderr = config.json_stderr(common.format);
     if let Err(e) = run(common, sep, op) {
-        eprintln!("{}", render(&e, json_errors));
+        if e.code == "CANCELLED" {
+            logging::invocation_cancelled(e.code, invocation_started_at.elapsed().as_millis());
+        }
+        eprintln!("{}", render_streamed(&e, json_errors, json_stderr));
         std::process::exit(exit_code(&e));
     }
 }
 
-fn run_join(args: &JoinArgs) -> Result<(), AppError> {
+fn run_join(args: &JoinArgs, config: logging::ResolvedLogConfig) -> Result<(), AppError> {
     let common = &args.common;
     validate_resource_limits(common)?;
     if args.max_join_records > HARD_MAX_JOIN_RECORDS
@@ -156,6 +204,17 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
     };
     let left = read_join_records(&args.left, args.join_format, limits, &mut budget)?;
     let right = read_join_records(&args.right, args.join_format, limits, &mut budget)?;
+    logging::input_complete(
+        2,
+        2,
+        left.len().saturating_add(right.len()),
+        left.iter()
+            .chain(right.iter())
+            .flat_map(|record| record.fields.iter())
+            .map(|(key, value)| key.len().saturating_add(value.len()))
+            .fold(0usize, usize::saturating_add),
+    );
+    logging::validation_complete(common);
     let kind = match args.join_type {
         JoinTypeArg::Inner => combinator_core::JoinType::Inner,
         JoinTypeArg::Left => combinator_core::JoinType::Left,
@@ -172,9 +231,12 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
             common.max_combinations,
             args.max_join_key_fanout,
         )?;
+        logging::estimate_complete("exact", None);
         println!("{count}");
         return Ok(());
     }
+    logging::generation_started("join", logging::output_destination(common));
+    let generation_started_at = Instant::now();
     let mut output_file = common
         .output
         .as_deref()
@@ -188,6 +250,7 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
         None => BufWriter::new(OutputWriter::Stdout(std::io::stdout())),
     };
     let mut bytes = 0u64;
+    let mut records = 0u128;
     combinator_core::join_each_with_fanout(
         &left,
         &right,
@@ -221,6 +284,9 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
             }
             writeln!(writer, "{line}")
                 .map_err(|e| AppError::runtime("WRITE_FAILED", e.to_string()))?;
+            records = records.checked_add(1).ok_or_else(|| {
+                AppError::runtime("COUNT_OVERFLOW", "written record count overflowed")
+            })?;
             Ok(())
         },
     )?;
@@ -231,6 +297,14 @@ fn run_join(args: &JoinArgs) -> Result<(), AppError> {
     if let Some(file) = output_file {
         file.commit()
             .map_err(|error| file_sink_error(error, common.output.as_deref()))?;
+    }
+    logging::generation_complete(records, bytes, generation_started_at.elapsed().as_millis());
+    if common.summary {
+        emit_summary(
+            common,
+            &OutputSummary { records, bytes },
+            config.json_stderr(common.format),
+        );
     }
     Ok(())
 }
@@ -756,11 +830,26 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     )?;
     check_deadline(deadline)?;
 
+    logging::input_complete(
+        common.list.len().saturating_add(common.file.len()),
+        lists.len(),
+        lists
+            .iter()
+            .map(Vec::len)
+            .fold(0usize, usize::saturating_add),
+        lists
+            .iter()
+            .flat_map(|list| list.iter())
+            .map(String::len)
+            .fold(0usize, usize::saturating_add),
+    );
+
     let empty_template = Template::parse("").map_err(template_error)?;
     let template_for_validation = template.as_ref().unwrap_or(&empty_template);
     template_for_validation
         .validate_fields(&common.names, operation_field_count(&op, &lists))
         .map_err(template_error)?;
+    logging::validation_complete(&common);
 
     let json_out = matches!(common.format, OutFormat::Jsonl);
 
@@ -786,11 +875,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     if common.count_only {
         match operation_count(&op, &lists) {
             Ok(Count::Exact(n)) => {
+                logging::estimate_complete("exact", Some(n));
                 emit_warnings(&common, &warnings, json_out)?;
                 println!("{n}");
                 return Ok(());
             }
             Ok(Count::Overflow) => {
+                logging::estimate_complete("overflow", None);
                 return Err(AppError::runtime(
                     "COUNT_OVERFLOW",
                     "the total is too large to count exactly",
@@ -849,6 +940,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
             matches!(common.format, OutFormat::Jsonl),
             template.as_ref(),
         );
+        logging::estimate_complete(
+            estimate_status(common.format, &estimate),
+            match total_for_limits {
+                Count::Exact(count) => Some(count),
+                Count::Overflow => None,
+            },
+        );
         return explain(&common, &op, &lists, total_for_limits, estimate, shard);
     }
 
@@ -858,12 +956,20 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         if !common.no_preflight {
             let estimate =
                 bounded_size_estimate(&common, &sep, &op, &lists, json_out, template.as_ref());
+            logging::estimate_complete(
+                estimate_status(common.format, &estimate),
+                match total_for_limits {
+                    Count::Exact(count) => Some(count),
+                    Count::Overflow => None,
+                },
+            );
             let available = available_space(path)?;
             preflight::check_capacity(estimate, available, effective_output_limit(&common))?;
         }
     }
 
     emit_warnings(&common, &warnings, json_out)?;
+    logging::generation_started(operation_name(&op), logging::output_destination(&common));
     stream_core(
         &common,
         &sep,
@@ -872,7 +978,8 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         template.as_ref(),
         deadline,
         &constraints,
-    )
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -890,6 +997,7 @@ fn stream_core(
     deadline: Option<Instant>,
     constraints: &[Constraint],
 ) -> Result<(), AppError> {
+    let generation_started_at = Instant::now();
     let mut output_file = common
         .output
         .as_deref()
@@ -978,12 +1086,18 @@ fn stream_core(
         file.commit()
             .map_err(|error| file_sink_error(error, common.output.as_deref()))?;
     }
+    logging::generation_complete(
+        summary.records,
+        summary.bytes,
+        generation_started_at.elapsed().as_millis(),
+    );
     if common.summary {
-        let _ = writeln!(
-            std::io::stderr(),
-            "summary[OUTPUT]: records={}, bytes={}",
-            summary.records,
-            summary.bytes
+        emit_summary(
+            common,
+            &summary,
+            common
+                .resolved_log
+                .is_some_and(|config| config.json_stderr(common.format)),
         );
     }
     Ok(())
@@ -1009,6 +1123,34 @@ fn file_sink_error(error: combinator_app::AppError, path: Option<&str>) -> AppEr
     }
 }
 
+fn emit_summary(_common: &CommonArgs, summary: &OutputSummary, event_stream: bool) {
+    if event_stream {
+        let _ = writeln!(
+            std::io::stderr(),
+            "{}",
+            serde_json::json!({
+                "kind": "summary",
+                "summary": {"records": summary.records, "bytes": summary.bytes}
+            })
+        );
+    } else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "summary[OUTPUT]: records={}, bytes={}",
+            summary.records,
+            summary.bytes
+        );
+    }
+}
+
+fn estimate_status(format: OutFormat, estimate: &SizeEstimate) -> &'static str {
+    match estimate {
+        SizeEstimate::Overflow => "overflow",
+        SizeEstimate::Bytes(_) if format == OutFormat::Jsonl => "estimated",
+        SizeEstimate::Bytes(_) => "exact",
+    }
+}
+
 fn emit_warnings(common: &CommonArgs, warnings: &[Warning], json: bool) -> Result<(), AppError> {
     if let Some(&(code, message, ref context)) = warnings.first() {
         if common.warnings_as_errors {
@@ -1016,8 +1158,16 @@ fn emit_warnings(common: &CommonArgs, warnings: &[Warning], json: bool) -> Resul
         }
     }
     if !common.quiet {
+        let event_stream = common
+            .resolved_log
+            .is_some_and(|config| config.json_stderr(common.format));
         for (code, message, context) in warnings {
-            eprintln!("{}", render_warning(code, message, context, json));
+            let rendered = if event_stream {
+                render_warning_streamed(code, message, context, json, true)
+            } else {
+                render_warning(code, message, context, json)
+            };
+            let _ = writeln!(std::io::stderr(), "{}", rendered);
         }
     }
     Ok(())
