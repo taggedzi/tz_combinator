@@ -33,8 +33,33 @@ pub fn format_record_with(
     template: Option<&Template>,
     names: &[String],
 ) -> Result<String, TemplateError> {
+    format_record_with_bounded_template(
+        items,
+        index,
+        sep,
+        rec_sep,
+        format,
+        lean,
+        template,
+        names,
+        u128::MAX,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn format_record_with_bounded_template(
+    items: &[&str],
+    index: u128,
+    sep: &str,
+    rec_sep: &str,
+    format: Format,
+    lean: bool,
+    template: Option<&Template>,
+    names: &[String],
+    max_template_bytes: u128,
+) -> Result<String, TemplateError> {
     let value = match template {
-        Some(t) => t.render(items, names)?,
+        Some(t) => t.render_bounded(items, names, max_template_bytes)?,
         None => items.join(sep),
     };
     match format {
