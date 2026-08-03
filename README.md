@@ -79,7 +79,7 @@ For examples and option details, read the
 
 ## Desktop and terminal interfaces
 
-![Combinator GUI showing the operation selector](assets/screenshots/combinator-gui_default-operation-dropdown.png)
+![Combinator GUI showing the operation selector](assets/screenshots/combinator-gui_Ew8bGxQ63a.png)
 
 The GUI and TUI support Combine, Join, and Settings workflows. Both can
 preview a bounded result, generate a file in the background, cancel work, and
