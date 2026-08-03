@@ -6,8 +6,9 @@ they are roadmap candidates rather than supported release targets. See the
 [distribution roadmap](compatibility.md#distribution-roadmap) for expansion
 criteria.
 Release preparation is a separate, human-reviewed step before tagging. It
-generates the changelog from Git history, synchronizes all workspace versions,
-and opens a pull request. The tag-triggered release workflow then builds the
+generates the changelog from Git history, synchronizes product crate versions
+and developer-only benchmark dependency requirements, and opens a pull request.
+The tag-triggered release workflow then builds the
 CLI, GUI, and TUI with the pinned Rust toolchain and `--locked`, packages them
 with the license and README, generates and verifies SHA-256 checksums, verifies
 the reviewed changelog, and creates a GitHub release.
@@ -80,8 +81,9 @@ scripts/verify-release.sh 0.2.0
 ```
 
 Commit both the fragment and updated `CHANGELOG.md` to the preparation branch.
-The verifier checks the reviewed fragment, changelog section, six manifests,
-internal dependency requirements, and six workspace entries in `Cargo.lock`.
+The verifier checks the reviewed fragment, changelog section, six product
+manifests, internal dependency requirements (including the developer-only
+benchmark harness), and six workspace entries in `Cargo.lock`.
 
 ## Local preparation
 

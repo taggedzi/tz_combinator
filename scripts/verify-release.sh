@@ -47,6 +47,12 @@ manifests=(
 for manifest in "${manifests[@]}"; do
     [[ -f "$manifest" && ! -L "$manifest" ]] || die "$manifest must be a regular file"
 done
+benchmark_manifest="crates/combinator-benchmarks/Cargo.toml"
+[[ -f "$benchmark_manifest" && ! -L "$benchmark_manifest" ]] ||
+    die "$benchmark_manifest must be a regular file"
+benchmark_package_matches="$(grep -c '^version = "0.0.0"$' "$benchmark_manifest")"
+[[ "$benchmark_package_matches" == 1 ]] ||
+    die "$benchmark_manifest package version must remain 0.0.0"
 for manifest in "${manifests[@]}"; do
     package_matches="$(grep -c "^version = \"$version\"$" "$manifest")"
     [[ "$package_matches" == 1 ]] ||
@@ -56,6 +62,10 @@ for manifest in "${manifests[@]}"; do
             die "$manifest has a stale internal dependency: $dependency"
     done < <(grep -E '^combinator-[a-z-]+ = \{.*path = ' "$manifest" || true)
 done
+while IFS= read -r dependency; do
+    [[ "$dependency" == *"version = \"$version\""* ]] ||
+        die "$benchmark_manifest has a stale internal dependency: $dependency"
+done < <(grep -E '^combinator-[a-z-]+ = \{.*path = ' "$benchmark_manifest" || true)
 
 lock_matches="$(
     awk -v version="$version" '

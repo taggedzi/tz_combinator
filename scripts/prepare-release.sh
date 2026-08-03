@@ -47,6 +47,12 @@ manifests=(
 for manifest in "${manifests[@]}"; do
     [[ -f "$manifest" && ! -L "$manifest" ]] || die "$manifest must be a regular file"
 done
+benchmark_manifest="crates/combinator-benchmarks/Cargo.toml"
+[[ -f "$benchmark_manifest" && ! -L "$benchmark_manifest" ]] ||
+    die "$benchmark_manifest must be a regular file"
+benchmark_package_matches="$(grep -c '^version = "0.0.0"$' "$benchmark_manifest")"
+[[ "$benchmark_package_matches" == 1 ]] ||
+    die "$benchmark_manifest package version must remain 0.0.0"
 
 old_version=""
 for manifest in "${manifests[@]}"; do
@@ -106,9 +112,25 @@ update_manifest() {
     mv "$tmp_manifest" "$manifest"
 }
 
+update_internal_dependencies() {
+    local manifest="$1"
+    local tmp_manifest
+    tmp_manifest="$(mktemp "$(dirname "$manifest")/.Cargo.toml.XXXXXX")"
+    awk -v old="$old_version" -v new="$version" '
+        /^combinator-[a-z-]+ = \{ version = "/ &&
+            index($0, "version = \"" old "\"") {
+            sub("version = \"" old "\"", "version = \"" new "\"")
+        }
+        { print }
+    ' "$manifest" > "$tmp_manifest"
+    chmod --reference="$manifest" "$tmp_manifest"
+    mv "$tmp_manifest" "$manifest"
+}
+
 for manifest in "${manifests[@]}"; do
     update_manifest "$manifest"
 done
+update_internal_dependencies "$benchmark_manifest"
 
 lock_tmp="$(mktemp ./.Cargo.lock.XXXXXX)"
 awk -v old="$old_version" -v new="$version" '
