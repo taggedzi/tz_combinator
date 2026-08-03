@@ -112,12 +112,8 @@ impl Template {
         Ok(())
     }
 
-    pub fn render(&self, fields: &[&str], names: &[String]) -> Result<String, TemplateError> {
-        self.render_bounded(fields, names, u128::MAX)
-    }
-
     /// Renders only after the exact expanded byte length is known to fit.
-    pub fn render_bounded(
+    pub fn render(
         &self,
         fields: &[&str],
         names: &[String],
@@ -218,12 +214,9 @@ mod tests {
     fn repeated_references_are_rejected_before_bounded_rendering() {
         let template = Template::parse("{0}{0}{0}").unwrap();
         assert_eq!(
-            template.render_bounded(&["abcd"], &[], 11),
+            template.render(&["abcd"], &[], 11),
             Err(TemplateError::OutputTooLarge { limit: 11 })
         );
-        assert_eq!(
-            template.render_bounded(&["abcd"], &[], 12).unwrap(),
-            "abcdabcdabcd"
-        );
+        assert_eq!(template.render(&["abcd"], &[], 12).unwrap(), "abcdabcdabcd");
     }
 }

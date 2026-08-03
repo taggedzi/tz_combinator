@@ -406,7 +406,7 @@ pub fn stream<S: OutputSink>(
             .collect::<Vec<_>>();
         let refs = fields.iter().map(String::as_str).collect::<Vec<_>>();
         let remaining_output_bytes = request.max_output_bytes.saturating_sub(progress.bytes);
-        let encoded = combinator_codecs::format_record_with_bounded_template(
+        let encoded = combinator_codecs::format_record_with(
             &refs,
             record.ordinal,
             &request.field_separator,

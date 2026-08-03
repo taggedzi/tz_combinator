@@ -57,5 +57,5 @@ impl From<std::io::Error> for CodecError {
 }
 pub use estimate::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
 pub use input::{InputBudget, InputFormat, InputLimits};
-pub use output::{format_record, format_record_with, format_record_with_bounded_template, Format};
+pub use output::{format_record, format_record_with, Format};
 pub use template::{validate_name, Template, TemplateError};

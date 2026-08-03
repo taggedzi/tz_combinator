@@ -24,7 +24,7 @@ proptest! {
     fn templates_render_valid_utf8_bounded(literal in "[a-zA-Z0-9 _:;\\\\{}]{0,128}") {
         if let Ok(template) = Template::parse(&literal) {
             let fields = ["quote \"", "line\n", "雪"];
-            let rendered = template.render(&fields, &[]);
+            let rendered = template.render(&fields, &[], 2048);
             if let Ok(rendered) = rendered {
                 prop_assert!(rendered.len() <= 2048);
             }
@@ -34,7 +34,7 @@ proptest! {
     #[test]
     fn serializers_produce_parseable_json(values in prop::collection::vec("[a-zA-Z0-9 ,\\\"\\n\\t]{0,32}", 0..4)) {
         let refs: Vec<&str> = values.iter().map(String::as_str).collect();
-        let line = format_record_with(&refs, 7, "|", "\n", Format::Jsonl, false, None, &[]).unwrap();
+        let line = format_record_with(&refs, 7, "|", "\n", Format::Jsonl, false, None, &[], 4096).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         prop_assert!(parsed["value"].is_string());
         prop_assert!(parsed["fields"].is_array());
@@ -44,7 +44,7 @@ proptest! {
     fn all_record_formats_remain_bounded(values in prop::collection::vec(".{0,24}", 0..4)) {
         let refs: Vec<&str> = values.iter().map(String::as_str).collect();
         for format in [Format::Text, Format::Jsonl, Format::Csv, Format::Tsv, Format::Nul] {
-            let output = format_record_with(&refs, 0, "|", "\n", format, false, None, &[]).unwrap();
+            let output = format_record_with(&refs, 0, "|", "\n", format, false, None, &[], 4096).unwrap();
             prop_assert!(output.len() <= 4096);
         }
     }

@@ -6,7 +6,7 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(source) = std::str::from_utf8(data) {
         if let Ok(template) = combinator_codecs::Template::parse(source) {
             let fields = ["a", "b", "c"];
-            let _ = template.render(&fields, &[]);
+            let _ = template.render(&fields, &[], 64 * 1024);
         }
     }
 });
