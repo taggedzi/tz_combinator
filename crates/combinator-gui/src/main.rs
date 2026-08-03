@@ -938,9 +938,6 @@ fn view(state: &CombinatorGui) -> Element<'_, Message> {
     };
     container(
         column![
-            row![text("◈").size(24), text("tz_combinator").size(24)]
-                .spacing(8)
-                .align_y(Alignment::Center),
             row![
                 combine_tab,
                 join_tab,
