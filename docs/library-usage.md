@@ -136,20 +136,22 @@ cannot bypass limits.
 `format_record` renders positional fields; `format_record_with` also accepts
 an optional template/name context. `Jsonl` produces structured records with
 an index, value, and fields unless the caller deliberately selects lean value
-output.
+output. Both formatting functions require a final output byte limit and stop
+before joining fields or encoding JSON/CSV beyond that budget.
 
 ```rust
 use combinator_codecs::{format_record, Format};
-let bytes = format_record(&["a", "b"], 0, "-", "\n", Format::Text, false);
+let bytes = format_record(&["a", "b"], 0, "-", "\n", Format::Text, false, 1024)
+    .expect("record fits configured limit");
 assert_eq!(bytes, "a-b\n");
 ```
 
 `template::Template::parse` validates literal text and positional/named
 placeholders; `validate_name` checks field identifiers. Templates are bounded
-by the caller before reading files and should be parsed once, then rendered
-for each record. `estimate_text_size` gives an exact text byte count;
-`estimate_jsonl_size` is a conservative planning estimate and must not
-replace runtime output limits.
+by the required byte budget passed to `Template::render` and should be parsed
+once, then rendered for each record. `estimate_text_size` gives an exact text
+byte count; `estimate_jsonl_size` is a conservative planning estimate and must
+not replace runtime output limits.
 
 ## Safe file output
 

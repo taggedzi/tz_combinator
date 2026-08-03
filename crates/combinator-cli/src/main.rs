@@ -11,8 +11,7 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 use combinator_app::FileSink;
 use combinator_codecs::{
-    estimate_jsonl_size, estimate_text_size, format_record_with_bounded_template, Format,
-    SizeEstimate, SizeInput,
+    estimate_jsonl_size, estimate_text_size, format_record_with, Format, SizeEstimate, SizeInput,
 };
 use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
@@ -1034,7 +1033,7 @@ fn stream_core(
                 .collect();
             let output_limit = effective_output_limit(common).unwrap_or(u64::MAX);
             let remaining_output_bytes = output_limit.saturating_sub(summary.bytes);
-            let line = format_record_with_bounded_template(
+            let line = format_record_with(
                 &items,
                 record.ordinal,
                 sep,
@@ -1680,7 +1679,7 @@ fn bounded_size_estimate(
                 .collect(),
         };
         let max_index = common.offset.saturating_add(c.saturating_sub(1));
-        let per_record = match format_record_with_bounded_template(
+        let per_record = match format_record_with(
             &max_items,
             max_index,
             sep,

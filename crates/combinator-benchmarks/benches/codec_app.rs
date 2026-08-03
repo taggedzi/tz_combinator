@@ -139,8 +139,8 @@ fn codec_render_benchmarks(criterion: &mut Criterion) {
     for shape in &shapes {
         let refs = shape.fields.iter().map(String::as_str).collect::<Vec<_>>();
         for (format_name, format) in formats {
-            let validation =
-                format_record(&refs, 42, "|", "\n", format, false).expect("valid render fixture");
+            let validation = format_record(&refs, 42, "|", "\n", format, false, 1024 * 1024)
+                .expect("valid render fixture");
             assert!(!validation.is_empty());
             group.throughput(Throughput::Bytes(validation.len() as u64));
             group.bench_with_input(
@@ -156,6 +156,7 @@ fn codec_render_benchmarks(criterion: &mut Criterion) {
                                 "\n",
                                 *format,
                                 false,
+                                1024 * 1024,
                             )
                             .expect("valid render fixture"),
                         )
