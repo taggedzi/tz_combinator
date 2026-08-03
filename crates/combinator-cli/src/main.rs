@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 use combinator_app::FileSink;
 use combinator_codecs::{
-    estimate_jsonl_size, estimate_text_size, format_record_with, Format, SizeEstimate, SizeInput,
+    estimate_jsonl_size, estimate_text_size, format_record_with_bounded_template, Format,
+    SizeEstimate, SizeInput,
 };
 use combinator_codecs::{Template, TemplateError};
 use combinator_core::{
@@ -1031,7 +1032,9 @@ fn stream_core(
                 .iter()
                 .map(|(list, item)| lists[*list][*item].as_str())
                 .collect();
-            let line = format_record_with(
+            let output_limit = effective_output_limit(common).unwrap_or(u64::MAX);
+            let remaining_output_bytes = output_limit.saturating_sub(summary.bytes);
+            let line = format_record_with_bounded_template(
                 &items,
                 record.ordinal,
                 sep,
@@ -1040,8 +1043,17 @@ fn stream_core(
                 common.lean_output,
                 template,
                 &common.names,
+                u128::from(remaining_output_bytes),
             )
-            .map_err(|_| AppError::runtime("TEMPLATE_INVALID", "template rendering failed"))?;
+            .map_err(|error| match error {
+                TemplateError::OutputTooLarge { .. } => AppError::runtime(
+                    "OUTPUT_LIMIT_EXCEEDED",
+                    "output exceeds the configured byte limit",
+                )
+                .with("written_bytes", summary.bytes)
+                .with("limit_bytes", output_limit),
+                _ => AppError::runtime("TEMPLATE_INVALID", "template rendering failed"),
+            })?;
             let size = u64::try_from(line.len()).map_err(|_| {
                 AppError::runtime(
                     "OUTPUT_LIMIT_EXCEEDED",
@@ -1051,7 +1063,6 @@ fn stream_core(
             let next = summary.bytes.checked_add(size).ok_or_else(|| {
                 AppError::runtime("OUTPUT_LIMIT_EXCEEDED", "output byte count overflowed")
             })?;
-            let output_limit = effective_output_limit(common).unwrap_or(u64::MAX);
             if next > output_limit {
                 return Err(AppError::runtime(
                     "OUTPUT_LIMIT_EXCEEDED",
@@ -1468,6 +1479,12 @@ fn template_error(error: TemplateError) -> AppError {
             "template references an unknown field",
             Some(position),
         ),
+        TemplateError::OutputTooLarge { .. } => {
+            return AppError::runtime(
+                "OUTPUT_LIMIT_EXCEEDED",
+                "output exceeds the configured byte limit",
+            );
+        }
         TemplateError::OutputEncoding => {
             return AppError::runtime("WRITE_FAILED", "failed encoding output record");
         }
@@ -1663,7 +1680,7 @@ fn bounded_size_estimate(
                 .collect(),
         };
         let max_index = common.offset.saturating_add(c.saturating_sub(1));
-        let per_record = format_record_with(
+        let per_record = match format_record_with_bounded_template(
             &max_items,
             max_index,
             sep,
@@ -1672,9 +1689,12 @@ fn bounded_size_estimate(
             common.lean_output,
             template,
             &common.names,
-        )
-        .ok()?
-        .len() as u128;
+            u128::from(effective_output_limit(common).unwrap_or(u64::MAX)),
+        ) {
+            Ok(record) => record.len() as u128,
+            Err(TemplateError::OutputTooLarge { limit }) => limit.checked_add(1)?,
+            Err(_) => return None,
+        };
         c.checked_mul(per_record)
     });
 

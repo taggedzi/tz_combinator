@@ -36,7 +36,8 @@ pub fn normalize_typed(
     }
     for transform in transforms {
         for (list_index, list) in lists.iter_mut().enumerate() {
-            apply_typed(list, transform).map_err(|error| error.with("list_index", list_index))?;
+            apply_typed(list, transform, max_item_bytes)
+                .map_err(|error| error.with("list_index", list_index))?;
             for item in list.iter() {
                 if item.len() > max_item_bytes {
                     return Err(CoreError::runtime(
@@ -65,7 +66,11 @@ pub fn normalize_typed(
     Ok(())
 }
 
-fn apply_typed(list: &mut Vec<String>, transform: &Transform) -> Result<(), CoreError> {
+fn apply_typed(
+    list: &mut Vec<String>,
+    transform: &Transform,
+    max_item_bytes: usize,
+) -> Result<(), CoreError> {
     match transform {
         Transform::Trim => list
             .iter_mut()
@@ -104,6 +109,7 @@ fn apply_typed(list: &mut Vec<String>, transform: &Transform) -> Result<(), Core
         }
         Transform::Replace { from, to } => {
             if !from.is_empty() {
+                validate_replacements(list, from, to, max_item_bytes)?;
                 list.iter_mut()
                     .for_each(|value| *value = value.replace(from, to));
             }
@@ -135,7 +141,7 @@ pub fn normalize_lists(
     }
     for expression in expressions {
         for (i, list) in lists.iter_mut().enumerate() {
-            apply(list, expression).map_err(|e| e.with("list_index", i))?;
+            apply(list, expression, max_item_bytes).map_err(|e| e.with("list_index", i))?;
             for item in list.iter() {
                 if item.len() > max_item_bytes {
                     return Err(CoreError::runtime(
@@ -163,7 +169,7 @@ pub fn normalize_lists(
     }
     Ok(())
 }
-fn apply(list: &mut Vec<String>, e: &str) -> Result<(), CoreError> {
+fn apply(list: &mut Vec<String>, e: &str, max_item_bytes: usize) -> Result<(), CoreError> {
     match e {
         "trim" => list.iter_mut().for_each(|s| *s = s.trim().to_string()),
         "skip-empty" => list.retain(|s| !s.is_empty()),
@@ -199,6 +205,7 @@ fn apply(list: &mut Vec<String>, e: &str) -> Result<(), CoreError> {
         e if e.starts_with("replace=") => {
             let (from, to) = e[8..].split_once("=>").ok_or_else(|| invalid(e))?;
             if !from.is_empty() {
+                validate_replacements(list, from, to, max_item_bytes)?;
                 list.iter_mut().for_each(|s| *s = s.replace(from, to));
             }
         }
@@ -219,6 +226,37 @@ fn apply(list: &mut Vec<String>, e: &str) -> Result<(), CoreError> {
             });
         }
         _ => return Err(invalid(e)),
+    }
+    Ok(())
+}
+
+fn validate_replacements(
+    list: &[String],
+    from: &str,
+    to: &str,
+    max_item_bytes: usize,
+) -> Result<(), CoreError> {
+    for value in list {
+        let matches = value.match_indices(from).count();
+        let removed = matches
+            .checked_mul(from.len())
+            .ok_or_else(|| CoreError::runtime("ITEM_TOO_LARGE", "replacement size overflowed"))?;
+        let added = matches
+            .checked_mul(to.len())
+            .ok_or_else(|| CoreError::runtime("ITEM_TOO_LARGE", "replacement size overflowed"))?;
+        let output_len = value
+            .len()
+            .checked_sub(removed)
+            .and_then(|length| length.checked_add(added))
+            .ok_or_else(|| CoreError::runtime("ITEM_TOO_LARGE", "replacement size overflowed"))?;
+        if output_len > max_item_bytes {
+            return Err(CoreError::runtime(
+                "ITEM_TOO_LARGE",
+                "a transformed item exceeds the maximum item byte limit",
+            )
+            .with("observed", output_len)
+            .with("limit", max_item_bytes));
+        }
     }
     Ok(())
 }
@@ -348,5 +386,29 @@ mod tests {
             ()
         );
         assert!(lists[0].is_empty());
+    }
+
+    #[test]
+    fn replacement_expansion_is_checked_before_allocation() {
+        let original = vec![vec!["aaaa".to_string()]];
+
+        let mut legacy = original.clone();
+        let error = normalize_lists(&mut legacy, &["replace=a=>bbb".into()], 8, 8).unwrap_err();
+        assert_eq!(error.code, "ITEM_TOO_LARGE");
+        assert_eq!(legacy, original);
+
+        let mut typed = original.clone();
+        let error = normalize_typed(
+            &mut typed,
+            &[Transform::Replace {
+                from: "a".into(),
+                to: "bbb".into(),
+            }],
+            8,
+            8,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "ITEM_TOO_LARGE");
+        assert_eq!(typed, original);
     }
 }

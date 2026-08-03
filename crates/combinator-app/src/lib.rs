@@ -18,6 +18,7 @@ use combinator_core::{
     generate_with, Constraint, CoreError, Count, GenerationLimits, GenerationRequest, Operation,
     ProductOptions, SelectionOptions, ZipOptions,
 };
+use std::io::Read;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -263,15 +264,18 @@ impl From<CoreError> for AppError {
 
 impl From<combinator_codecs::template::TemplateError> for AppError {
     fn from(error: combinator_codecs::template::TemplateError) -> Self {
-        if matches!(
-            error,
-            combinator_codecs::template::TemplateError::OutputEncoding
-        ) {
-            return Self::runtime("WRITE_FAILED", "failed encoding output record");
-        }
-        Self {
-            code: "TEMPLATE_INVALID",
-            message: format!("invalid output template: {error:?}"),
+        match error {
+            combinator_codecs::template::TemplateError::OutputEncoding => {
+                Self::runtime("WRITE_FAILED", "failed encoding output record")
+            }
+            combinator_codecs::template::TemplateError::OutputTooLarge { .. } => Self::runtime(
+                "OUTPUT_LIMIT_EXCEEDED",
+                "output exceeds the configured byte limit",
+            ),
+            error => Self {
+                code: "TEMPLATE_INVALID",
+                message: format!("invalid output template: {error:?}"),
+            },
         }
     }
 }
@@ -401,7 +405,8 @@ pub fn stream<S: OutputSink>(
             .map(|(list, item)| lists[*list][*item].clone())
             .collect::<Vec<_>>();
         let refs = fields.iter().map(String::as_str).collect::<Vec<_>>();
-        let encoded = combinator_codecs::format_record_with(
+        let remaining_output_bytes = request.max_output_bytes.saturating_sub(progress.bytes);
+        let encoded = combinator_codecs::format_record_with_bounded_template(
             &refs,
             record.ordinal,
             &request.field_separator,
@@ -410,8 +415,15 @@ pub fn stream<S: OutputSink>(
             request.lean_jsonl,
             template.as_ref(),
             &request.names,
+            remaining_output_bytes,
         )
-        .map_err(|error| CoreError::usage("TEMPLATE_INVALID", format!("{error:?}")))?;
+        .map_err(|error| match error {
+            combinator_codecs::TemplateError::OutputTooLarge { .. } => CoreError::runtime(
+                "OUTPUT_LIMIT_EXCEEDED",
+                "output exceeds the configured byte limit",
+            ),
+            error => CoreError::usage("TEMPLATE_INVALID", format!("{error:?}")),
+        })?;
         progress.bytes = progress
             .bytes
             .checked_add(encoded.len() as u128)
@@ -556,17 +568,33 @@ fn resolved_template(request: &ProductRequest) -> Result<Option<String>, AppErro
     let Some(path) = &request.template_file else {
         return Ok(None);
     };
-    let bytes = std::fs::read(path).map_err(|error| {
+    let mut file = std::fs::File::open(path).map_err(|error| {
         AppError::runtime(
             "TEMPLATE_FILE_UNREADABLE",
             format!("could not read template file: {error}"),
         )
     })?;
-    if bytes.len() > request.max_item_bytes {
-        return Err(AppError::usage(
-            "TEMPLATE_TOO_LARGE",
-            "template file exceeds the configured item byte limit",
-        ));
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let remaining = request.max_item_bytes.saturating_sub(bytes.len());
+        let read_len = remaining.saturating_add(1).min(chunk.len());
+        let count = file.read(&mut chunk[..read_len]).map_err(|error| {
+            AppError::runtime(
+                "TEMPLATE_FILE_UNREADABLE",
+                format!("could not read template file: {error}"),
+            )
+        })?;
+        if count == 0 {
+            break;
+        }
+        if count > remaining {
+            return Err(AppError::usage(
+                "TEMPLATE_TOO_LARGE",
+                "template file exceeds the configured item byte limit",
+            ));
+        }
+        bytes.extend_from_slice(&chunk[..count]);
     }
     String::from_utf8(bytes)
         .map(Some)
@@ -1015,7 +1043,22 @@ mod tests {
         request.template_file = Some(path.to_string_lossy().into_owned());
         let records = preview(&request, 1).unwrap();
         assert_eq!(records[0].value, "red/car\n");
+
+        std::fs::write(&path, "123456789").unwrap();
+        request.max_item_bytes = 8;
+        assert_eq!(preview(&request, 1).unwrap_err().code, "TEMPLATE_TOO_LARGE");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn template_expansion_is_bounded_by_remaining_output_bytes() {
+        let mut request = request();
+        request.template = Some("{0}{0}{0}{0}".into());
+        request.max_output_bytes = 11;
+        assert_eq!(
+            preview(&request, 1).unwrap_err().code,
+            "OUTPUT_LIMIT_EXCEEDED"
+        );
     }
 
     #[test]

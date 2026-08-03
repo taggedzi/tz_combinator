@@ -332,11 +332,11 @@ fn template_expansion_is_subject_to_output_limit() {
     let out = bin()
         .args([
             "--list",
-            "x",
+            "abcd",
             "--template",
-            "long-{0}",
+            "{0}{0}{0}",
             "--max-output-bytes",
-            "4",
+            "11",
         ])
         .output()
         .unwrap();

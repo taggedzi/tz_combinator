@@ -25,6 +25,7 @@ pub enum TemplateError {
     DuplicateName { position: usize },
     NameCountMismatch { expected: usize, actual: usize },
     UnknownField { position: usize },
+    OutputTooLarge { limit: u128 },
     OutputEncoding,
 }
 
@@ -112,30 +113,69 @@ impl Template {
     }
 
     pub fn render(&self, fields: &[&str], names: &[String]) -> Result<String, TemplateError> {
+        self.render_bounded(fields, names, u128::MAX)
+    }
+
+    /// Renders only after the exact expanded byte length is known to fit.
+    pub fn render_bounded(
+        &self,
+        fields: &[&str],
+        names: &[String],
+        max_bytes: u128,
+    ) -> Result<String, TemplateError> {
+        let mut output_len = 0u128;
+        for piece in &self.pieces {
+            let piece_len = match piece {
+                Piece::Literal(value) => value.len(),
+                Piece::Reference(reference) => resolve_reference(reference, fields, names)?.len(),
+            };
+            output_len = output_len
+                .checked_add(piece_len as u128)
+                .ok_or(TemplateError::OutputTooLarge { limit: max_bytes })?;
+            if output_len > max_bytes {
+                return Err(TemplateError::OutputTooLarge { limit: max_bytes });
+            }
+        }
+
+        let capacity = usize::try_from(output_len)
+            .map_err(|_| TemplateError::OutputTooLarge { limit: max_bytes })?;
         let mut output = String::new();
+        output
+            .try_reserve_exact(capacity)
+            .map_err(|_| TemplateError::OutputEncoding)?;
         for piece in &self.pieces {
             match piece {
                 Piece::Literal(value) => output.push_str(value),
-                Piece::Reference(Reference::Index(index)) => output.push_str(
-                    fields
-                        .get(*index)
-                        .ok_or(TemplateError::UnknownField { position: *index })?,
-                ),
-                Piece::Reference(Reference::Name(name)) => {
-                    let index = names.iter().position(|candidate| candidate == name).ok_or(
-                        TemplateError::UnknownField {
-                            position: name.len(),
-                        },
-                    )?;
-                    output.push_str(
-                        fields
-                            .get(index)
-                            .ok_or(TemplateError::UnknownField { position: index })?,
-                    );
+                Piece::Reference(reference) => {
+                    output.push_str(resolve_reference(reference, fields, names)?)
                 }
             }
         }
         Ok(output)
+    }
+}
+
+fn resolve_reference<'a>(
+    reference: &Reference,
+    fields: &[&'a str],
+    names: &[String],
+) -> Result<&'a str, TemplateError> {
+    match reference {
+        Reference::Index(index) => fields
+            .get(*index)
+            .copied()
+            .ok_or(TemplateError::UnknownField { position: *index }),
+        Reference::Name(name) => {
+            let index = names.iter().position(|candidate| candidate == name).ok_or(
+                TemplateError::UnknownField {
+                    position: name.len(),
+                },
+            )?;
+            fields
+                .get(index)
+                .copied()
+                .ok_or(TemplateError::UnknownField { position: index })
+        }
     }
 }
 
@@ -168,4 +208,22 @@ fn valid_name(name: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_references_are_rejected_before_bounded_rendering() {
+        let template = Template::parse("{0}{0}{0}").unwrap();
+        assert_eq!(
+            template.render_bounded(&["abcd"], &[], 11),
+            Err(TemplateError::OutputTooLarge { limit: 11 })
+        );
+        assert_eq!(
+            template.render_bounded(&["abcd"], &[], 12).unwrap(),
+            "abcdabcdabcd"
+        );
+    }
 }
