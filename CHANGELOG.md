@@ -7,6 +7,17 @@ release notes.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-03
+
+### Breaking Changes
+
+- **Breaking:** Require bounded library rendering
+
+### Fixed
+
+- Remove unintended header
+- Enforce resource limits before expansion
+
 ## [0.2.0] - 2026-08-03
 
 ### Security
