@@ -8,12 +8,20 @@ Work on `tz_combinator` as a security-sensitive Rust CLI/library intended to run
 
 - Lead with the requested outcome; keep progress updates short and useful.
 - Inspect narrowly first: use `rg --files`, targeted `rg -n`, and focused file reads. Do not dump the whole repository unless necessary.
-- Prefer parallel read-only checks when they are independent.
+- Prefer parallel read-only checks when they are independent and their output is bounded. On Windows, run shell checks sequentially by default; concurrent PowerShell launches can intermittently fail with sandbox logon-session errors.
 - Do not reread files or repeat tests whose results are already known; retain concise evidence summaries.
 - Load only the documentation, code, and tests relevant to the current task.
 - Use the smallest verification command that meaningfully covers the change, then broaden verification when risk warrants it.
 - Avoid speculative refactors, broad formatting, generated artifacts, and unrelated cleanup.
 - Before finishing, report changed files, verification performed, and any remaining uncertainty in a compact form.
+
+### Repository inspection safeguards
+
+- Let `rg` honor `.gitignore` for normal searches. Never use `rg -uu` or `rg -uuu` across the repository root as a first pass.
+- Treat `target/`, `fuzz/target/`, `.git/`, `.superpowers/`, generated reports, and binary assets as excluded unless the task explicitly targets one of them. If an ignored path must be inspected, name that path directly and narrow the file pattern.
+- Bound search and listing output with a focused path/pattern, `rg -m`, `Select-Object -First`, or an equivalent limit. Do not recursively concatenate or print entire files when a signature, count, or tail is sufficient.
+- Do not send large generated stdout back through the tool interface. For commands that intentionally produce many records, request a count/summary, select a small sample, or write to a task-scoped temporary file and inspect only bounded excerpts.
+- If a Windows command reports `CreateProcessAsUserW` error 1312, retry once with a small sequential command. If it recurs, treat it as an execution-environment/session fault and report it; changing Rust code or widening command output will not fix it.
 
 ## Model and reasoning selection
 
