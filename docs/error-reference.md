@@ -98,6 +98,7 @@ These conditions normally exit with status 1.
 | `CANCELLED` | Execution timed out or an embedding caller cancelled it. |
 | `CAPACITY_UNKNOWN` | Available output capacity could not be determined during preflight. |
 | `COMBINATION_LIMIT_EXCEEDED` | Generation would exceed the effective combination limit. |
+| `CONSTRAINT_WORK_LIMIT_EXCEEDED` | Constraint glob evaluation would exceed the per-candidate work limit. |
 | `COUNT_OVERFLOW` | A count cannot be represented exactly. |
 | `DUPLICATE_ITEM` | `reject-duplicates` found a duplicate in an input list. |
 | `FILE_SIZE_LIMIT` | The preflight estimate exceeds `--max-file-size`. |

@@ -4,6 +4,7 @@
 //! paths, terminals, or command-line syntax. Consumers choose how to encode
 //! the emitted field indices.
 
+use crate::constraint::ConstraintMatcher;
 use crate::{
     combinations, concat_records, zip_records, ConcatOptions, Constraint, CoreError, Count,
     Operation, ProductOptions, SelectionOptions, ZipOptions,
@@ -204,7 +205,7 @@ fn deliver<S: RecordSink>(
     fields: Vec<FieldIndex>,
     sink: &mut S,
 ) -> Result<(), CoreError> {
-    match window.decide(&fields, request.lists)? {
+    match window.decide(&fields, request.lists, request.cancel)? {
         FilterDecision::Emit => {
             let ordinal = offset(request.operation).saturating_add(report.records);
             sink.record(LogicalRecord { ordinal, fields })?;
@@ -257,6 +258,7 @@ impl<'a> FilterWindow<'a> {
         &mut self,
         fields: &[FieldIndex],
         lists: &[Vec<String>],
+        cancel: Option<&dyn Fn() -> bool>,
     ) -> Result<FilterDecision, CoreError> {
         if self.finished {
             return Ok(FilterDecision::Done);
@@ -268,8 +270,9 @@ impl<'a> FilterWindow<'a> {
             .iter()
             .map(|(list, item)| lists[*list][*item].as_str())
             .collect();
+        let mut matcher = ConstraintMatcher::new(cancel);
         for constraint in self.constraints {
-            if !constraint.matches(&values)? {
+            if !matcher.matches(constraint, &values)? {
                 return Ok(FilterDecision::Skip);
             }
         }
@@ -361,6 +364,8 @@ fn limit(operation: &Operation) -> Option<u128> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     fn request<'a>(operation: &'a Operation, lists: &'a [Vec<String>]) -> GenerationRequest<'a> {
@@ -408,5 +413,35 @@ mod tests {
             generate_with(request, |_| Ok(())).unwrap_err().code,
             "CANCELLED"
         );
+    }
+
+    #[test]
+    fn cancellation_interrupts_the_first_glob_match() {
+        let lists = vec![vec!["a".repeat(8 * 1024)]];
+        let operation = Operation::Product(Default::default());
+        let constraints = [Constraint::Glob {
+            field: 0,
+            pattern: format!("*{}b*", "a".repeat(1024)),
+        }];
+        let polls = Cell::new(0usize);
+        let cancel = || {
+            let next = polls.get() + 1;
+            polls.set(next);
+            next >= 3
+        };
+        let mut request = request(&operation, &lists);
+        request.constraints = &constraints;
+        request.cancel = Some(&cancel);
+        let emitted = Cell::new(false);
+
+        let error = generate_with(request, |_| {
+            emitted.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(error.code, "CANCELLED");
+        assert!(!emitted.get());
+        assert!(polls.get() >= 3);
     }
 }

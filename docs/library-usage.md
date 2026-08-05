@@ -92,6 +92,16 @@ validation/counting. `normalize_typed` applies `Transform` values such as
 checks. `shard_range(total, index, count)` returns a balanced half-open range;
 `shard_page` intersects it with offset/limit paging.
 
+Constraint globs match complete values and use byte-oriented `*` and `?`
+semantics: `*` matches zero or more bytes and `?` matches exactly one byte.
+Glob evaluation uses constant auxiliary space and charges the checked product
+of pattern bytes and value bytes against a 16,777,216 byte-pair budget shared
+by all glob constraints evaluated for one candidate. An empty side is charged
+as one byte because matching must still scan the other side. Exceeding that
+budget returns `CONSTRAINT_WORK_LIMIT_EXCEEDED`. Generation also checks its
+cancellation callback periodically within a glob match, so a timeout or caller
+cancellation does not have to wait for the next candidate.
+
 ```rust
 use combinator_core::{shard_range, Count};
 assert_eq!(shard_range(5, 1, 2).unwrap().start, 3);
