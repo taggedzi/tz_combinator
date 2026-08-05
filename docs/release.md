@@ -1,22 +1,118 @@
 # Release procedure
 
+The release process has one cross-platform entry point:
+
+```text
+python scripts/release.py --help
+```
+
+The same driver runs on Windows, Linux, and GitHub Actions. It owns version
+synchronization, changelog generation and verification, release gates, native
+binary construction, normalized archives, checksums, tag creation, artifact
+verification, and GitHub release creation. It uses only the Python standard
+library.
+
+GitHub Actions remains the execution environment for two capabilities that a
+single local machine cannot supply safely: native Windows and Linux builds, and
+GitHub OIDC build provenance. The single `Release` workflow is a thin adapter
+around the driver for those capabilities. No WSL or PowerShell release script
+is required.
+
 The supported binary release platforms are Linux x86_64 and Windows x86_64.
-macOS binaries and package-manager publication are intentionally deferred;
-they are roadmap candidates rather than supported release targets. See the
-[distribution roadmap](compatibility.md#distribution-roadmap) for expansion
-criteria.
-Release preparation is a separate, human-reviewed step before tagging. It
-generates the changelog from Git history, synchronizes product crate versions
-and developer-only benchmark dependency requirements, and opens a pull request.
-The tag-triggered release workflow then builds the
-CLI, GUI, and TUI with the pinned Rust toolchain and `--locked`, packages them
-with the license and README, generates and verifies SHA-256 checksums, verifies
-the reviewed changelog, and creates a GitHub release.
+macOS and package-manager publication remain roadmap candidates; see the
+[distribution roadmap](compatibility.md#distribution-roadmap).
 
-Only stable semantic versions such as `0.2.0` are currently supported by the
-preparation tooling. Version inputs never include the `v` tag prefix.
+## Recommended: operate entirely from GitHub
 
-## Changelog inputs
+Use the repository's **Actions → Release** workflow for both phases:
+
+1. Run it with `operation=prepare`, the stable version without `v` (for
+   example `0.3.0`), and optionally a UTC date in `YYYY-MM-DD` form.
+2. Review and merge the generated `release/v<version>` pull request. Edit
+   `release-notes/<version>.md` in that PR if the generated prose needs work.
+3. Run the same workflow with `operation=publish` and the same version.
+
+The publish operation verifies the prepared metadata on the current default
+branch before creating or safely reusing the annotated tag. It then runs the complete release
+gates, builds and smoke-tests both native targets, creates normalized
+archives and SHA-256 files, verifies the downloaded payloads, generates GitHub
+build provenance, and creates the GitHub release from the reviewed notes.
+
+Preparation and publication are deliberately separate operations. That review
+boundary prevents a generated changelog or accidental version bump from being
+published without human approval, while keeping every mechanical step in one
+workflow and one driver.
+
+## Local operation
+
+Local preparation requires Python 3.11 or newer, Git, Rust, and the pinned
+changelog generator:
+
+```text
+cargo install git-cliff --version 2.12.0 --locked
+python scripts/release.py prepare 0.3.0 --date 2026-08-05
+```
+
+`prepare` requires a clean worktree and is transactional: if any write or final
+metadata verification fails, it restores every pre-existing file and removes
+the new release-note fragment. Review the resulting diff before committing it.
+
+If release notes are edited during review, resynchronize and verify them with:
+
+```text
+python scripts/release.py sync 0.3.0
+python scripts/release.py check 0.3.0
+```
+
+After the reviewed preparation commit is on the default branch, create and
+push the release tag from a clean worktree:
+
+```text
+python scripts/release.py tag 0.3.0 --push
+```
+
+Pushing the tag invokes the same `Release` workflow used by the GitHub publish
+operation. If the push fails, the driver leaves the annotated tag locally and
+reports that state; inspect it before retrying.
+
+For an optional native-only rehearsal on the current machine:
+
+```text
+python scripts/release.py check 0.3.0 --release-build
+python scripts/release.py package 0.3.0 --output dist
+```
+
+`package` supports x86_64 Windows and Linux, runs workspace tests, builds all
+release binaries with `--locked`, smoke-tests the CLI, and creates one native
+archive plus its checksum. It refuses to overwrite an existing artifact and
+restricts output to non-link directories inside the worktree.
+
+## What the driver verifies
+
+The driver fails closed unless all six product crates, their internal path
+dependencies, the benchmark harness dependencies, and all six `Cargo.lock`
+entries agree with the requested stable version. It also requires the reviewed
+release-note fragment to match the corresponding `CHANGELOG.md` section
+exactly.
+
+`check --full`, used by the publish workflow, additionally runs:
+
+```text
+cargo test --workspace --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo package --workspace --locked --no-verify
+cargo install --path crates/combinator-cli --locked
+cargo llvm-cov --workspace --all-features --exclude combinator-gui --exclude combinator-tui --summary-only --fail-under-lines 80
+cargo audit
+cargo deny --all-features check
+```
+
+The native packaging jobs independently test and build on their target runners.
+The publication job then checks each SHA-256 file and requires the exact
+expected archive payload before provenance or release creation.
+
+## Changelog policy
 
 User-visible commits should use these Conventional Commit types:
 
@@ -26,136 +122,12 @@ User-visible commits should use these Conventional Commit types:
 - `perf:` and `revert:` for other user-visible changes; and
 - `!`, as in `feat!:`, for a breaking change.
 
-The generator excludes documentation, tests, CI, build work, formatting,
-refactoring, chores, merge commits, and unmatched commit subjects. This keeps
-implementation-only work out of release notes. A maintainer can add an omitted
-user-visible change while reviewing the generated fragment.
+Documentation, tests, CI, build work, formatting, refactoring, chores, merge
+commits, and unmatched subjects are excluded. Preparation fails rather than
+creating an empty release section. `cliff.toml` defines the rendering rules,
+and `git-cliff` 2.12.0 is invoked with external command execution disabled.
 
-Preparation fails rather than creating an empty release section when no
-user-visible commit is found.
-
-`cliff.toml` defines the categories and rendering rules. The preparation
-workflow pins `git-cliff` 2.12.0 and invokes it with external command execution
-disabled. It writes the initial reviewed source to
-`release-notes/<version>.md`, then synchronizes that section into
-`CHANGELOG.md`. Released fragments remain in the repository so the tag
-workflow can verify the packaged changelog exactly.
-
-Do not add text directly beneath `## [Unreleased]`; deterministic preparation
-requires that section to remain empty.
-
-## Automated preparation
-
-From the repository's **Actions** page, run **Prepare release** against the
-default branch:
-
-1. Enter the next version without `v`, for example `0.2.0`.
-2. Optionally enter the intended UTC release date as `YYYY-MM-DD`. When
-   omitted, the workflow uses the current UTC date.
-3. Wait for changelog generation and the full test, formatting, and clippy
-   suite to pass.
-4. Open the release-preparation pull request created by the workflow.
-
-The workflow refuses an existing version tag or release branch, validates all
-inputs before using them in Git or shell operations, and permits generated
-changes only in `CHANGELOG.md`, `Cargo.lock`, workspace manifests, and the new
-release-note fragment. It does not create a tag or publish a release.
-
-The repository must allow GitHub Actions to create pull requests. If repository
-policy blocks that final operation, the validated `release/v<version>` branch
-still exists; open a pull request from it manually.
-
-Review the complete diff. In particular, verify:
-
-- the version bump is appropriate;
-- every workspace package and internal path dependency has the same version;
-- the generated categories contain user-visible changes only; and
-- compatibility, security, and breaking changes are described clearly.
-
-To improve generated prose, edit `release-notes/<version>.md`, not the compiled
-changelog section, and run:
-
-```text
-scripts/sync-release-notes.sh 0.2.0
-scripts/verify-release.sh 0.2.0
-```
-
-Commit both the fragment and updated `CHANGELOG.md` to the preparation branch.
-The verifier checks the reviewed fragment, changelog section, six product
-manifests, internal dependency requirements (including the developer-only
-benchmark harness), and six workspace entries in `Cargo.lock`.
-
-## Local preparation
-
-The same preparation can be run locally from a clean default-branch worktree
-on Linux or WSL. The scripts use Bash and GNU core utilities:
-
-```text
-cargo install git-cliff --version 2.12.0 --locked
-scripts/prepare-release.sh 0.2.0 2026-08-01
-```
-
-The date is optional and defaults to the current UTC date. Review the changes,
-edit and synchronize the release-note fragment if necessary, run the local
-verification below, and commit the preparation on a dedicated branch.
-
-## Local verification
-
-Run the release metadata verifier and the same gates used by CI before
-tagging:
-
-```text
-scripts/verify-release.sh 0.2.0
-cargo test --workspace --locked
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo build --workspace --release --locked
-cargo audit
-cargo deny check
-```
-
-Run CLI smoke checks against the release binary on the target platform:
-
-```text
-combinator --version
-combinator --help
-combinator --list "a,b" --list "1,2" --sep -
-combinator --list "a,b" --list "1,2" --format jsonl
-```
-
-The fuzz smoke job runs each target in `fuzz/` for a bounded number of
-executions. Longer fuzz campaigns should be run separately before a major
-release.
-
-## Tagging
-
-Merge the reviewed preparation PR first. Update the local default branch and
-verify that the merged commit is the exact commit to tag. Create the annotated
-tag only after the complete verification matrix passes:
-
-```text
-git switch master
-git pull --ff-only
-git status --short --branch
-scripts/verify-release.sh 0.2.0
-git tag -a v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
-```
-
-Substitute the prepared version in both tag commands. The release workflow
-checks that the tag version, workspace versions, lockfile, reviewed release
-fragment, and packaged changelog agree. A mismatch fails before publication.
-
-The release workflow can also be started manually with an existing tag. It does
-not publish crates.io packages. Verify the generated `.sha256` files before
-distributing archives.
-
-## Filesystem safety
-
-Output writers require an existing parent directory and reject destination or
-ancestor symlinks/reparse points and `..` traversal. Output and profile writes
-are staged in secure sibling temporary files and committed atomically. The
-application still assumes the selected parent directory is not concurrently
-replaced by a privileged filesystem attacker; wrappers handling hostile
-multi-user paths should constrain destinations to an application-owned
-directory.
+Released fragments remain in `release-notes/` as the reviewed source for both
+the compiled changelog and GitHub release body. Do not add content directly
+beneath `## [Unreleased]`; deterministic preparation requires it to remain
+empty.

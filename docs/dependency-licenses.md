@@ -50,7 +50,14 @@ and opt-in report commands.
 
 ## Audit procedure
 
-Before releasing a binary or changing dependencies:
+The unified release workflow runs the driver's full gate:
+
+```text
+python scripts/release.py check <version> --full
+```
+
+This includes `cargo audit` and `cargo deny --all-features check`. When
+changing dependencies or performing a local licensing review:
 
 1. Review `Cargo.lock` for the exact resolved dependency set.
 2. Run `cargo deny --all-features check` and a license inventory tool such as
@@ -63,11 +70,11 @@ The lockfile is committed so dependency versions and checksums are
 reproducible. A dependency with a license that is not approved by the project
 policy must not be added without an explicit licensing decision.
 
-CI enforces the approved license/source policy from `deny.toml` with
-`cargo deny check` and runs `cargo audit` against the committed
-lockfile. Release archives retain `THIRD_PARTY_LICENSES.md` alongside the
-project license. At the time of this release review, `cargo audit` reports two
-allowed upstream maintenance warnings with no safe upgrade available:
+CI and the release driver's full gate enforce the approved license/source
+policy from `deny.toml` and audit the committed lockfile. Release archives
+retain `THIRD_PARTY_LICENSES.md` alongside the project license. At the time of
+this release review, `cargo audit` reports two allowed upstream maintenance
+warnings with no safe upgrade available:
 `paste` through the platform-specific Metal renderer and `ttf-parser` through
 the iced font stack. They are explicitly recorded in `deny.toml` and must be
 re-reviewed whenever the GUI dependency graph changes.

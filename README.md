@@ -125,7 +125,7 @@ task. The main references are:
   controls, filesystem behavior, and guidance for public services
 - [Library usage](docs/library-usage.md) — reusable Rust crates and APIs
 - [Compatibility policy](docs/compatibility.md) — supported public contract
-- [Release procedure](docs/release.md) — maintainer release checks
+- [Release procedure](docs/release.md) — unified local and GitHub release process
 
 ## Safety at a glance
 

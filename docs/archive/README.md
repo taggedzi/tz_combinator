@@ -5,9 +5,10 @@ plans, remediation notes, and historical product direction. These records are
 useful when investigating why a feature or security control exists, but they
 do not describe the current supported interface.
 
-For current behavior, return to the [documentation guide](../README.md).
-Repository files, generated CLI help, current manuals, and current policies
-take precedence over anything in this archive.
+For current behavior, return to the [documentation guide](../README.md). For
+release operations specifically, use the [current release
+procedure](../release.md). Repository files, generated CLI help, current
+manuals, and current policies take precedence over anything in this archive.
 
 ## Plans and historical notes
 

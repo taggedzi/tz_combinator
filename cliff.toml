@@ -1,6 +1,6 @@
 # Changelog generation for release preparation.
 # Keep this configuration deterministic: release dates are added by
-# scripts/render-release-notes.sh, and external commands are disabled there.
+# scripts/release.py, and external commands are disabled there.
 
 [changelog]
 header = ""
