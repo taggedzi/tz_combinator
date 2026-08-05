@@ -7,6 +7,13 @@ release notes.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-05
+
+### Fixed
+
+- Harden glob matching against denial of service
+- Removed breaking changlog updates.
+
 ## [0.2.1] - 2026-08-03
 
 ### Breaking Changes
