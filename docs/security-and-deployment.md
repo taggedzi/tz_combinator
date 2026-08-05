@@ -21,6 +21,7 @@ The default limits are:
 | Input lists | 128 |
 | Total items | 5,000,000 |
 | Generated combinations | 10,000,000 |
+| Constraint glob work per candidate | 16,777,216 byte-pairs |
 | Join records per side | 100,000 |
 | Duplicate-key join expansion | 10,000 |
 | Timeout | None |
@@ -42,6 +43,14 @@ bounded input/index residency. For representative service workloads, size
 `--max-input-bytes`, `--max-item-bytes`, and `--max-join-records` together with
 an external memory/concurrency quota; the CLI ceilings are safety bounds, not
 a promise that the worst-case 1 MiB field limit fits in a service's memory.
+
+Constraint glob matching uses constant auxiliary space. Before evaluating a
+glob, the core multiplies pattern bytes by value bytes with checked arithmetic
+and charges that estimate to a per-candidate budget shared by all evaluated
+glob constraints; an empty side counts as one byte so it cannot bypass the
+budget. Overflow or budget exhaustion fails closed with
+`CONSTRAINT_WORK_LIMIT_EXCEEDED`. Deadline and caller cancellation checks also
+run periodically inside glob matching rather than only between candidates.
 
 ## Safe file output
 

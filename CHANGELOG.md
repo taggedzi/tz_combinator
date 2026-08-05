@@ -7,6 +7,10 @@ release notes.
 
 ## [Unreleased]
 
+### Security
+
+- Bound constraint glob work and make matching cooperatively cancellable.
+
 ## [0.2.1] - 2026-08-03
 
 ### Breaking Changes

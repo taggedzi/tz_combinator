@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use combinator_benchmarks::{checked_product, join_records, lists};
 use combinator_core::{
-    combinations as product_records, concat_records, join_count_with_fanout, join_each_with_fanout,
-    permutations, select_combinations, variations, zip_records, ConcatOptions, CoreError, JoinType,
+    combinations as product_records, concat_records, generate_with, join_count_with_fanout,
+    join_each_with_fanout, permutations, select_combinations, variations, zip_records,
+    ConcatOptions, Constraint, CoreError, GenerationLimits, GenerationRequest, JoinType, Operation,
     ProductOptions, SelectionOptions, UnequalPolicy, ZipOptions,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -346,6 +347,141 @@ fn selection_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn constraint_glob_benchmarks(criterion: &mut Criterion) {
+    struct Case {
+        name: &'static str,
+        pattern: String,
+        value: String,
+        expected: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "small/typical-match",
+            pattern: "prefix-*?suffix".into(),
+            value: format!("prefix-{}suffix", "x".repeat(128)),
+            expected: true,
+        },
+        Case {
+            name: "medium/literal-match-1-kib",
+            pattern: "a".repeat(1 << 10),
+            value: "a".repeat(1 << 10),
+            expected: true,
+        },
+        Case {
+            name: "medium/repeated-stars-miss",
+            pattern: format!("{}b", "a*".repeat(64)),
+            value: format!("{}c", "a".repeat(4 << 10)),
+            expected: false,
+        },
+        Case {
+            name: "large/long-common-prefix-miss",
+            pattern: format!("*{}b", "a".repeat(255)),
+            value: format!("{}c", "a".repeat(16 << 10)),
+            expected: false,
+        },
+        Case {
+            name: "large/middle-long-common-prefix-miss",
+            pattern: format!("*{}b*", "a".repeat(255)),
+            value: "a".repeat(16 << 10),
+            expected: false,
+        },
+        Case {
+            name: "large/literal-match-4-kib",
+            pattern: "a".repeat(4 << 10),
+            value: "a".repeat(4 << 10),
+            expected: true,
+        },
+        Case {
+            name: "large/star-search-match-1-mib",
+            pattern: "*z".into(),
+            value: format!("{}z", "a".repeat((1 << 20) - 1)),
+            expected: true,
+        },
+    ];
+
+    let mut group = criterion.benchmark_group("core/constraint/glob");
+    for case in &cases {
+        let constraint = Constraint::Glob {
+            field: 0,
+            pattern: case.pattern.clone(),
+        };
+        assert_eq!(
+            constraint
+                .matches(&[case.value.as_str()])
+                .expect("bounded glob fixture"),
+            case.expected,
+            "glob fixture result changed for {}",
+            case.name
+        );
+        group.throughput(Throughput::Bytes(case.value.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(case.name),
+            case,
+            |bencher, case| {
+                bencher.iter(|| {
+                    black_box(
+                        constraint
+                            .matches(&[black_box(case.value.as_str())])
+                            .expect("bounded glob fixture"),
+                    )
+                });
+            },
+        );
+    }
+    group.finish();
+
+    let pattern = "?".repeat(4 << 10);
+    let lists = vec![vec!["a".repeat(4 << 10)]];
+    let constraints = [Constraint::Glob { field: 0, pattern }];
+    let operation = Operation::Product(ProductOptions {
+        limit: Some(1),
+        ..ProductOptions::default()
+    });
+    let never_cancel = || false;
+    let mut cancellation = criterion.benchmark_group("core/constraint/glob-cancellation");
+    cancellation.throughput(Throughput::Bytes(4 << 10));
+    cancellation.bench_function("none/4-kib-literal", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                generate_with(
+                    GenerationRequest {
+                        operation: &operation,
+                        lists: &lists,
+                        constraints: &constraints,
+                        limits: GenerationLimits {
+                            max_combinations: 1,
+                        },
+                        cancel: None,
+                    },
+                    |_| Ok(()),
+                )
+                .expect("bounded glob fixture"),
+            )
+        });
+    });
+    cancellation.bench_function("polled/4-kib-literal", |bencher| {
+        bencher.iter(|| {
+            black_box(
+                generate_with(
+                    GenerationRequest {
+                        operation: &operation,
+                        lists: &lists,
+                        constraints: &constraints,
+                        limits: GenerationLimits {
+                            max_combinations: 1,
+                        },
+                        cancel: Some(&never_cancel),
+                    },
+                    |_| Ok(()),
+                )
+                .expect("bounded glob fixture"),
+            )
+        });
+    });
+    cancellation.finish();
+}
+
 fn consume_join(record: combinator_core::JoinedRecord, checksum: &mut u64) {
     for (name, value) in record.fields {
         for byte in name.bytes() {
@@ -513,6 +649,7 @@ fn join_benchmarks(criterion: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = config();
-    targets = product_benchmarks, zip_and_concat_benchmarks, selection_benchmarks, join_benchmarks
+    targets = product_benchmarks, zip_and_concat_benchmarks, selection_benchmarks,
+        constraint_glob_benchmarks, join_benchmarks
 }
 criterion_main!(benches);
