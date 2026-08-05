@@ -7,6 +7,12 @@ release notes.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-05
+
+### Security
+
+- Harden glob matching against denial of service.
+
 ## [0.2.1] - 2026-08-03
 
 ### Breaking Changes
