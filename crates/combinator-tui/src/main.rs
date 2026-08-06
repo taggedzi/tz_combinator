@@ -10,9 +10,13 @@ use std::{
 
 use combinator_app::{
     about_text, ensure_output_parent, join_plan, join_preview, join_stream, plan, preview,
-    read_input_source, stream, AppError, AppOperation, CancellationToken, ExecutionPlan, FileSink,
-    Format, FormulaPolicy, InputFormat, InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan,
-    JoinRequest, OutputRecord, OutputSink, ProductRequest, ProgressEvent, UnequalPolicy,
+    read_input_source, stream, validate_resource_limits, AppError, AppOperation, CancellationToken,
+    ExecutionPlan, FileSink, Format, FormulaPolicy, InputFormat, InputLimits, InputSource,
+    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, ProductRequest,
+    ProgressEvent, ResourceLimits, UnequalPolicy, DEFAULT_MAX_COMBINATIONS,
+    DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_ITEMS_PER_LIST, DEFAULT_MAX_ITEM_BYTES,
+    DEFAULT_MAX_JOIN_KEY_FANOUT, DEFAULT_MAX_JOIN_RECORDS, DEFAULT_MAX_LISTS,
+    DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_TOTAL_ITEMS,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -165,7 +169,7 @@ struct JoinProfile {
     limit: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LimitsProfile {
     max_combinations: String,
     max_output_bytes: String,
@@ -177,6 +181,24 @@ struct LimitsProfile {
     timeout_ms: String,
     join_max_records: String,
     join_fanout: String,
+}
+
+impl Default for LimitsProfile {
+    fn default() -> Self {
+        let limits = ResourceLimits::default();
+        Self {
+            max_combinations: limits.max_combinations.to_string(),
+            max_output_bytes: limits.max_output_bytes.to_string(),
+            max_input_bytes: limits.max_input_bytes.to_string(),
+            max_item_bytes: limits.max_item_bytes.to_string(),
+            max_items_per_list: limits.max_items_per_list.to_string(),
+            max_total_items: limits.max_total_items.to_string(),
+            max_lists: limits.max_lists.to_string(),
+            timeout_ms: String::new(),
+            join_max_records: limits.max_join_records.to_string(),
+            join_fanout: limits.max_join_key_fanout.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -322,13 +344,13 @@ impl Default for App {
             names: String::new(),
             offset: "0".into(),
             limit: String::new(),
-            max_combinations: "10000000".into(),
-            max_output_bytes: "1073741824".into(),
-            max_input_bytes: "67108864".into(),
-            max_item_bytes: "1048576".into(),
-            max_items_per_list: "1000000".into(),
-            max_total_items: "5000000".into(),
-            max_lists: "128".into(),
+            max_combinations: DEFAULT_MAX_COMBINATIONS.to_string(),
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES.to_string(),
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES.to_string(),
+            max_item_bytes: DEFAULT_MAX_ITEM_BYTES.to_string(),
+            max_items_per_list: DEFAULT_MAX_ITEMS_PER_LIST.to_string(),
+            max_total_items: DEFAULT_MAX_TOTAL_ITEMS.to_string(),
+            max_lists: DEFAULT_MAX_LISTS.to_string(),
             timeout: String::new(),
             reverse: false,
             lean_jsonl: false,
@@ -346,8 +368,8 @@ impl Default for App {
             join_kind: JoinKind::Inner,
             join_offset: "0".into(),
             join_limit: String::new(),
-            join_max_records: "100000".into(),
-            join_fanout: "10000".into(),
+            join_max_records: DEFAULT_MAX_JOIN_RECORDS.to_string(),
+            join_fanout: DEFAULT_MAX_JOIN_KEY_FANOUT.to_string(),
             request: ProductRequest::default(),
             join_request: JoinRequest::default(),
             plan: None,
@@ -362,8 +384,9 @@ impl Default for App {
             progress: None,
             about_open: false,
         };
-        app.sync_requests();
-        app.refresh_plan();
+        if app.sync_requests() {
+            app.refresh_plan();
+        }
         app
     }
 }
@@ -1341,8 +1364,9 @@ impl App {
             Field::ProfilePath => self.profile_path = value,
             _ => return,
         }
-        self.sync_requests();
-        self.refresh_plan();
+        if self.sync_requests() {
+            self.refresh_plan();
+        }
     }
 
     fn toggle_field(&mut self, field: Field) {
@@ -1375,8 +1399,9 @@ impl App {
             Field::Overwrite => self.overwrite = !self.overwrite,
             _ => return,
         }
-        self.sync_requests();
-        self.refresh_plan();
+        if self.sync_requests() {
+            self.refresh_plan();
+        }
     }
 
     fn add_list(&mut self) {
@@ -1407,7 +1432,14 @@ impl App {
         self.selected_source = (self.selected_source + 1) % self.sources.len();
     }
 
-    fn sync_requests(&mut self) {
+    fn sync_requests(&mut self) -> bool {
+        let limits = match parse_profile_limits(&self.limits_profile()) {
+            Ok(limits) => limits,
+            Err(error) => {
+                self.set_error(error);
+                return false;
+            }
+        };
         self.request.operation = match self.operation {
             AppOperation::Product { .. } => AppOperation::Product {
                 reverse_fields: self.reverse_fields,
@@ -1438,19 +1470,18 @@ impl App {
         self.request.options.offset = self.offset.parse().unwrap_or(0);
         self.request.options.limit =
             (!self.limit.is_empty()).then(|| self.limit.parse().unwrap_or(0));
-        self.request.max_combinations = self.max_combinations.parse().unwrap_or(0);
-        self.request.max_output_bytes = self.max_output_bytes.parse().unwrap_or(0);
-        self.request.timeout_ms =
-            (!self.timeout.is_empty()).then(|| self.timeout.parse().unwrap_or(0));
+        self.request.max_combinations = limits.max_combinations;
+        self.request.max_output_bytes = limits.max_output_bytes;
+        self.request.timeout_ms = limits.timeout_ms;
         self.request.shard_index =
             (!self.shard_index.is_empty()).then(|| self.shard_index.parse().unwrap_or(0));
         self.request.shard_count =
             (!self.shard_count.is_empty()).then(|| self.shard_count.parse().unwrap_or(0));
-        self.request.max_input_bytes = self.max_input_bytes.parse().unwrap_or(0);
-        self.request.max_item_bytes = self.max_item_bytes.parse().unwrap_or(0);
-        self.request.max_items_per_list = self.max_items_per_list.parse().unwrap_or(0);
-        self.request.max_total_items = self.max_total_items.parse().unwrap_or(0);
-        self.request.max_lists = self.max_lists.parse().unwrap_or(0);
+        self.request.max_input_bytes = limits.max_input_bytes;
+        self.request.max_item_bytes = limits.max_item_bytes;
+        self.request.max_items_per_list = limits.max_items_per_list;
+        self.request.max_total_items = limits.max_total_items;
+        self.request.max_lists = limits.max_lists;
         self.request.lists = self
             .sources
             .iter()
@@ -1482,12 +1513,13 @@ impl App {
         self.join_request.offset = self.join_offset.parse().unwrap_or(0);
         self.join_request.limit =
             (!self.join_limit.is_empty()).then(|| self.join_limit.parse().unwrap_or(0));
-        self.join_request.max_join_records = self.join_max_records.parse().unwrap_or(0);
-        self.join_request.max_join_key_fanout = self.join_fanout.parse().unwrap_or(0);
+        self.join_request.max_join_records = limits.max_join_records;
+        self.join_request.max_join_key_fanout = limits.max_join_key_fanout;
         self.join_request.max_output_bytes = self.request.max_output_bytes;
         self.join_request.max_input_bytes = self.request.max_input_bytes;
         self.join_request.max_item_bytes = self.request.max_item_bytes;
         self.join_request.timeout_ms = self.request.timeout_ms;
+        true
     }
 
     fn refresh_plan(&mut self) {
@@ -1560,7 +1592,9 @@ impl App {
         if self.page == Page::Settings {
             return;
         }
-        self.sync_requests();
+        if !self.sync_requests() {
+            return;
+        }
         self.refresh_plan();
         if self.page == Page::Join {
             match join_preview(&self.join_request, PREVIEW_LIMIT) {
@@ -1589,7 +1623,9 @@ impl App {
         if self.running || self.page == Page::Settings {
             return;
         }
-        self.sync_requests();
+        if !self.sync_requests() {
+            return;
+        }
         self.refresh_plan();
         if (self.page == Page::Join && self.join_plan.is_none())
             || (self.page == Page::Combine && self.plan.is_none())
@@ -1688,6 +1724,21 @@ impl App {
         }
     }
 
+    fn limits_profile(&self) -> LimitsProfile {
+        LimitsProfile {
+            max_combinations: self.max_combinations.clone(),
+            max_output_bytes: self.max_output_bytes.clone(),
+            max_input_bytes: self.max_input_bytes.clone(),
+            max_item_bytes: self.max_item_bytes.clone(),
+            max_items_per_list: self.max_items_per_list.clone(),
+            max_total_items: self.max_total_items.clone(),
+            max_lists: self.max_lists.clone(),
+            timeout_ms: self.timeout.clone(),
+            join_max_records: self.join_max_records.clone(),
+            join_fanout: self.join_fanout.clone(),
+        }
+    }
+
     fn to_profile(&self) -> Profile {
         Profile {
             version: PROFILE_VERSION,
@@ -1746,18 +1797,7 @@ impl App {
             },
             output_path: self.output_path.clone(),
             overwrite: self.overwrite,
-            limits: LimitsProfile {
-                max_combinations: self.max_combinations.clone(),
-                max_output_bytes: self.max_output_bytes.clone(),
-                max_input_bytes: self.max_input_bytes.clone(),
-                max_item_bytes: self.max_item_bytes.clone(),
-                max_items_per_list: self.max_items_per_list.clone(),
-                max_total_items: self.max_total_items.clone(),
-                max_lists: self.max_lists.clone(),
-                timeout_ms: self.timeout.clone(),
-                join_max_records: self.join_max_records.clone(),
-                join_fanout: self.join_fanout.clone(),
-            },
+            limits: self.limits_profile(),
         }
     }
 
@@ -1846,8 +1886,9 @@ impl App {
         self.editing = None;
         self.records.clear();
         self.preview_scroll = 0;
-        self.sync_requests();
-        self.refresh_plan();
+        if self.sync_requests() {
+            self.refresh_plan();
+        }
     }
     fn poll_worker(&mut self) {
         let mut finished = None;
@@ -1907,11 +1948,58 @@ fn load_profile_file(path: &Path) -> Result<Profile, String> {
             profile.version, PROFILE_VERSION
         ));
     }
+    parse_profile_limits(&profile.limits)
+        .map_err(|error| format!("{}: {}", error.code, error.message))?;
     resolve_profile_paths(
         &mut profile,
         path.parent().unwrap_or_else(|| Path::new(".")),
     );
     Ok(profile)
+}
+
+fn parse_profile_limits(limits: &LimitsProfile) -> Result<ResourceLimits, AppError> {
+    let parsed = ResourceLimits {
+        max_output_bytes: parse_profile_u128(&limits.max_output_bytes, "max-output-bytes")?,
+        max_input_bytes: parse_profile_usize(&limits.max_input_bytes, "max-input-bytes")?,
+        max_item_bytes: parse_profile_usize(&limits.max_item_bytes, "max-item-bytes")?,
+        max_items_per_list: parse_profile_usize(&limits.max_items_per_list, "max-items-per-list")?,
+        max_lists: parse_profile_usize(&limits.max_lists, "max-lists")?,
+        max_total_items: parse_profile_usize(&limits.max_total_items, "max-total-items")?,
+        max_combinations: parse_profile_u128(&limits.max_combinations, "max-combinations")?,
+        max_join_records: parse_profile_usize(&limits.join_max_records, "max-join-records")?,
+        max_join_key_fanout: parse_profile_u128(&limits.join_fanout, "max-join-key-fanout")?,
+        timeout_ms: if limits.timeout_ms.is_empty() {
+            None
+        } else {
+            Some(parse_profile_u64(&limits.timeout_ms, "timeout-ms")?)
+        },
+    };
+    validate_resource_limits(&parsed).map_err(|error| AppError {
+        code: "RESOURCE_LIMIT_TOO_HIGH",
+        message: error.to_string(),
+    })?;
+    Ok(parsed)
+}
+
+fn parse_profile_u128(value: &str, field: &str) -> Result<u128, AppError> {
+    value.parse().map_err(|_| AppError {
+        code: "LIMIT_INVALID",
+        message: format!("{field} must be a non-negative integer"),
+    })
+}
+
+fn parse_profile_u64(value: &str, field: &str) -> Result<u64, AppError> {
+    value.parse().map_err(|_| AppError {
+        code: "LIMIT_INVALID",
+        message: format!("{field} must be a non-negative integer"),
+    })
+}
+
+fn parse_profile_usize(value: &str, field: &str) -> Result<usize, AppError> {
+    value.parse().map_err(|_| AppError {
+        code: "LIMIT_INVALID",
+        message: format!("{field} must be a non-negative integer"),
+    })
 }
 
 fn read_bounded_utf8(path: &Path, max_bytes: u64) -> Result<String, String> {
@@ -2452,6 +2540,30 @@ mod tests {
         assert_eq!(loaded.field_separator, "|");
         assert_eq!(loaded.formula_policy, FormulaPolicy::Reject);
         assert!(loaded.error.is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn excessive_limits_do_not_mutate_requests_or_load_from_profiles() {
+        let mut app = App::default();
+        let original_combinations = app.request.max_combinations;
+        app.max_combinations = (combinator_app::HARD_MAX_COMBINATIONS + 1).to_string();
+        assert!(!app.sync_requests());
+        assert_eq!(app.request.max_combinations, original_combinations);
+        assert!(app.error.as_deref().is_some_and(|error| {
+            error.starts_with("RESOURCE_LIMIT_TOO_HIGH:") && error.contains("max-combinations")
+        }));
+
+        let path = std::env::temp_dir().join(format!(
+            "combinator-tui-profile-limits-{}.json",
+            std::process::id()
+        ));
+        let mut profile = App::default().to_profile();
+        profile.limits.join_fanout = (combinator_app::HARD_MAX_JOIN_KEY_FANOUT + 1).to_string();
+        save_profile_file(&path, profile).expect("save hostile profile");
+        let error = load_profile_file(&path).unwrap_err();
+        assert!(error.starts_with("RESOURCE_LIMIT_TOO_HIGH:"));
+        assert!(error.contains("max-join-key-fanout"));
         let _ = std::fs::remove_file(path);
     }
 

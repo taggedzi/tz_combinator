@@ -685,12 +685,56 @@ fn template_file_limit_and_utf8_validation_are_enforced() {
 
 #[test]
 fn resource_limits_cannot_be_raised_above_hard_ceiling() {
-    let out = bin()
-        .args(["--list", "a", "--max-output-bytes", "18446744073709551615"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("RESOURCE_LIMIT_TOO_HIGH"));
+    for (flag, value) in [
+        (
+            "--max-output-bytes",
+            (combinator_app::HARD_MAX_OUTPUT_BYTES + 1).to_string(),
+        ),
+        (
+            "--max-input-bytes",
+            (combinator_app::HARD_MAX_INPUT_BYTES + 1).to_string(),
+        ),
+        (
+            "--max-item-bytes",
+            (combinator_app::HARD_MAX_ITEM_BYTES + 1).to_string(),
+        ),
+        (
+            "--max-items-per-list",
+            (combinator_app::HARD_MAX_ITEMS_PER_LIST + 1).to_string(),
+        ),
+        (
+            "--max-lists",
+            (combinator_app::HARD_MAX_LISTS + 1).to_string(),
+        ),
+        (
+            "--max-total-items",
+            (combinator_app::HARD_MAX_TOTAL_ITEMS + 1).to_string(),
+        ),
+        (
+            "--max-combinations",
+            (combinator_app::HARD_MAX_COMBINATIONS + 1).to_string(),
+        ),
+        (
+            "--max-file-size",
+            (combinator_app::HARD_MAX_OUTPUT_BYTES + 1).to_string(),
+        ),
+        (
+            "--timeout-ms",
+            (combinator_app::HARD_MAX_TIMEOUT_MS + 1).to_string(),
+        ),
+    ] {
+        let output = bin().args(["--list", "a", flag, &value]).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{flag}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("RESOURCE_LIMIT_TOO_HIGH"),
+            "{flag}: {stderr}"
+        );
+        assert!(
+            stderr.contains(flag.trim_start_matches("--")),
+            "{flag}: {stderr}"
+        );
+    }
 }
 
 #[test]

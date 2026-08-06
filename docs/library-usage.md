@@ -144,6 +144,26 @@ GUI, TUI, and embedding callers. Its `formula_policy` is
 returns that code as an error. Call `plan` before opening an application-owned
 destination when implementing another frontend.
 
+### Application safety ceilings
+
+`combinator_app::ResourceLimits` defines the caller-selected limits used by
+the first-party application boundary. `ResourceLimits::default()` supplies
+the normal operational defaults, while `HARD_RESOURCE_LIMITS` and the
+`HARD_MAX_*` constants define immutable compiled ceilings shared by the CLI,
+GUI, TUI, and embedding callers. `plan`, `preview`, `stream`, the join entry
+points, and `read_input_source` reject a value above those ceilings with
+`RESOURCE_LIMIT_TOO_HIGH` before opening or reading an input source.
+
+Interfaces may lower these limits but cannot raise them. A network API should
+deserialize into a separate untrusted transport type and perform a checked
+conversion into `ProductRequest` or `JoinRequest`; do not deserialize client
+policy directly into an executable request. A service-owned policy may be
+stricter than the compiled ceilings, and a client may only lower that policy.
+
+The optional request timeout preserves desktop and CLI compatibility: `None`
+does not create a trusted service deadline. A service must enforce its own
+finite deadline and combine a client timeout by selecting the earlier value.
+
 ## Codecs
 
 `combinator_codecs::input` provides `InputFormat`, `InputLimits`, and
@@ -215,10 +235,10 @@ use the analogous `CodecError`. `ErrorKind::Usage` identifies invalid input,
 while `Runtime` identifies execution/resource failures. Preserve codes and
 context when adapting errors to another API.
 
-The core and codec crates do not perform filesystem operations;
-`combinator-app::FileSink` is the provided atomic file-output adapter. The
-libraries do not enforce process-level quotas. Applications must bound input
-bytes, item counts, output bytes, recursion, and concurrency, use checked
-arithmetic, and use `FileSink` or implement equally safe file creation and
-replacement. Prefer a streaming sink, keep `Count::Overflow` fatal, and do not
-treat a preflight estimate as an atomic reservation.
+The core and codec crates remain policy-neutral and enforce the limits supplied
+by their direct callers. `combinator-app` adds the compiled first-party safety
+ceilings and provides the atomic `FileSink` adapter. No library API enforces
+process-level CPU, memory, disk, request-rate, or concurrency quotas, so service
+wrappers must add those controls. Use checked arithmetic, prefer a streaming
+sink, keep `Count::Overflow` fatal, and do not treat a preflight estimate as an
+atomic reservation.

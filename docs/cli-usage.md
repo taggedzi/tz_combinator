@@ -310,7 +310,9 @@ Limits are `--max-output-bytes`, `--max-input-bytes`, `--max-item-bytes`,
 `--max-combinations`, and `--timeout-ms`. Defaults are 1 GiB output, 64 MiB
 input, 1 MiB per item, 1,000,000 items/list, 128 lists, 5,000,000 total
 items, 10,000,000 combinations, and no timeout. Compiled ceilings cannot be
-raised; the timeout ceiling is one hour. `--quiet` suppresses warnings,
+raised; the timeout ceiling is one hour. These ceilings are defined in the
+shared application layer and are also authoritative for the GUI, TUI, and
+`combinator_app` entry points. `--quiet` suppresses warnings,
 `--warnings-as-errors` promotes them, and `--summary` reports records/bytes
 on stderr.
 

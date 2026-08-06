@@ -1,4 +1,7 @@
-use combinator_app::{ensure_output_parent, FileSink, OutputRecord, OutputSink};
+use combinator_app::{
+    ensure_output_parent, validate_resource_limits, FileSink, OutputRecord, OutputSink,
+    ResourceLimits,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -58,7 +61,7 @@ pub struct JoinProfile {
     pub limit: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LimitsProfile {
     pub max_combinations: String,
     pub max_output_bytes: String,
@@ -70,6 +73,24 @@ pub struct LimitsProfile {
     pub timeout_ms: String,
     pub join_max_records: String,
     pub join_fanout: String,
+}
+
+impl Default for LimitsProfile {
+    fn default() -> Self {
+        let limits = ResourceLimits::default();
+        Self {
+            max_combinations: limits.max_combinations.to_string(),
+            max_output_bytes: limits.max_output_bytes.to_string(),
+            max_input_bytes: limits.max_input_bytes.to_string(),
+            max_item_bytes: limits.max_item_bytes.to_string(),
+            max_items_per_list: limits.max_items_per_list.to_string(),
+            max_total_items: limits.max_total_items.to_string(),
+            max_lists: limits.max_lists.to_string(),
+            timeout_ms: String::new(),
+            join_max_records: limits.max_join_records.to_string(),
+            join_fanout: limits.max_join_key_fanout.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -90,10 +111,49 @@ pub fn load_profile(path: &Path) -> Result<Profile, String> {
             profile.version, PROFILE_VERSION
         ));
     }
+    validate_profile_limits(&profile.limits)?;
     Ok(resolve_profile_paths(
         profile,
         path.parent().unwrap_or_else(|| Path::new(".")),
     ))
+}
+
+fn validate_profile_limits(limits: &LimitsProfile) -> Result<(), String> {
+    let limits = ResourceLimits {
+        max_output_bytes: parse_u128(&limits.max_output_bytes, "max-output-bytes")?,
+        max_input_bytes: parse_usize(&limits.max_input_bytes, "max-input-bytes")?,
+        max_item_bytes: parse_usize(&limits.max_item_bytes, "max-item-bytes")?,
+        max_items_per_list: parse_usize(&limits.max_items_per_list, "max-items-per-list")?,
+        max_lists: parse_usize(&limits.max_lists, "max-lists")?,
+        max_total_items: parse_usize(&limits.max_total_items, "max-total-items")?,
+        max_combinations: parse_u128(&limits.max_combinations, "max-combinations")?,
+        max_join_records: parse_usize(&limits.join_max_records, "max-join-records")?,
+        max_join_key_fanout: parse_u128(&limits.join_fanout, "max-join-key-fanout")?,
+        timeout_ms: if limits.timeout_ms.is_empty() {
+            None
+        } else {
+            Some(parse_u64(&limits.timeout_ms, "timeout-ms")?)
+        },
+    };
+    validate_resource_limits(&limits).map_err(|error| format!("RESOURCE_LIMIT_TOO_HIGH: {error}"))
+}
+
+fn parse_u128(value: &str, field: &str) -> Result<u128, String> {
+    value
+        .parse()
+        .map_err(|_| format!("profile limit {field} is not a non-negative integer"))
+}
+
+fn parse_u64(value: &str, field: &str) -> Result<u64, String> {
+    value
+        .parse()
+        .map_err(|_| format!("profile limit {field} is not a non-negative integer"))
+}
+
+fn parse_usize(value: &str, field: &str) -> Result<usize, String> {
+    value
+        .parse()
+        .map_err(|_| format!("profile limit {field} is not a non-negative integer"))
 }
 
 pub fn save_profile(path: &Path, mut profile: Profile) -> Result<(), String> {
@@ -248,6 +308,22 @@ mod tests {
             folder.join("left.csv").to_string_lossy()
         );
         let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn profile_load_rejects_limits_above_compiled_ceilings() {
+        let path = std::env::temp_dir().join(format!(
+            "combinator-profile-limits-test-{}.json",
+            std::process::id()
+        ));
+        let mut profile = sample();
+        profile.limits.max_combinations = (combinator_app::HARD_MAX_COMBINATIONS + 1).to_string();
+        save_profile(&path, profile).expect("save hostile profile");
+
+        let error = load_profile(&path).unwrap_err();
+        assert!(error.starts_with("RESOURCE_LIMIT_TOO_HIGH:"));
+        assert!(error.contains("max-combinations"));
+        let _ = fs::remove_file(path);
     }
 
     #[test]

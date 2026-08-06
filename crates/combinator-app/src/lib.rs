@@ -11,6 +11,7 @@
 mod about;
 mod file_sink;
 mod join;
+mod limits;
 mod path_safety;
 
 use combinator_codecs::{InputBudget, SizeEstimate, SizeInput};
@@ -26,6 +27,15 @@ use std::sync::{
 
 pub use combinator_codecs::{Format, InputFormat, InputLimits};
 pub use combinator_core::UnequalPolicy;
+pub use limits::{
+    validate_input_limits, validate_limit, validate_resource_limits, LimitField, LimitViolation,
+    ResourceLimits, DEFAULT_MAX_COMBINATIONS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_ITEMS_PER_LIST,
+    DEFAULT_MAX_ITEM_BYTES, DEFAULT_MAX_JOIN_KEY_FANOUT, DEFAULT_MAX_JOIN_RECORDS,
+    DEFAULT_MAX_LISTS, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_TOTAL_ITEMS, HARD_MAX_COMBINATIONS,
+    HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES, HARD_MAX_JOIN_KEY_FANOUT,
+    HARD_MAX_JOIN_RECORDS, HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS,
+    HARD_MAX_TOTAL_ITEMS, HARD_RESOURCE_LIMITS,
+};
 
 /// User-selectable generation operation exposed by the application surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,13 +130,13 @@ impl Default for ProductRequest {
             options: ProductOptions::default(),
             operation: AppOperation::default(),
             names: Vec::new(),
-            max_combinations: 10_000_000,
-            max_output_bytes: 1_073_741_824,
-            max_input_bytes: 64 * 1024 * 1024,
-            max_lists: 128,
-            max_items_per_list: 1_000_000,
-            max_total_items: 5_000_000,
-            max_item_bytes: 1_048_576,
+            max_combinations: DEFAULT_MAX_COMBINATIONS,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES as u128,
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
+            max_lists: DEFAULT_MAX_LISTS,
+            max_items_per_list: DEFAULT_MAX_ITEMS_PER_LIST,
+            max_total_items: DEFAULT_MAX_TOTAL_ITEMS,
+            max_item_bytes: DEFAULT_MAX_ITEM_BYTES,
             template: None,
             template_file: None,
             transforms: Vec::new(),
@@ -167,6 +177,7 @@ pub fn read_input_source(
     source: &InputSource,
     limits: InputLimits,
 ) -> Result<Vec<String>, AppError> {
+    validate_input_limits(limits).map_err(AppError::from)?;
     let mut budget = InputBudget::new(limits.max_input_bytes, limits.max_items_per_list);
     match source {
         InputSource::Inline { value, delimiter } => {
@@ -265,6 +276,12 @@ impl AppError {
             code,
             message: message.into(),
         }
+    }
+}
+
+impl From<LimitViolation> for AppError {
+    fn from(error: LimitViolation) -> Self {
+        Self::usage("RESOURCE_LIMIT_TOO_HIGH", error.to_string())
     }
 }
 
@@ -506,6 +523,18 @@ pub fn stream<S: OutputSink>(
 }
 
 fn validate_request(request: &ProductRequest) -> Result<(), AppError> {
+    validate_resource_limits(&ResourceLimits {
+        max_output_bytes: request.max_output_bytes,
+        max_input_bytes: request.max_input_bytes,
+        max_item_bytes: request.max_item_bytes,
+        max_items_per_list: request.max_items_per_list,
+        max_lists: request.max_lists,
+        max_total_items: request.max_total_items,
+        max_combinations: request.max_combinations,
+        timeout_ms: request.timeout_ms,
+        ..ResourceLimits::default()
+    })
+    .map_err(AppError::from)?;
     if request.lists.is_empty() {
         return Err(AppError::usage("NO_LISTS", "no input lists were provided"));
     }
@@ -1063,6 +1092,65 @@ mod tests {
         .unwrap();
         assert_eq!(file, ["x", "y"]);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn product_entry_points_reject_limits_above_compiled_ceilings() {
+        macro_rules! rejects {
+            ($field:ident, $value:expr) => {{
+                let mut request = request();
+                request.$field = $value;
+                assert_eq!(
+                    plan(&request).unwrap_err().code,
+                    "RESOURCE_LIMIT_TOO_HIGH",
+                    stringify!($field)
+                );
+            }};
+        }
+
+        rejects!(max_output_bytes, HARD_MAX_OUTPUT_BYTES as u128 + 1);
+        rejects!(max_input_bytes, HARD_MAX_INPUT_BYTES + 1);
+        rejects!(max_item_bytes, HARD_MAX_ITEM_BYTES + 1);
+        rejects!(max_items_per_list, HARD_MAX_ITEMS_PER_LIST + 1);
+        rejects!(max_lists, HARD_MAX_LISTS + 1);
+        rejects!(max_total_items, HARD_MAX_TOTAL_ITEMS + 1);
+        rejects!(max_combinations, HARD_MAX_COMBINATIONS + 1);
+        rejects!(timeout_ms, Some(HARD_MAX_TIMEOUT_MS + 1));
+
+        struct Sink;
+        impl OutputSink for Sink {
+            fn record(&mut self, _record: OutputRecord) -> Result<(), AppError> {
+                Ok(())
+            }
+        }
+
+        let mut request = request();
+        request.max_combinations = HARD_MAX_COMBINATIONS + 1;
+        assert_eq!(
+            preview(&request, 1).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
+        assert_eq!(
+            stream(&request, &mut Sink, None).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
+    }
+
+    #[test]
+    fn input_loader_rejects_excessive_limits_before_opening_the_source() {
+        let error = read_input_source(
+            &InputSource::File {
+                path: "this-source-must-not-be-opened".into(),
+                format: InputFormat::Lines,
+            },
+            InputLimits {
+                max_input_bytes: HARD_MAX_INPUT_BYTES + 1,
+                ..InputLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "RESOURCE_LIMIT_TOO_HIGH");
+        assert!(error.message.contains("max-input-bytes"));
     }
 
     #[test]

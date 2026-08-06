@@ -2,22 +2,11 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-pub const DEFAULT_MAX_OUTPUT_BYTES: u64 = 1_073_741_824;
-pub const DEFAULT_MAX_LISTS: usize = 128;
-pub const DEFAULT_MAX_TOTAL_ITEMS: usize = 5_000_000;
-pub const DEFAULT_MAX_COMBINATIONS: u128 = 10_000_000;
-pub const DEFAULT_MAX_JOIN_RECORDS: usize = 100_000;
-pub const DEFAULT_MAX_JOIN_KEY_FANOUT: u128 = 10_000;
-pub const HARD_MAX_OUTPUT_BYTES: u64 = DEFAULT_MAX_OUTPUT_BYTES;
-pub const HARD_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
-pub const HARD_MAX_ITEM_BYTES: usize = 1024 * 1024;
-pub const HARD_MAX_ITEMS_PER_LIST: usize = 1_000_000;
-pub const HARD_MAX_LISTS: usize = DEFAULT_MAX_LISTS;
-pub const HARD_MAX_TOTAL_ITEMS: usize = DEFAULT_MAX_TOTAL_ITEMS;
-pub const HARD_MAX_COMBINATIONS: u128 = DEFAULT_MAX_COMBINATIONS;
-pub const HARD_MAX_JOIN_RECORDS: usize = 250_000;
-pub const HARD_MAX_JOIN_KEY_FANOUT: u128 = 100_000;
-pub const HARD_MAX_TIMEOUT_MS: u64 = 3_600_000;
+pub use combinator_app::{
+    DEFAULT_MAX_COMBINATIONS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_ITEMS_PER_LIST,
+    DEFAULT_MAX_ITEM_BYTES, DEFAULT_MAX_JOIN_KEY_FANOUT, DEFAULT_MAX_JOIN_RECORDS,
+    DEFAULT_MAX_LISTS, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_TOTAL_ITEMS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutFormat {
@@ -237,15 +226,15 @@ pub struct CommonArgs {
     pub max_output_bytes: u64,
 
     /// Maximum bytes read from each file, stdin stream, or inline list.
-    #[arg(long = "max-input-bytes", default_value_t = 64 * 1024 * 1024)]
+    #[arg(long = "max-input-bytes", default_value_t = DEFAULT_MAX_INPUT_BYTES)]
     pub max_input_bytes: usize,
 
     /// Maximum UTF-8 bytes in one list item.
-    #[arg(long = "max-item-bytes", default_value_t = 1024 * 1024)]
+    #[arg(long = "max-item-bytes", default_value_t = DEFAULT_MAX_ITEM_BYTES)]
     pub max_item_bytes: usize,
 
     /// Maximum items accepted from one list.
-    #[arg(long = "max-items-per-list", default_value_t = 1_000_000)]
+    #[arg(long = "max-items-per-list", default_value_t = DEFAULT_MAX_ITEMS_PER_LIST)]
     pub max_items_per_list: usize,
 
     /// Maximum number of lists accepted.

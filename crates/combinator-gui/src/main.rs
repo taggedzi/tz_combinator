@@ -1,11 +1,14 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 use combinator_app::{
-    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
-    CancellationToken, ExecutionPlan, FileSink, Format, FormulaPolicy, InputFormat, InputLimits,
-    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
-    ProductRequest, ProgressEvent, UnequalPolicy, PROJECT_DESCRIPTION, PROJECT_ISSUES,
-    PROJECT_LICENSE, PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
+    join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, validate_limit,
+    AppOperation, CancellationToken, ExecutionPlan, FileSink, Format, FormulaPolicy, InputFormat,
+    InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, LimitField,
+    LimitViolation, OutputRecord, OutputSink, ProductRequest, ProgressEvent, UnequalPolicy,
+    DEFAULT_MAX_COMBINATIONS, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_ITEMS_PER_LIST,
+    DEFAULT_MAX_ITEM_BYTES, DEFAULT_MAX_JOIN_KEY_FANOUT, DEFAULT_MAX_JOIN_RECORDS,
+    DEFAULT_MAX_LISTS, DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_MAX_TOTAL_ITEMS, PROJECT_DESCRIPTION,
+    PROJECT_ISSUES, PROJECT_LICENSE, PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
 };
 use iced::widget::{
     button, checkbox, column, container, image, pick_list, row, scrollable, text, text_editor,
@@ -166,19 +169,19 @@ impl Default for CombinatorGui {
             records: Vec::new(),
             output_path: default_output,
             overwrite: false,
-            max_combinations: "10000000".to_string(),
-            max_output_bytes: "1073741824".to_string(),
-            max_input_bytes: "67108864".into(),
-            max_item_bytes: "1048576".into(),
-            max_items_per_list: "1000000".into(),
-            max_total_items: "5000000".into(),
-            max_lists: "128".into(),
+            max_combinations: DEFAULT_MAX_COMBINATIONS.to_string(),
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES.to_string(),
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES.to_string(),
+            max_item_bytes: DEFAULT_MAX_ITEM_BYTES.to_string(),
+            max_items_per_list: DEFAULT_MAX_ITEMS_PER_LIST.to_string(),
+            max_total_items: DEFAULT_MAX_TOTAL_ITEMS.to_string(),
+            max_lists: DEFAULT_MAX_LISTS.to_string(),
             lean_jsonl: false,
             timeout_ms: String::new(),
             shard_index: String::new(),
             shard_count: String::new(),
-            join_max_records: "100000".into(),
-            join_fanout: "10000".into(),
+            join_max_records: DEFAULT_MAX_JOIN_RECORDS.to_string(),
+            join_fanout: DEFAULT_MAX_JOIN_KEY_FANOUT.to_string(),
             running: false,
             cancellation: None,
             progress: None,
@@ -578,43 +581,58 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
         }
         Message::MaxInputBytesChanged(value) => {
             state.max_input_bytes = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.request.max_input_bytes = parsed;
-                state.join_request.max_input_bytes = parsed;
-                state.refresh_plan();
+            match parse_usize_limit(&value, LimitField::MaxInputBytes, false) {
+                Ok(parsed) => {
+                    state.request.max_input_bytes = parsed;
+                    state.join_request.max_input_bytes = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
         Message::MaxItemBytesChanged(value) => {
             state.max_item_bytes = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.request.max_item_bytes = parsed;
-                state.join_request.max_item_bytes = parsed;
-                state.refresh_plan();
+            match parse_usize_limit(&value, LimitField::MaxItemBytes, false) {
+                Ok(parsed) => {
+                    state.request.max_item_bytes = parsed;
+                    state.join_request.max_item_bytes = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
         Message::MaxItemsPerListChanged(value) => {
             state.max_items_per_list = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.request.max_items_per_list = parsed;
-                state.refresh_plan();
+            match parse_usize_limit(&value, LimitField::MaxItemsPerList, false) {
+                Ok(parsed) => {
+                    state.request.max_items_per_list = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
         Message::MaxTotalItemsChanged(value) => {
             state.max_total_items = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.request.max_total_items = parsed;
-                state.refresh_plan();
+            match parse_usize_limit(&value, LimitField::MaxTotalItems, false) {
+                Ok(parsed) => {
+                    state.request.max_total_items = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
         Message::MaxListsChanged(value) => {
             state.max_lists = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.request.max_lists = parsed;
-                state.refresh_plan();
+            match parse_usize_limit(&value, LimitField::MaxLists, false) {
+                Ok(parsed) => {
+                    state.request.max_lists = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
@@ -692,24 +710,24 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
         }
         Message::MaxCombinationsChanged(value) => {
             state.max_combinations = value.clone();
-            state.update_limit(value, true);
+            state.update_limit(value, LimitField::MaxCombinations);
             Task::none()
         }
         Message::MaxOutputBytesChanged(value) => {
             state.max_output_bytes = value.clone();
-            state.join_request.max_output_bytes = value.parse().unwrap_or(0);
-            state.update_limit(value, false);
+            state.update_limit(value, LimitField::MaxOutputBytes);
             Task::none()
         }
         Message::TimeoutChanged(value) => {
             state.timeout_ms = value.clone();
-            state.request.timeout_ms = if value.is_empty() {
-                None
-            } else {
-                value.parse().ok()
-            };
-            state.join_request.timeout_ms = state.request.timeout_ms;
-            state.refresh_plan();
+            match parse_optional_timeout(&value) {
+                Ok(timeout_ms) => {
+                    state.request.timeout_ms = timeout_ms;
+                    state.join_request.timeout_ms = timeout_ms;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
+            }
             Task::none()
         }
         Message::ShardIndexChanged(value) => {
@@ -734,17 +752,23 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
         }
         Message::JoinMaxRecordsChanged(value) => {
             state.join_max_records = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.join_request.max_join_records = parsed;
-                state.refresh_plan();
+            match parse_usize_limit(&value, LimitField::MaxJoinRecords, true) {
+                Ok(parsed) => {
+                    state.join_request.max_join_records = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
         Message::JoinFanoutChanged(value) => {
             state.join_fanout = value.clone();
-            if let Ok(parsed) = value.parse() {
-                state.join_request.max_join_key_fanout = parsed;
-                state.refresh_plan();
+            match parse_u128_limit(&value, LimitField::MaxJoinKeyFanout, true) {
+                Ok(parsed) => {
+                    state.join_request.max_join_key_fanout = parsed;
+                    state.refresh_plan();
+                }
+                Err(error) => state.error = Some(error),
             }
             Task::none()
         }
@@ -2159,21 +2183,73 @@ impl CombinatorGui {
         }
     }
 
-    fn update_limit(&mut self, value: String, combinations: bool) {
-        match value.parse::<u128>() {
-            Ok(value) if value > 0 => {
-                if combinations {
-                    self.request.max_combinations = value;
-                } else {
-                    self.request.max_output_bytes = value;
+    fn update_limit(&mut self, value: String, field: LimitField) {
+        match parse_u128_limit(&value, field, true) {
+            Ok(value) => {
+                match field {
+                    LimitField::MaxCombinations => self.request.max_combinations = value,
+                    LimitField::MaxOutputBytes => {
+                        self.request.max_output_bytes = value;
+                        self.join_request.max_output_bytes = value;
+                    }
+                    _ => return,
                 }
                 self.refresh_plan();
             }
-            _ => {
-                self.error = Some("LIMIT_INVALID: enter a positive integer".to_string());
-            }
+            Err(error) => self.error = Some(error),
         }
     }
+}
+
+fn parse_u128_limit(value: &str, field: LimitField, positive: bool) -> Result<u128, String> {
+    let parsed = value.parse::<u128>().map_err(|_| {
+        if positive {
+            "LIMIT_INVALID: enter a positive integer".to_string()
+        } else {
+            format!(
+                "LIMIT_INVALID: {} must be a non-negative integer",
+                field.name()
+            )
+        }
+    })?;
+    if positive && parsed == 0 {
+        return Err("LIMIT_INVALID: enter a positive integer".to_string());
+    }
+    validate_limit(field, parsed).map_err(render_limit_violation)?;
+    Ok(parsed)
+}
+
+fn parse_usize_limit(value: &str, field: LimitField, positive: bool) -> Result<usize, String> {
+    let parsed = value.parse::<usize>().map_err(|_| {
+        if positive {
+            "LIMIT_INVALID: enter a positive integer".to_string()
+        } else {
+            format!(
+                "LIMIT_INVALID: {} must be a non-negative integer",
+                field.name()
+            )
+        }
+    })?;
+    if positive && parsed == 0 {
+        return Err("LIMIT_INVALID: enter a positive integer".to_string());
+    }
+    validate_limit(field, parsed as u128).map_err(render_limit_violation)?;
+    Ok(parsed)
+}
+
+fn parse_optional_timeout(value: &str) -> Result<Option<u64>, String> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| "LIMIT_INVALID: timeout-ms must be a non-negative integer".to_string())?;
+    validate_limit(LimitField::TimeoutMs, parsed as u128).map_err(render_limit_violation)?;
+    Ok(Some(parsed))
+}
+
+fn render_limit_violation(error: LimitViolation) -> String {
+    format!("RESOURCE_LIMIT_TOO_HIGH: {error}")
 }
 
 fn operation_label(operation: AppOperation) -> &'static str {
@@ -2523,6 +2599,32 @@ mod tests {
             state.error.as_deref(),
             Some("LIMIT_INVALID: enter a positive integer")
         );
+
+        let original_combinations = state.request.max_combinations;
+        dispatch(
+            &mut state,
+            Message::MaxCombinationsChanged(
+                (combinator_app::HARD_MAX_COMBINATIONS + 1).to_string(),
+            ),
+        );
+        assert_eq!(state.request.max_combinations, original_combinations);
+        assert!(state.error.as_deref().is_some_and(|error| {
+            error.starts_with("RESOURCE_LIMIT_TOO_HIGH:") && error.contains("max-combinations")
+        }));
+
+        let original_input_bytes = state.request.max_input_bytes;
+        dispatch(
+            &mut state,
+            Message::MaxInputBytesChanged((combinator_app::HARD_MAX_INPUT_BYTES + 1).to_string()),
+        );
+        assert_eq!(state.request.max_input_bytes, original_input_bytes);
+
+        let original_join_records = state.join_request.max_join_records;
+        dispatch(
+            &mut state,
+            Message::JoinMaxRecordsChanged((combinator_app::HARD_MAX_JOIN_RECORDS + 1).to_string()),
+        );
+        assert_eq!(state.join_request.max_join_records, original_join_records);
     }
 
     #[test]

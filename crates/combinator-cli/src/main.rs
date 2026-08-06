@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 use combinator_app::{
-    FileSink, FormulaPolicy, DOWNSTREAM_INTERPRETATION_RISK_CODE,
-    DOWNSTREAM_INTERPRETATION_RISK_MESSAGE,
+    validate_limit, validate_resource_limits as validate_shared_resource_limits, FileSink,
+    FormulaPolicy, LimitField, LimitViolation, ResourceLimits, DOWNSTREAM_INTERPRETATION_RISK_CODE,
+    DOWNSTREAM_INTERPRETATION_RISK_MESSAGE, HARD_MAX_OUTPUT_BYTES,
 };
 use combinator_codecs::{
     estimate_jsonl_size, estimate_text_size, format_record_with, Format, SizeEstimate, SizeInput,
@@ -27,9 +28,7 @@ use combinator_core::{shard_page, shard_range};
 
 use cli::{
     Cli, CommonArgs, ConcatArgs, FormulaPolicyArg, InputFormat, JoinArgs, JoinFormat, JoinTypeArg,
-    Mode, OutFormat, ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES,
-    HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES, HARD_MAX_JOIN_KEY_FANOUT, HARD_MAX_JOIN_RECORDS,
-    HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS, HARD_MAX_TOTAL_ITEMS,
+    Mode, OutFormat, ProductArgs, ZipArgs,
 };
 use error::{
     exit_code, render, render_streamed, render_warning, render_warning_streamed, AppError,
@@ -168,14 +167,10 @@ fn main() {
 fn run_join(args: &JoinArgs, config: logging::ResolvedLogConfig) -> Result<(), AppError> {
     let common = &args.common;
     validate_resource_limits(common)?;
-    if args.max_join_records > HARD_MAX_JOIN_RECORDS
-        || args.max_join_key_fanout > HARD_MAX_JOIN_KEY_FANOUT
-    {
-        return Err(AppError::usage(
-            "RESOURCE_LIMIT_TOO_HIGH",
-            "join resource limit exceeds the compiled security ceiling",
-        ));
-    }
+    validate_limit(LimitField::MaxJoinRecords, args.max_join_records as u128)
+        .map_err(resource_limit_error)?;
+    validate_limit(LimitField::MaxJoinKeyFanout, args.max_join_key_fanout)
+        .map_err(resource_limit_error)?;
     let deadline = execution_deadline(common.timeout_ms)?;
     if !common.list.is_empty() || !common.file.is_empty() {
         return Err(AppError::usage(
@@ -1569,77 +1564,43 @@ fn template_error(error: TemplateError) -> AppError {
 }
 
 fn validate_resource_limits(common: &CommonArgs) -> Result<(), AppError> {
-    let checks = [
-        (
-            "max-output-bytes",
-            common.max_output_bytes as u128,
-            HARD_MAX_OUTPUT_BYTES as u128,
-        ),
-        (
-            "max-input-bytes",
-            common.max_input_bytes as u128,
-            HARD_MAX_INPUT_BYTES as u128,
-        ),
-        (
-            "max-item-bytes",
-            common.max_item_bytes as u128,
-            HARD_MAX_ITEM_BYTES as u128,
-        ),
-        (
-            "max-items-per-list",
-            common.max_items_per_list as u128,
-            HARD_MAX_ITEMS_PER_LIST as u128,
-        ),
-        (
-            "max-lists",
-            common.max_lists as u128,
-            HARD_MAX_LISTS as u128,
-        ),
-        (
-            "max-total-items",
-            common.max_total_items as u128,
-            HARD_MAX_TOTAL_ITEMS as u128,
-        ),
-        (
-            "max-combinations",
-            common.max_combinations,
-            HARD_MAX_COMBINATIONS,
-        ),
-    ];
-    for (flag, requested, hard) in checks {
-        if requested > hard {
-            return Err(AppError::usage(
-                "RESOURCE_LIMIT_TOO_HIGH",
-                format!("{flag} exceeds the hard security ceiling"),
-            )
-            .with("flag", flag)
-            .with("requested", requested)
-            .with("hard_limit", hard));
-        }
-    }
+    validate_shared_resource_limits(&ResourceLimits {
+        max_output_bytes: common.max_output_bytes as u128,
+        max_input_bytes: common.max_input_bytes,
+        max_item_bytes: common.max_item_bytes,
+        max_items_per_list: common.max_items_per_list,
+        max_lists: common.max_lists,
+        max_total_items: common.max_total_items,
+        max_combinations: common.max_combinations,
+        timeout_ms: common.timeout_ms,
+        ..ResourceLimits::default()
+    })
+    .map_err(resource_limit_error)?;
     if let Some(file_limit) = common.max_file_size {
         if file_limit > HARD_MAX_OUTPUT_BYTES {
-            return Err(AppError::usage(
-                "RESOURCE_LIMIT_TOO_HIGH",
-                "max-file-size exceeds the hard security ceiling",
-            )
-            .with("flag", "max-file-size")
-            .with("requested", file_limit)
-            .with("hard_limit", HARD_MAX_OUTPUT_BYTES));
-        }
-    }
-    if let Some(timeout) = common.timeout_ms {
-        if timeout > HARD_MAX_TIMEOUT_MS {
-            return Err(AppError::usage(
-                "RESOURCE_LIMIT_TOO_HIGH",
-                "timeout-ms exceeds the hard security ceiling",
-            )
-            .with("flag", "timeout-ms")
-            .with("requested", timeout)
-            .with("hard_limit", HARD_MAX_TIMEOUT_MS));
+            let error = LimitViolation {
+                field: LimitField::MaxOutputBytes,
+                requested: file_limit as u128,
+                hard_limit: HARD_MAX_OUTPUT_BYTES as u128,
+            };
+            return Err(resource_limit_error_with_name(error, "max-file-size"));
         }
     }
     Ok(())
+}
+
+fn resource_limit_error(error: LimitViolation) -> AppError {
+    resource_limit_error_with_name(error, error.field.name())
+}
+
+fn resource_limit_error_with_name(error: LimitViolation, flag: &'static str) -> AppError {
+    AppError::usage(
+        "RESOURCE_LIMIT_TOO_HIGH",
+        format!("{flag} exceeds the hard security ceiling"),
+    )
+    .with("flag", flag)
+    .with("requested", error.requested)
+    .with("hard_limit", error.hard_limit)
 }
 
 fn execution_deadline(timeout_ms: Option<u64>) -> Result<Option<Instant>, AppError> {
@@ -2054,12 +2015,25 @@ mod tests {
 
     #[test]
     fn validates_resource_limits_and_deadline_boundaries() {
-        let mut args = common();
-        args.max_output_bytes = HARD_MAX_OUTPUT_BYTES + 1;
-        assert_eq!(
-            validate_resource_limits(&args).unwrap_err().code,
-            "RESOURCE_LIMIT_TOO_HIGH"
-        );
+        macro_rules! rejects {
+            ($field:ident, $hard:expr) => {{
+                let mut args = common();
+                args.$field = $hard + 1;
+                assert_eq!(
+                    validate_resource_limits(&args).unwrap_err().code,
+                    "RESOURCE_LIMIT_TOO_HIGH",
+                    stringify!($field)
+                );
+            }};
+        }
+
+        rejects!(max_output_bytes, HARD_MAX_OUTPUT_BYTES);
+        rejects!(max_input_bytes, combinator_app::HARD_MAX_INPUT_BYTES);
+        rejects!(max_item_bytes, combinator_app::HARD_MAX_ITEM_BYTES);
+        rejects!(max_items_per_list, combinator_app::HARD_MAX_ITEMS_PER_LIST);
+        rejects!(max_lists, combinator_app::HARD_MAX_LISTS);
+        rejects!(max_total_items, combinator_app::HARD_MAX_TOTAL_ITEMS);
+        rejects!(max_combinations, combinator_app::HARD_MAX_COMBINATIONS);
 
         let mut args = common();
         args.max_file_size = Some(HARD_MAX_OUTPUT_BYTES + 1);
@@ -2069,7 +2043,7 @@ mod tests {
         );
 
         let mut args = common();
-        args.timeout_ms = Some(HARD_MAX_TIMEOUT_MS + 1);
+        args.timeout_ms = Some(combinator_app::HARD_MAX_TIMEOUT_MS + 1);
         assert_eq!(
             validate_resource_limits(&args).unwrap_err().code,
             "RESOURCE_LIMIT_TOO_HIGH"

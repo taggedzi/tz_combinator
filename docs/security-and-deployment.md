@@ -9,29 +9,42 @@ For the rationale behind the raw-output policy and its explicit override, see
 
 ## Resource controls
 
-The CLI bounds input bytes, item bytes, items per list, the number of lists,
-total items, generated records, and output bytes. Join operations also bound
-records per side and the expansion caused by duplicate keys.
+The shared application layer bounds input bytes, item bytes, items per list,
+the number of lists, total items, generated records, and output bytes for the
+CLI, GUI, TUI, and embedding callers. Join operations also bound records per
+side and the expansion caused by duplicate keys.
 
 The default limits are:
 
-| Resource | Default |
-|---|---:|
-| Output bytes | 1 GiB |
-| Input byte budget | 64 MiB |
-| Bytes per item | 1 MiB |
-| Items per list | 1,000,000 |
-| Input lists | 128 |
-| Total items | 5,000,000 |
-| Generated combinations | 10,000,000 |
-| Constraint glob work per candidate | 16,777,216 byte-pairs |
-| Join records per side | 100,000 |
-| Duplicate-key join expansion | 10,000 |
-| Timeout | None |
+| Resource | Default | Compiled ceiling |
+|---|---:|---:|
+| Output bytes | 1 GiB | 1 GiB |
+| Input byte budget | 64 MiB | 64 MiB |
+| Bytes per item | 1 MiB | 1 MiB |
+| Items per list | 1,000,000 | 1,000,000 |
+| Input lists | 128 | 128 |
+| Total items | 5,000,000 | 5,000,000 |
+| Generated combinations | 10,000,000 | 10,000,000 |
+| Constraint glob work per candidate | 16,777,216 byte-pairs | 16,777,216 byte-pairs |
+| Join records per side | 100,000 | 250,000 |
+| Duplicate-key join expansion | 10,000 | 100,000 |
+| Caller timeout | None | 1 hour when provided |
 
 Use the corresponding `--max-*` options and `--timeout-ms` to lower these
-limits. The compiled ceilings cannot be raised by command-line options; the
-maximum accepted timeout is one hour.
+limits. The compiled ceilings cannot be raised by any first-party interface.
+Requests and profiles above a ceiling fail with `RESOURCE_LIMIT_TOO_HIGH`
+before input loading. The maximum accepted caller timeout is one hour.
+
+Defaults, compiled ceilings, deployment policy, and client requests are
+distinct. A service should configure deployment limits below the compiled
+ceilings and permit clients only to lower them. Deserialize network input into
+an untrusted transport type, validate it against the service-owned policy, and
+only then construct `ProductRequest` or `JoinRequest`. Do not deserialize a
+client-selected policy directly into an executable application request.
+
+An omitted request timeout retains the local CLI/desktop behavior and is not a
+service-grade deadline. A public wrapper must install a trusted finite deadline;
+if a client requests a shorter timeout, use the earlier of the two.
 
 Files and standard input are read incrementally under byte and item limits.
 Each source is capped, and list operations also share the input byte budget

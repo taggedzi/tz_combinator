@@ -15,6 +15,50 @@ fn paths(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
 }
 
 #[test]
+fn join_limits_cannot_raise_shared_hard_ceilings() {
+    for (flag, value) in [
+        (
+            "--max-join-records",
+            (combinator_app::HARD_MAX_JOIN_RECORDS + 1).to_string(),
+        ),
+        (
+            "--max-join-key-fanout",
+            (combinator_app::HARD_MAX_JOIN_KEY_FANOUT + 1).to_string(),
+        ),
+    ] {
+        let output = bin()
+            .args([
+                "join",
+                "--left",
+                "missing-left.csv",
+                "--right",
+                "missing-right.csv",
+                "--left-key",
+                "id",
+                "--right-key",
+                "id",
+                "--format",
+                "jsonl",
+                flag,
+                &value,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{flag}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("RESOURCE_LIMIT_TOO_HIGH"),
+            "{flag}: {stderr}"
+        );
+        assert!(
+            stderr.contains(flag.trim_start_matches("--")),
+            "{flag}: {stderr}"
+        );
+        assert!(!stderr.contains("FILE_UNREADABLE"), "{flag}: {stderr}");
+    }
+}
+
+#[test]
 fn left_join_expands_duplicates_and_renames_collisions() {
     let (left, right) = paths("duplicate");
     fs::write(&left, "id,name\n1,A\n2,B\n").unwrap();

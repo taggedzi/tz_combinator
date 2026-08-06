@@ -1,4 +1,8 @@
-use crate::{AppError, InputLimits, OutputRecord, OutputSink, ProgressEvent};
+use crate::{
+    validate_resource_limits, AppError, InputLimits, OutputRecord, OutputSink, ProgressEvent,
+    ResourceLimits, DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_ITEM_BYTES, DEFAULT_MAX_JOIN_KEY_FANOUT,
+    DEFAULT_MAX_JOIN_RECORDS, DEFAULT_MAX_OUTPUT_BYTES,
+};
 use combinator_codecs::InputBudget;
 use combinator_core::{join_count_with_fanout, join_each_with_fanout, CoreError, JoinType, Record};
 use std::io::Read;
@@ -47,11 +51,11 @@ impl Default for JoinRequest {
             kind: JoinKind::Inner,
             offset: 0,
             limit: None,
-            max_join_records: 100_000,
-            max_join_key_fanout: 10_000,
-            max_output_bytes: 1_073_741_824,
-            max_input_bytes: 64 * 1024 * 1024,
-            max_item_bytes: 1_048_576,
+            max_join_records: DEFAULT_MAX_JOIN_RECORDS,
+            max_join_key_fanout: DEFAULT_MAX_JOIN_KEY_FANOUT,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES as u128,
+            max_input_bytes: DEFAULT_MAX_INPUT_BYTES,
+            max_item_bytes: DEFAULT_MAX_ITEM_BYTES,
             timeout_ms: None,
         }
     }
@@ -197,6 +201,16 @@ impl OutputSink for VecSink<'_> {
 }
 
 fn validate_request(request: &JoinRequest) -> Result<(), AppError> {
+    validate_resource_limits(&ResourceLimits {
+        max_output_bytes: request.max_output_bytes,
+        max_input_bytes: request.max_input_bytes,
+        max_item_bytes: request.max_item_bytes,
+        max_join_records: request.max_join_records,
+        max_join_key_fanout: request.max_join_key_fanout,
+        timeout_ms: request.timeout_ms,
+        ..ResourceLimits::default()
+    })
+    .map_err(AppError::from)?;
     if request.left_path.is_empty() || request.right_path.is_empty() {
         return Err(AppError::usage(
             "JOIN_SOURCE_INVALID",
@@ -428,5 +442,52 @@ mod tests {
         let progress = join_stream(&request, &mut sink, None).unwrap();
         assert_eq!(progress.records, 0);
         assert_eq!(progress.bytes, 0);
+    }
+
+    #[test]
+    fn join_entry_points_reject_limits_above_compiled_ceilings() {
+        fn request() -> JoinRequest {
+            JoinRequest {
+                left_path: "missing-left.csv".into(),
+                right_path: "missing-right.csv".into(),
+                left_key: "id".into(),
+                right_key: "id".into(),
+                ..Default::default()
+            }
+        }
+
+        macro_rules! rejects {
+            ($field:ident, $value:expr) => {{
+                let mut request = request();
+                request.$field = $value;
+                assert_eq!(
+                    join_plan(&request).unwrap_err().code,
+                    "RESOURCE_LIMIT_TOO_HIGH",
+                    stringify!($field)
+                );
+            }};
+        }
+
+        rejects!(max_output_bytes, crate::HARD_MAX_OUTPUT_BYTES as u128 + 1);
+        rejects!(max_input_bytes, crate::HARD_MAX_INPUT_BYTES + 1);
+        rejects!(max_item_bytes, crate::HARD_MAX_ITEM_BYTES + 1);
+        rejects!(max_join_records, crate::HARD_MAX_JOIN_RECORDS + 1);
+        rejects!(max_join_key_fanout, crate::HARD_MAX_JOIN_KEY_FANOUT + 1);
+        rejects!(timeout_ms, Some(crate::HARD_MAX_TIMEOUT_MS + 1));
+
+        let mut request = request();
+        request.max_join_records = crate::HARD_MAX_JOIN_RECORDS + 1;
+        assert_eq!(
+            join_preview(&request, 1).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
+        let mut records = Vec::new();
+        let mut sink = VecSink {
+            records: &mut records,
+        };
+        assert_eq!(
+            join_stream(&request, &mut sink, None).unwrap_err().code,
+            "RESOURCE_LIMIT_TOO_HIGH"
+        );
     }
 }
