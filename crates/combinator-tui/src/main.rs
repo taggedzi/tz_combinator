@@ -11,8 +11,8 @@ use std::{
 use combinator_app::{
     about_text, ensure_output_parent, join_plan, join_preview, join_stream, plan, preview,
     read_input_source, stream, AppError, AppOperation, CancellationToken, ExecutionPlan, FileSink,
-    Format, InputFormat, InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest,
-    OutputRecord, OutputSink, ProductRequest, ProgressEvent, UnequalPolicy,
+    Format, FormulaPolicy, InputFormat, InputLimits, InputSource, JoinFormat, JoinKind, JoinPlan,
+    JoinRequest, OutputRecord, OutputSink, ProductRequest, ProgressEvent, UnequalPolicy,
 };
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -42,6 +42,7 @@ enum Field {
     Operation,
     ZipPolicy,
     Format,
+    FormulaPolicy,
     InputFormat,
     Choose,
     Length,
@@ -142,6 +143,8 @@ struct CombineProfile {
     length: String,
     operation: String,
     format: String,
+    #[serde(default)]
+    formula_policy: String,
     zip_policy: String,
     reverse: bool,
     reverse_fields: bool,
@@ -228,6 +231,7 @@ struct App {
     list_delimiter: String,
     operation: AppOperation,
     format: Format,
+    formula_policy: FormulaPolicy,
     field_separator: String,
     zip_policy: UnequalPolicy,
     reverse_fields: bool,
@@ -304,6 +308,7 @@ impl Default for App {
             list_delimiter: ",".into(),
             operation: AppOperation::default(),
             format: Format::Text,
+            formula_policy: FormulaPolicy::Warn,
             field_separator: String::new(),
             zip_policy: UnequalPolicy::Error,
             reverse_fields: false,
@@ -694,6 +699,17 @@ impl App {
             "Output format",
             format_label(self.format),
         ));
+        if matches!(self.format, Format::Csv | Format::Tsv) {
+            lines.push(self.field_line(
+                Focus::Field(Field::FormulaPolicy),
+                "Formula-like field policy",
+                formula_policy_label(self.formula_policy),
+            ));
+            lines.push(
+                "  CSV/TSV preserves content; downstream consumers may reinterpret formula-like fields."
+                    .into(),
+            );
+        }
         if format_uses_field_separator(self.format) {
             lines.push(self.field_line(
                 Focus::Field(Field::Separator),
@@ -883,25 +899,32 @@ impl App {
             }
         } else {
             match &self.plan {
-                Some(plan) => [
-                    plan_row(
-                        &[
-                            ("Lists", plan.list_lengths.len().to_string()),
-                            ("Items", format!("{:?}", plan.list_lengths)),
-                            ("Combos", format!("{:?}", plan.total_combinations)),
-                        ],
-                        content_width,
-                    ),
-                    plan_row(
-                        &[
-                            ("Selected", plan.records_to_emit.to_string()),
-                            ("Bytes", format!("{:?}", plan.estimated_output_bytes)),
-                            ("Warnings", plan.warnings.len().to_string()),
-                        ],
-                        content_width,
-                    ),
-                ]
-                .join("\n"),
+                Some(plan) => {
+                    let mut rows = vec![
+                        plan_row(
+                            &[
+                                ("Lists", plan.list_lengths.len().to_string()),
+                                ("Items", format!("{:?}", plan.list_lengths)),
+                                ("Combos", format!("{:?}", plan.total_combinations)),
+                            ],
+                            content_width,
+                        ),
+                        plan_row(
+                            &[
+                                ("Selected", plan.records_to_emit.to_string()),
+                                ("Bytes", format!("{:?}", plan.estimated_output_bytes)),
+                                ("Warnings", plan.warnings.len().to_string()),
+                            ],
+                            content_width,
+                        ),
+                    ];
+                    rows.extend(
+                        plan.warnings
+                            .iter()
+                            .map(|warning| format!("{}: {}", warning.code, warning.message)),
+                    );
+                    rows.join("\n")
+                }
                 None => "Enter at least one input value".into(),
             }
         };
@@ -1013,6 +1036,9 @@ impl App {
                     order.push(Focus::Field(Field::Template));
                 }
                 order.push(Focus::Field(Field::Format));
+                if matches!(self.format, Format::Csv | Format::Tsv) {
+                    order.push(Focus::Field(Field::FormulaPolicy));
+                }
                 if format_uses_field_separator(self.format) {
                     order.push(Focus::Field(Field::Separator));
                 }
@@ -1332,6 +1358,7 @@ impl App {
             Field::Operation => self.operation = next_operation(self.operation),
             Field::ZipPolicy => self.zip_policy = next_zip_policy(self.zip_policy),
             Field::Format => self.format = next_format(self.format),
+            Field::FormulaPolicy => self.formula_policy = next_formula_policy(self.formula_policy),
             Field::TemplateFileMode => {
                 self.template_file_mode = !self.template_file_mode;
                 if self.template_file_mode {
@@ -1397,6 +1424,7 @@ impl App {
             operation => operation,
         };
         self.request.format = self.format;
+        self.request.formula_policy = self.formula_policy;
         self.request.lean_jsonl = self.lean_jsonl;
         self.request.field_separator = self.field_separator.clone();
         self.request.names = split_values(&self.names);
@@ -1479,10 +1507,14 @@ impl App {
                     self.error = None;
                     self.status = "Join ready".into();
                 }
-                Err(error) => self.set_error(error),
+                Err(error) => {
+                    self.join_plan = None;
+                    self.set_error(error);
+                }
             }
             return;
         }
+        self.plan = None;
         let limits = InputLimits {
             max_input_bytes: self.request.max_input_bytes,
             max_item_bytes: self.request.max_item_bytes,
@@ -1694,6 +1726,7 @@ impl App {
                 length: self.length.clone(),
                 operation: operation_label(self.operation).into(),
                 format: format_label(self.format).into(),
+                formula_policy: formula_policy_label(self.formula_policy).into(),
                 zip_policy: zip_policy_label(self.zip_policy).into(),
                 reverse: self.reverse,
                 reverse_fields: self.reverse_fields,
@@ -1771,6 +1804,7 @@ impl App {
             combine.length.parse().unwrap_or(2),
         );
         self.format = parse_format(&combine.format);
+        self.formula_policy = parse_formula_policy(&combine.formula_policy);
         self.field_separator = combine.field_separator;
         self.zip_policy = parse_zip_policy(&combine.zip_policy);
         self.reverse = combine.reverse;
@@ -1994,6 +2028,7 @@ fn is_text_field(field: Field) -> bool {
             | Field::Operation
             | Field::ZipPolicy
             | Field::Format
+            | Field::FormulaPolicy
             | Field::TemplateFileMode
             | Field::JoinFormat
             | Field::JoinKind
@@ -2105,6 +2140,13 @@ fn format_label(format: Format) -> &'static str {
         Format::Nul => "NUL",
     }
 }
+fn formula_policy_label(policy: FormulaPolicy) -> &'static str {
+    match policy {
+        FormulaPolicy::Allow => "Allow",
+        FormulaPolicy::Warn => "Warn",
+        FormulaPolicy::Reject => "Reject",
+    }
+}
 fn zip_policy_label(policy: UnequalPolicy) -> &'static str {
     match policy {
         UnequalPolicy::Error => "Error",
@@ -2176,6 +2218,13 @@ fn next_format(value: Format) -> Format {
         Format::Nul => Format::Text,
     }
 }
+fn next_formula_policy(value: FormulaPolicy) -> FormulaPolicy {
+    match value {
+        FormulaPolicy::Warn => FormulaPolicy::Reject,
+        FormulaPolicy::Reject => FormulaPolicy::Allow,
+        FormulaPolicy::Allow => FormulaPolicy::Warn,
+    }
+}
 fn next_zip_policy(value: UnequalPolicy) -> UnequalPolicy {
     match value {
         UnequalPolicy::Error => UnequalPolicy::Truncate,
@@ -2222,6 +2271,13 @@ fn parse_format(value: &str) -> Format {
         "TSV" => Format::Tsv,
         "NUL" => Format::Nul,
         _ => Format::Text,
+    }
+}
+fn parse_formula_policy(value: &str) -> FormulaPolicy {
+    match value {
+        "Allow" => FormulaPolicy::Allow,
+        "Reject" => FormulaPolicy::Reject,
+        _ => FormulaPolicy::Warn,
     }
 }
 fn parse_operation(value: &str, choose: usize, length: usize) -> AppOperation {
@@ -2387,12 +2443,14 @@ mod tests {
         let mut app = App::default();
         app.sources[0].value = "one,two".into();
         app.field_separator = "|".into();
+        app.formula_policy = FormulaPolicy::Reject;
         save_profile_file(&path, app.to_profile()).unwrap();
 
         let mut loaded = App::default();
         loaded.apply_profile(load_profile_file(&path).unwrap());
         assert_eq!(loaded.sources[0].value, "one,two");
         assert_eq!(loaded.field_separator, "|");
+        assert_eq!(loaded.formula_policy, FormulaPolicy::Reject);
         assert!(loaded.error.is_none());
         let _ = std::fs::remove_file(path);
     }
@@ -2405,6 +2463,9 @@ mod tests {
             .focus_order()
             .contains(&Focus::Field(Field::ReverseFields)));
         assert!(!app.focus_order().contains(&Focus::Field(Field::LeanJsonl)));
+        assert!(!app
+            .focus_order()
+            .contains(&Focus::Field(Field::FormulaPolicy)));
 
         app.operation = AppOperation::Zip {
             on_unequal: UnequalPolicy::Error,
@@ -2415,6 +2476,30 @@ mod tests {
         assert!(!order.contains(&Focus::Field(Field::ReverseFields)));
         assert!(order.contains(&Focus::Field(Field::LeanJsonl)));
         assert!(order.contains(&Focus::Field(Field::Names)));
+
+        app.format = Format::Csv;
+        let order = app.focus_order();
+        assert!(order.contains(&Focus::Field(Field::FormulaPolicy)));
+    }
+
+    #[test]
+    fn reject_policy_does_not_open_generation_destination() {
+        let path = std::env::temp_dir().join(format!(
+            "combinator-tui-formula-reject-{}.csv",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut app = App::default();
+        app.sources[0].value = "=hostile".into();
+        app.format = Format::Csv;
+        app.formula_policy = FormulaPolicy::Reject;
+        app.output_path = path.to_string_lossy().into_owned();
+        app.start_generation();
+        assert!(!path.exists());
+        assert!(app
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("DOWNSTREAM_INTERPRETATION_RISK")));
     }
 
     #[test]
@@ -2564,6 +2649,13 @@ mod tests {
             Format::Nul,
         ] {
             assert_eq!(parse_format(format_label(format)), format);
+        }
+        for policy in [
+            FormulaPolicy::Allow,
+            FormulaPolicy::Warn,
+            FormulaPolicy::Reject,
+        ] {
+            assert_eq!(parse_formula_policy(formula_policy_label(policy)), policy);
         }
         for kind in [
             JoinKind::Inner,

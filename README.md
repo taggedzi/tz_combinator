@@ -8,7 +8,8 @@
 [![License](https://img.shields.io/github/license/taggedzi/tz_combinator)](LICENSE)
 [![Release targets](https://img.shields.io/badge/release%20targets-Linux%20x86__64%20%7C%20Windows%20x86__64-blue)](docs/release.md)
 
-`tz_combinator` safely combines text lists and structured data. Use the
+`tz_combinator` combines text lists and structured data with explicit resource,
+filesystem, and output-policy controls. Use the
 `combinator` command-line interface (CLI) for scripts and automation, the
 desktop graphical user interface (GUI) for visual workflows, or the terminal
 user interface (TUI) for keyboard-driven work.
@@ -142,8 +143,12 @@ memory, CPU, concurrency, and rate limits. See
 untrusted requests.
 
 Use JSON Lines for untrusted records. Raw text, CSV, TSV, and NUL output can
-preserve record separators or terminal controls from input; direct interactive
-terminal output is guarded unless `--allow-unsafe-terminal-output` is explicit.
+preserve active or control content from input; converting data does not make it
+trusted. CSV/TSV output warns by default when a field starts with a recognized
+formula-like prefix. Use `--formula-policy reject` to fail before output or
+`--formula-policy allow` to explicitly retain the same bytes without that
+targeted warning. Direct interactive terminal output is separately guarded
+unless `--allow-unsafe-terminal-output` is explicit.
 
 ## Project status and compatibility
 

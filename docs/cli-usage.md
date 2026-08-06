@@ -188,6 +188,30 @@ output to a pipe or file preserves the raw format contract.
 `--allow-unsafe-terminal-output` bypasses the terminal check when exact raw
 terminal bytes are explicitly required.
 
+CSV and TSV quoting protects field and record structure; it does not neutralize
+the meaning assigned to field content by a spreadsheet, database importer,
+reporting system, visualization tool, or another downstream consumer. Output
+derived from untrusted fields remains untrusted.
+
+For CSV and TSV, `--formula-policy allow|warn|reject` controls a narrow detector
+for formula-like fields. The default is `warn`:
+
+- `allow` preserves the field and suppresses this targeted diagnostic;
+- `warn` preserves exactly the same data bytes and emits one
+  `DOWNSTREAM_INTERPRETATION_RISK` warning on stderr; and
+- `reject` exits before stdout data is written or an output destination is
+  created, truncated, or replaced.
+
+The version 1 detector examines each logical field after configured transforms.
+It matches only when the first Unicode scalar is ASCII `=`, `+`, `-`, or `@`;
+tab, carriage return, or line feed; or full-width `＝`, `＋`, `－`, or `＠`.
+It does not trim other leading whitespace or normalize Unicode. This is a
+conservative recognition rule, not a promise that other values or downstream
+consumers are safe. The flag is invalid with non-CSV/TSV output. `--count-only`
+does not inspect record content; `--explain` and `--dry-run` report the warning
+prospectively. `--quiet` suppresses it, while `--warnings-as-errors` fails before
+output and takes precedence over `--quiet`.
+
 ```text
 combinator --list red,blue --list car,bike --sep - --format jsonl
 {"i":0,"value":"red-car","fields":["red","car"]}

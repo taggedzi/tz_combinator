@@ -26,6 +26,7 @@ manuals, and current policies take precedence over anything in this archive.
 
 ### Security and release work
 
+- [Downstream interpretation risk controls](plans/2026-08-06-downstream-interpretation-risk-plan.md)
 - [Initial security remediation plan](plans/security-remediation-plan.md)
 - [Security follow-up plan](plans/security-followup-plan.md)
 - [Public-service security hardening plan](plans/public-service-security-plan.md)

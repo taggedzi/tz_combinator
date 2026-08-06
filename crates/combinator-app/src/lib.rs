@@ -46,6 +46,18 @@ impl Default for AppOperation {
     }
 }
 
+/// Policy for recognized formula-like fields in CSV and TSV output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FormulaPolicy {
+    /// Preserve matching fields without a targeted warning.
+    Allow,
+    /// Preserve matching fields and report one downstream-risk warning.
+    #[default]
+    Warn,
+    /// Reject matching fields before generation reaches an output sink.
+    Reject,
+}
+
 /// A Product request in the initial application workflow.
 #[derive(Debug, Clone)]
 pub struct ProductRequest {
@@ -57,6 +69,8 @@ pub struct ProductRequest {
     pub record_separator: String,
     /// Output encoding used by preview and execution.
     pub format: Format,
+    /// Handling for recognized formula-like fields in CSV/TSV output.
+    pub formula_policy: FormulaPolicy,
     /// Emit only JSON string values when using JSONL.
     pub lean_jsonl: bool,
     /// Product traversal options.
@@ -101,6 +115,7 @@ impl Default for ProductRequest {
             field_separator: String::new(),
             record_separator: "\n".to_string(),
             format: Format::Text,
+            formula_policy: FormulaPolicy::Warn,
             lean_jsonl: false,
             options: ProductOptions::default(),
             operation: AppOperation::default(),
@@ -312,7 +327,7 @@ pub fn plan(request: &ProductRequest) -> Result<ExecutionPlan, AppError> {
         AppOperation::Concat => "an input list is empty; it contributes no records",
         _ => "an input list is empty; no records will be generated",
     };
-    let warnings = request
+    let mut warnings: Vec<Warning> = request
         .lists
         .iter()
         .filter(|list| list.is_empty())
@@ -321,6 +336,7 @@ pub fn plan(request: &ProductRequest) -> Result<ExecutionPlan, AppError> {
             message: empty_list_message,
         })
         .collect();
+    apply_formula_policy(request, &lists, &mut warnings)?;
     Ok(ExecutionPlan {
         list_lengths: lists.iter().map(Vec::len).collect(),
         total_combinations,
@@ -328,6 +344,42 @@ pub fn plan(request: &ProductRequest) -> Result<ExecutionPlan, AppError> {
         estimated_output_bytes,
         warnings,
     })
+}
+
+/// Stable diagnostic code for a recognized downstream interpretation risk.
+pub const DOWNSTREAM_INTERPRETATION_RISK_CODE: &str = "DOWNSTREAM_INTERPRETATION_RISK";
+/// Safe diagnostic text for a recognized downstream interpretation risk.
+pub const DOWNSTREAM_INTERPRETATION_RISK_MESSAGE: &str = "CSV/TSV preserves field content; downstream software may interpret one or more formula-like fields as active expressions. Treat output derived from untrusted input as untrusted";
+
+fn apply_formula_policy(
+    request: &ProductRequest,
+    lists: &[Vec<String>],
+    warnings: &mut Vec<Warning>,
+) -> Result<(), AppError> {
+    if !matches!(request.format, Format::Csv | Format::Tsv) {
+        return Ok(());
+    }
+    let has_formula_like_field = lists
+        .iter()
+        .flatten()
+        .any(|field| combinator_codecs::is_formula_like_field(field));
+    if !has_formula_like_field {
+        return Ok(());
+    }
+    match request.formula_policy {
+        FormulaPolicy::Allow => Ok(()),
+        FormulaPolicy::Warn => {
+            warnings.push(Warning {
+                code: DOWNSTREAM_INTERPRETATION_RISK_CODE,
+                message: DOWNSTREAM_INTERPRETATION_RISK_MESSAGE,
+            });
+            Ok(())
+        }
+        FormulaPolicy::Reject => Err(AppError::usage(
+            DOWNSTREAM_INTERPRETATION_RISK_CODE,
+            DOWNSTREAM_INTERPRETATION_RISK_MESSAGE,
+        )),
+    }
 }
 
 /// Generates a bounded preview without changing the request's full plan.
@@ -818,6 +870,92 @@ mod tests {
             ["red-car\n", "red-bike\n", "blue-car\n",]
         );
         assert_eq!(records[2].fields, vec!["blue", "car"]);
+    }
+
+    #[test]
+    fn formula_policy_warns_without_changing_csv_or_tsv_bytes() {
+        for format in [Format::Csv, Format::Tsv] {
+            let mut warned = request();
+            warned.lists = vec![vec![
+                "=2+3".into(),
+                "quoted,value".into(),
+                "tab\tvalue".into(),
+                "multi\nline".into(),
+                "＋fullwidth".into(),
+                "ordinary".into(),
+            ]];
+            warned.format = format;
+            warned.formula_policy = FormulaPolicy::Warn;
+            let warning_plan = plan(&warned).unwrap();
+            assert_eq!(warning_plan.warnings.len(), 1);
+            assert_eq!(
+                warning_plan.warnings[0].code,
+                "DOWNSTREAM_INTERPRETATION_RISK"
+            );
+
+            let warned_bytes = preview(&warned, 10)
+                .unwrap()
+                .into_iter()
+                .map(|record| record.value)
+                .collect::<Vec<_>>();
+            let mut allowed = warned;
+            allowed.formula_policy = FormulaPolicy::Allow;
+            assert!(plan(&allowed).unwrap().warnings.is_empty());
+            let allowed_bytes = preview(&allowed, 10)
+                .unwrap()
+                .into_iter()
+                .map(|record| record.value)
+                .collect::<Vec<_>>();
+            assert_eq!(warned_bytes, allowed_bytes);
+            assert!(allowed_bytes.iter().any(|value| value.contains("=2+3")));
+            assert!(allowed_bytes
+                .iter()
+                .any(|value| value.contains("multi\nline")));
+            assert!(allowed_bytes
+                .iter()
+                .any(|value| value.contains("＋fullwidth")));
+            assert!(allowed_bytes.iter().any(|value| value.contains("ordinary")));
+        }
+    }
+
+    #[test]
+    fn formula_policy_uses_transformed_fields_and_rejects_before_the_sink() {
+        struct Sink {
+            calls: usize,
+        }
+        impl OutputSink for Sink {
+            fn record(&mut self, _record: OutputRecord) -> Result<(), AppError> {
+                self.calls += 1;
+                Ok(())
+            }
+        }
+
+        let mut request = request();
+        request.lists = vec![vec![" =synthetic-secret-marker".into()]];
+        request.transforms = vec!["trim".into()];
+        request.format = Format::Csv;
+        request.formula_policy = FormulaPolicy::Reject;
+        let error = plan(&request).unwrap_err();
+        assert_eq!(error.code, "DOWNSTREAM_INTERPRETATION_RISK");
+        assert!(!error.message.contains("synthetic-secret-marker"));
+
+        let mut sink = Sink { calls: 0 };
+        assert_eq!(
+            stream(&request, &mut sink, None).unwrap_err().code,
+            "DOWNSTREAM_INTERPRETATION_RISK"
+        );
+        assert_eq!(sink.calls, 0);
+    }
+
+    #[test]
+    fn formula_policy_is_inert_for_non_delimited_formats() {
+        for format in [Format::Text, Format::Jsonl, Format::Nul] {
+            let mut request = request();
+            request.lists = vec![vec!["=2+3".into()]];
+            request.format = format;
+            request.formula_policy = FormulaPolicy::Reject;
+            assert!(plan(&request).is_ok());
+        }
     }
 
     #[test]

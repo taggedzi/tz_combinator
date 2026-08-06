@@ -135,6 +135,15 @@ contains emitted record and byte accounting. Implement sinks to stream to a
 network response, file, or application-specific encoder, and propagate errors
 instead of buffering unbounded output.
 
+`combinator_app::ProductRequest` is the shared application request used by the
+GUI, TUI, and embedding callers. Its `formula_policy` is
+`FormulaPolicy::Warn` by default. During
+`plan`, prepared fields for CSV/TSV are checked before a sink receives records:
+`Allow` preserves without the targeted warning, `Warn` adds one safe
+`DOWNSTREAM_INTERPRETATION_RISK` warning to the `ExecutionPlan`, and `Reject`
+returns that code as an error. Call `plan` before opening an application-owned
+destination when implementing another frontend.
+
 ## Codecs
 
 `combinator_codecs::input` provides `InputFormat`, `InputLimits`, and
@@ -148,6 +157,13 @@ an optional template/name context. `Jsonl` produces structured records with
 an index, value, and fields unless the caller deliberately selects lean value
 output. Both formatting functions require a final output byte limit and stop
 before joining fields or encoding JSON/CSV beyond that budget.
+
+`combinator_codecs::is_formula_like_field` exposes the allocation-free version
+1 classifier, with `FORMULA_PREFIX_POLICY_VERSION` identifying its contract.
+It checks the first Unicode scalar only and does not rewrite data. Destination
+policy intentionally remains above the raw formatter so direct codec callers
+retain content-preserving CSV/TSV bytes and remain responsible for their own
+consumer-specific validation.
 
 ```rust
 use combinator_codecs::{format_record, Format};

@@ -10,7 +10,10 @@ use std::io::{BufWriter, IsTerminal, Read, Write};
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
-use combinator_app::FileSink;
+use combinator_app::{
+    FileSink, FormulaPolicy, DOWNSTREAM_INTERPRETATION_RISK_CODE,
+    DOWNSTREAM_INTERPRETATION_RISK_MESSAGE,
+};
 use combinator_codecs::{
     estimate_jsonl_size, estimate_text_size, format_record_with, Format, SizeEstimate, SizeInput,
 };
@@ -23,10 +26,10 @@ use combinator_core::{
 use combinator_core::{shard_page, shard_range};
 
 use cli::{
-    Cli, CommonArgs, ConcatArgs, InputFormat, JoinArgs, JoinFormat, JoinTypeArg, Mode, OutFormat,
-    ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES, HARD_MAX_ITEMS_PER_LIST,
-    HARD_MAX_ITEM_BYTES, HARD_MAX_JOIN_KEY_FANOUT, HARD_MAX_JOIN_RECORDS, HARD_MAX_LISTS,
-    HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS, HARD_MAX_TOTAL_ITEMS,
+    Cli, CommonArgs, ConcatArgs, FormulaPolicyArg, InputFormat, JoinArgs, JoinFormat, JoinTypeArg,
+    Mode, OutFormat, ProductArgs, ZipArgs, HARD_MAX_COMBINATIONS, HARD_MAX_INPUT_BYTES,
+    HARD_MAX_ITEMS_PER_LIST, HARD_MAX_ITEM_BYTES, HARD_MAX_JOIN_KEY_FANOUT, HARD_MAX_JOIN_RECORDS,
+    HARD_MAX_LISTS, HARD_MAX_OUTPUT_BYTES, HARD_MAX_TIMEOUT_MS, HARD_MAX_TOTAL_ITEMS,
 };
 use error::{
     exit_code, render, render_streamed, render_warning, render_warning_streamed, AppError,
@@ -184,6 +187,12 @@ fn run_join(args: &JoinArgs, config: logging::ResolvedLogConfig) -> Result<(), A
         return Err(AppError::usage(
             "JOIN_FORMAT_INVALID",
             "joins require --format jsonl",
+        ));
+    }
+    if common.formula_policy.is_some() {
+        return Err(AppError::usage(
+            "FORMULA_POLICY_UNSUPPORTED",
+            "--formula-policy is only valid with --format csv or --format tsv",
         ));
     }
     if args.left_key.is_empty() || args.right_key.is_empty() {
@@ -657,6 +666,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
             "--format json is only valid with --explain or --dry-run",
         ));
     }
+    if common.formula_policy.is_some() && !matches!(common.format, OutFormat::Csv | OutFormat::Tsv)
+    {
+        return Err(AppError::usage(
+            "FORMULA_POLICY_UNSUPPORTED",
+            "--formula-policy is only valid with --format csv or --format tsv",
+        ));
+    }
     if common
         .file
         .iter()
@@ -938,6 +954,8 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         _ => {}
     }
 
+    apply_formula_policy(&common, &lists, &mut warnings)?;
+
     if common.explain || common.dry_run {
         emit_warnings(&common, &warnings, json_out)?;
         let estimate = bounded_size_estimate(
@@ -988,6 +1006,53 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
         &constraints,
     )?;
     Ok(())
+}
+
+fn apply_formula_policy(
+    common: &CommonArgs,
+    lists: &[Vec<String>],
+    warnings: &mut Vec<Warning>,
+) -> Result<(), AppError> {
+    if common.count_only || !matches!(common.format, OutFormat::Csv | OutFormat::Tsv) {
+        return Ok(());
+    }
+    let matching_fields = lists
+        .iter()
+        .flatten()
+        .filter(|field| combinator_codecs::is_formula_like_field(field))
+        .count();
+    if matching_fields == 0 {
+        return Ok(());
+    }
+    let policy: FormulaPolicy = common
+        .formula_policy
+        .unwrap_or(FormulaPolicyArg::Warn)
+        .into();
+    let format = match common.format {
+        OutFormat::Csv => "csv",
+        OutFormat::Tsv => "tsv",
+        _ => unreachable!("formula policy was limited to CSV/TSV"),
+    };
+    let context = vec![
+        ("format".to_string(), format.to_string()),
+        ("matching_fields".to_string(), matching_fields.to_string()),
+    ];
+    match policy {
+        FormulaPolicy::Allow => Ok(()),
+        FormulaPolicy::Warn => {
+            warnings.push((
+                DOWNSTREAM_INTERPRETATION_RISK_CODE,
+                DOWNSTREAM_INTERPRETATION_RISK_MESSAGE,
+                context,
+            ));
+            Ok(())
+        }
+        FormulaPolicy::Reject => Err(AppError::usage(
+            DOWNSTREAM_INTERPRETATION_RISK_CODE,
+            DOWNSTREAM_INTERPRETATION_RISK_MESSAGE,
+        )
+        .with_context(&context)),
+    }
 }
 
 #[derive(Debug, Default)]

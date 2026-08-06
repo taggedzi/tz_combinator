@@ -38,6 +38,12 @@ process exits successfully. Every operation except `concat` produces no
 records when any input list is empty. Under `concat`, the empty list
 contributes no records and the other lists are still emitted.
 
+`DOWNSTREAM_INTERPRETATION_RISK` is also non-fatal under the default CSV/TSV
+formula policy. It reports that at least one prepared field begins with a
+recognized formula-like prefix; it never includes the hostile field value.
+`--formula-policy reject` instead reports the same code as a usage failure
+before output is written or a destination is changed.
+
 Use `--quiet` to suppress the warning or `--warnings-as-errors` to turn it into
 a runtime error. `--warnings-as-errors` takes precedence if both options are
 present.
@@ -52,10 +58,12 @@ These conditions normally exit with status 2.
 | `CSV_MALFORMED` | CSV or TSV input is malformed. |
 | `CSV_MULTIPLE_FIELDS` | A list-input CSV or TSV record contains more than one field. |
 | `DUPLICATE_STDIN` | Standard input was selected more than once. |
+| `DOWNSTREAM_INTERPRETATION_RISK` | `--formula-policy reject` recognized a formula-like CSV/TSV field before output. |
 | `FILTER_INVALID` | A typed filter has invalid syntax, field selection, or bounds. |
 | `FILTER_LIMIT` | The request contains too many filters. |
 | `FILTER_MODE_UNSUPPORTED` | Filters were combined with a summary mode that cannot evaluate accepted-record counts. |
 | `FORMAT_UNSUPPORTED` | The selected format is not valid for the requested mode. |
+| `FORMULA_POLICY_UNSUPPORTED` | An explicit formula policy was used with output other than CSV or TSV. |
 | `INLINE_ESCAPE_INVALID` | Escaped inline input contains an unknown or incomplete escape. |
 | `INPUT_FORMAT_INVALID` | The input format is incompatible with the selected source. |
 | `INPUT_NOT_UTF8` | A text record is not valid UTF-8. |
