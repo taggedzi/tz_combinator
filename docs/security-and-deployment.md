@@ -101,6 +101,22 @@ For local automation:
 - prefer JSON Lines output and parse diagnostics by field name; and
 - keep standard output and standard error on separate pipes.
 
+Text and NUL output do not escape values. Their record boundaries are therefore
+ambiguous when an untrusted value contains the selected record separator. CSV
+and TSV quote structural delimiters, but they do not neutralize terminal
+control characters embedded in a field. Do not display any of these raw
+formats from an untrusted producer by piping them through `cat`, `type`, or an
+equivalent terminal-writing command; use JSON Lines and a real parser.
+
+When the CLI itself owns an interactive stdout terminal, it scans normalized
+values and other data-bearing formatting inputs before generation. It rejects
+terminal controls and direct NUL output with `UNSAFE_TERMINAL_OUTPUT`, before
+writing any records. `--allow-unsafe-terminal-output` is an explicit escape
+hatch for trusted, intentional raw output. Redirection to a pipe or file keeps
+the established byte-for-byte raw format behavior, so the receiving program
+remains responsible for parsing safely and for not replaying hostile bytes to
+a terminal.
+
 Templates and filters are data-only. They do not execute commands, evaluate
 general expressions, read environment variables, or load arbitrary files.
 Template files are read only when explicitly selected and are subject to input

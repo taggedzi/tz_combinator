@@ -198,6 +198,10 @@ pub struct CommonArgs {
     #[arg(long, short = 'o')]
     pub output: Option<String>,
 
+    /// Permit control characters or NUL records to be written directly to a terminal.
+    #[arg(long = "allow-unsafe-terminal-output")]
+    pub allow_unsafe_terminal_output: bool,
+
     /// Overwrite the output file if it exists.
     #[arg(long, visible_alias = "force", short = 'f')]
     pub overwrite: bool,
@@ -413,7 +417,19 @@ mod tests {
         assert_eq!(cli.product.common.offset, 0);
         assert!(cli.product.common.limit.is_none());
         assert!(matches!(cli.product.common.format, OutFormat::Text));
+        assert!(!cli.product.common.allow_unsafe_terminal_output);
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn unsafe_terminal_output_requires_an_explicit_flag() {
+        let cli = Cli::parse_from([
+            "combinator",
+            "--list",
+            "a",
+            "--allow-unsafe-terminal-output",
+        ]);
+        assert!(cli.product.common.allow_unsafe_terminal_output);
     }
 
     #[test]

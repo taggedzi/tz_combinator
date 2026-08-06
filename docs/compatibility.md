@@ -49,6 +49,10 @@ Within a major release:
   Explicit logging is an opt-in stderr behavior with a non-stable phase-event
   schema. JSON logging for JSON/JSONL data invocations intentionally changes
   stderr to the documented JSON Lines event stream.
+- Raw text, CSV, TSV, and NUL bytes written to files or pipes remain
+  byte-identical. Interactive terminals additionally enforce the documented
+  control-character policy; trusted callers can restore intentional raw
+  terminal behavior with `--allow-unsafe-terminal-output`.
 
 ## Distribution roadmap
 

@@ -3,9 +3,10 @@ mod error;
 mod input;
 mod logging;
 mod normalize;
+mod output_safety;
 mod preflight;
 
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, IsTerminal, Read, Write};
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
@@ -849,6 +850,13 @@ fn run(common: CommonArgs, sep: String, op: Operation) -> Result<(), AppError> {
     template_for_validation
         .validate_fields(&common.names, operation_field_count(&op, &lists))
         .map_err(template_error)?;
+    output_safety::validate_terminal_output(
+        &common,
+        &lists,
+        &sep,
+        template.as_ref(),
+        std::io::stdout().is_terminal(),
+    )?;
     logging::validation_complete(&common);
 
     let json_out = matches!(common.format, OutFormat::Jsonl);
