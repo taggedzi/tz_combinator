@@ -33,6 +33,7 @@ before a concrete external consumer and supported API surface are identified.
 
 - [Release procedure](release.md) — one cross-platform driver and one GitHub
   workflow
+- [Active implementation plans](plans/README.md)
 - [Dependency licenses](dependency-licenses.md)
 - [Benchmarking guide](benchmarking.md)
 - [Fuzzing guide](../fuzz/README.md)
