@@ -174,6 +174,20 @@ the right-side field a `_right` suffix.
 - NUL output ends each record with a zero byte.
 - JSON is reserved for machine-readable `--explain` and `--dry-run` plans.
 
+Text and NUL are raw delimiter-based formats: field values are not escaped, so
+an untrusted value containing the selected record separator can create an
+additional apparent record. CSV and TSV preserve their parsing structure by
+quoting fields, but quoted fields may still contain terminal control
+characters. Use JSON Lines when records contain untrusted text.
+
+Before writing text, CSV, or TSV records directly to an interactive terminal,
+the CLI rejects control characters in values and in applicable text separators
+or template literals. NUL output is also rejected because it is intended for
+machine consumers. This check occurs before any record is written. Redirecting
+output to a pipe or file preserves the raw format contract.
+`--allow-unsafe-terminal-output` bypasses the terminal check when exact raw
+terminal bytes are explicitly required.
+
 ```text
 combinator --list red,blue --list car,bike --sep - --format jsonl
 {"i":0,"value":"red-car","fields":["red","car"]}

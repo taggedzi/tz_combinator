@@ -341,6 +341,7 @@ fn help_contains_about_information_and_flag() {
     assert!(text.contains("License: MIT"));
     assert!(text.contains("https://github.com/taggedzi/tz_combinator"));
     assert!(text.contains("--about"));
+    assert!(text.contains("--allow-unsafe-terminal-output"));
     assert!(text.contains("--log-level"));
     assert!(text.contains("--log-format"));
     assert!(out.stderr.is_empty());

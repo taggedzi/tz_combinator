@@ -329,4 +329,51 @@ mod tests {
             "\"a,b\"\n"
         );
     }
+
+    #[test]
+    fn raw_formats_preserve_controls_while_jsonl_escapes_them() {
+        assert_eq!(
+            format_record(
+                &["safe\nforged\u{1b}[31m"],
+                0,
+                "",
+                "\n",
+                Format::Text,
+                false,
+                128,
+            )
+            .unwrap(),
+            "safe\nforged\u{1b}[31m\n"
+        );
+        assert_eq!(
+            format_record(&["safe\0forged"], 0, "", "\n", Format::Nul, false, 128).unwrap(),
+            "safe\0forged\0"
+        );
+        assert_eq!(
+            format_record(
+                &["safe\nforged\u{1b}[31m"],
+                0,
+                "",
+                "\n",
+                Format::Csv,
+                false,
+                128,
+            )
+            .unwrap(),
+            "\"safe\nforged\u{1b}[31m\"\n"
+        );
+        assert_eq!(
+            format_record(
+                &["safe\nforged\u{1b}[31m"],
+                0,
+                "",
+                "\n",
+                Format::Jsonl,
+                true,
+                128,
+            )
+            .unwrap(),
+            "\"safe\\nforged\\u001b[31m\"\n"
+        );
+    }
 }

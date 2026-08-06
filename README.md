@@ -141,6 +141,10 @@ memory, CPU, concurrency, and rate limits. See
 [Security and deployment](docs/security-and-deployment.md) before processing
 untrusted requests.
 
+Use JSON Lines for untrusted records. Raw text, CSV, TSV, and NUL output can
+preserve record separators or terminal controls from input; direct interactive
+terminal output is guarded unless `--allow-unsafe-terminal-output` is explicit.
+
 ## Project status and compatibility
 
 Version 0.1.0 is an early public release. The CLI is the supported automation

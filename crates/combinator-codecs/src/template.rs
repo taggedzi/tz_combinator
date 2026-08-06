@@ -88,6 +88,17 @@ impl Template {
         Ok(Self { pieces })
     }
 
+    /// Returns the first control character contained in a literal template piece.
+    ///
+    /// References are deliberately excluded: callers can inspect referenced values
+    /// independently after their own normalization or validation has completed.
+    pub fn first_literal_control(&self) -> Option<char> {
+        self.pieces.iter().find_map(|piece| match piece {
+            Piece::Literal(value) => value.chars().find(|character| character.is_control()),
+            Piece::Reference(_) => None,
+        })
+    }
+
     pub fn validate_fields(
         &self,
         names: &[String],

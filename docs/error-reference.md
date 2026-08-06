@@ -88,6 +88,7 @@ These conditions normally exit with status 2.
 | `TEMPLATE_UNKNOWN_FIELD` | A template refers to an unknown field. |
 | `TRANSFORM_INVALID` | A transform expression is malformed or unsupported. |
 | `TRANSFORM_LIMIT` | The request contains too many transforms. |
+| `UNSAFE_TERMINAL_OUTPUT` | Raw output would write control characters or NUL records directly to an interactive terminal. Use JSONL, redirect the output, or explicitly pass `--allow-unsafe-terminal-output`. |
 
 ## Runtime and resource codes
 
