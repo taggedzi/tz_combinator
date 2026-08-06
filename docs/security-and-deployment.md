@@ -4,6 +4,9 @@
 Its built-in limits are a safety baseline, not a complete policy for a
 multi-user service.
 
+For the rationale behind the raw-output policy and its explicit override, see
+[Security decisions](security-decisions.md).
+
 ## Resource controls
 
 The CLI bounds input bytes, item bytes, items per list, the number of lists,
