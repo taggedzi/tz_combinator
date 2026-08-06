@@ -6,21 +6,184 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: Existing release tag to package
+      operation:
+        description: Prepare a reviewed release PR or publish the prepared default branch
         required: true
+        type: choice
+        options:
+          - prepare
+          - publish
+      version:
+        description: Stable semantic version without the v prefix (for example, 0.2.0)
+        required: true
+        type: string
+      release_date:
+        description: Preparation date in YYYY-MM-DD (defaults to the current UTC date)
+        required: false
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.operation || github.ref }}
+  cancel-in-progress: false
+
 env:
   RUST_TOOLCHAIN: 1.94.1
+  GIT_CLIFF_VERSION: 2.12.0
+  CARGO_LLVM_COV_VERSION: 0.8.7
+  CARGO_AUDIT_VERSION: 0.22.2
+  CARGO_DENY_VERSION: 0.20.2
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare:
+    name: Prepare reviewed release PR
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'prepare'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out the default branch with release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Restore Rust and release-tool cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-prepare-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-cliff-${{ env.GIT_CLIFF_VERSION }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install pinned changelog generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git-cliff --version 2>/dev/null | grep -Fxq "git-cliff $GIT_CLIFF_VERSION"; then
+            cargo +"$RUST_TOOLCHAIN" install git-cliff --version "$GIT_CLIFF_VERSION" --locked
+          fi
+          test "$(git-cliff --version)" = "git-cliff $GIT_CLIFF_VERSION"
+
+      - name: Prepare release metadata transactionally
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_DATE: ${{ inputs.release_date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(prepare "$VERSION")
+          if [[ -n "$RELEASE_DATE" ]]; then args+=(--date "$RELEASE_DATE"); fi
+          python scripts/release.py "${args[@]}"
+
+      - name: Reject an existing remote release branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="release/v$VERSION"
+          count="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/heads/$branch" --jq 'length')"
+          test "$count" = 0 || { echo "Remote branch $branch already exists." >&2; exit 1; }
+
+      - name: Verify release gates
+        run: python scripts/release.py check "${{ inputs.version }}"
+
+      - name: Check generated scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <({ git diff --name-only; git ls-files --others --exclude-standard; } | sort -u)
+          test "${#changed[@]}" -gt 0
+          for file in "${changed[@]}"; do
+            case "$file" in
+              CHANGELOG.md|Cargo.lock|crates/*/Cargo.toml|release-notes/*.md) ;;
+              *) echo "Release preparation unexpectedly changed $file." >&2; exit 1 ;;
+            esac
+          done
+          git diff --check
+
+      - name: Commit and push preparation branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="release/v$VERSION"
+          git switch -c "$branch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md Cargo.lock crates/*/Cargo.toml release-notes/"$VERSION.md"
+          git commit -m "chore(release): prepare v$VERSION"
+          gh auth setup-git
+          git push --set-upstream origin "$branch"
+
+      - name: Open release preparation PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr create \
+            --base "$DEFAULT_BRANCH" \
+            --head "release/v$VERSION" \
+            --title "chore(release): prepare v$VERSION" \
+            --body "Generated by the repository release driver. Review release-notes/$VERSION.md and the version changes. After merging, run this Release workflow again with operation=publish and version=$VERSION."
+
+  tag:
+    name: Verify and create release tag
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'publish'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the default branch with release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Verify metadata and push annotated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+          python scripts/release.py tag "${{ inputs.version }}" --allow-existing --push
+
   package:
-    name: Package (${{ matrix.os }})
+    name: Native package (${{ matrix.platform }})
+    needs: [tag]
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.operation == 'publish')) &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,18 +194,19 @@ jobs:
           - os: windows-2022
             platform: windows-x86_64
     steps:
-      - name: Check out source
+      - name: Check out tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
 
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install "$env:RUST_TOOLCHAIN" --profile minimal
-        if: runner.os == 'Windows'
-
-      - name: Install pinned Rust toolchain
+        shell: bash
         run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
-        if: runner.os == 'Linux'
 
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -50,123 +214,106 @@ jobs:
           key: release-package-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
           cache-bin: "false"
 
-      - name: Run workspace tests
-        run: cargo test --workspace --locked
-
-      - name: Build release binaries
-        run: cargo build --workspace --release --locked
-
-      - name: Smoke test Linux release binary
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          target/release/combinator --version
-          actual="$(target/release/combinator --list 'red,blue' --list 'car,bike' --sep '-')"
-          expected=$'red-car\nred-bike\nblue-car\nblue-bike'
-          [[ "$actual" == "$expected" ]]
-          target/release/combinator --list 'a,b' --list '1,2' --format jsonl | grep -q '"i":0'
-
-      - name: Smoke test Windows release binary
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          & target/release/combinator.exe --version
-          $actual = @(& target/release/combinator.exe --list 'red,blue' --list 'car,bike' --sep '-')
-          $expected = @('red-car', 'red-bike', 'blue-car', 'blue-bike')
-          if (Compare-Object -ReferenceObject $expected -DifferenceObject $actual) { throw 'Unexpected smoke output' }
-
-      - name: Package Linux binaries
-        if: runner.os == 'Linux'
+      - name: Test, build, smoke-test, and package native binaries
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          root="tz-combinator-${version}-${{ matrix.platform }}"
-          mkdir -p "$root"
-          cp target/release/combinator target/release/combinator-gui target/release/combinator-tui "$root/"
-          cp LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md "$root/"
-          tar -czf "${root}.tar.gz" "$root"
-          sha256sum "${root}.tar.gz" > "${root}.tar.gz.sha256"
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: python scripts/release.py package "${RELEASE_TAG#v}" --output dist
 
-      - name: Package Windows binaries
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          $version = $env:RELEASE_TAG.Substring(1)
-          $root = "tz-combinator-$version-${{ matrix.platform }}"
-          New-Item -ItemType Directory -Path $root | Out-Null
-          Copy-Item target/release/combinator.exe, target/release/combinator-gui.exe, target/release/combinator-tui.exe $root
-          Copy-Item LICENSE, README.md, CHANGELOG.md, THIRD_PARTY_LICENSES.md $root
-          Compress-Archive -Path $root -DestinationPath "$root.zip"
-          $hash = (Get-FileHash "$root.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $root.zip" | Set-Content "$root.zip.sha256"
-
-      - name: Upload package
+      - name: Upload native package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.platform }}
-          path: |
-            *.tar.gz
-            *.tar.gz.sha256
-            *.zip
-            *.zip.sha256
+          path: dist/*
           if-no-files-found: error
 
+  quality:
+    name: Complete release gates
+    needs: [tag]
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.event_name == 'workflow_dispatch' && inputs.operation == 'publish')) &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+
+      - name: Restore release-gate cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: release-gates-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-cov-${{ env.CARGO_LLVM_COV_VERSION }}-audit-${{ env.CARGO_AUDIT_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install pinned release-gate tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo llvm-cov --version 2>/dev/null | grep -Fq "$CARGO_LLVM_COV_VERSION"; then
+            cargo install cargo-llvm-cov --version "$CARGO_LLVM_COV_VERSION" --locked
+          fi
+          cargo llvm-cov --version | grep -Fq "$CARGO_LLVM_COV_VERSION"
+          if ! cargo audit --version 2>/dev/null | grep -Fq "$CARGO_AUDIT_VERSION"; then
+            cargo install cargo-audit --version "$CARGO_AUDIT_VERSION" --locked
+          fi
+          cargo audit --version | grep -Fq "$CARGO_AUDIT_VERSION"
+          if ! cargo deny --version 2>/dev/null | grep -Fq "$CARGO_DENY_VERSION"; then
+            cargo install cargo-deny --version "$CARGO_DENY_VERSION" --locked
+          fi
+          cargo deny --version | grep -Fq "$CARGO_DENY_VERSION"
+
+      - name: Run complete release gates
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: python scripts/release.py check "${RELEASE_TAG#v}" --full
+
   publish:
-    name: Publish release artifacts
-    needs: [package, coverage, install, dependencies]
+    name: Attest and publish GitHub release
+    needs: [tag, package, quality]
+    if: >-
+      always() &&
+      needs.package.result == 'success' &&
+      needs.quality.result == 'success' &&
+      (needs.tag.result == 'success' || needs.tag.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
-      - name: Check out release source
+      - name: Check out tagged source with release history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Download packages
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Download native packages
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
-      - name: Verify checksums
+      - name: Verify checksums and exact archive payloads
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          [[ "$RELEASE_TAG" == v* ]]
-          tag_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-          test "$tag_commit" = "$(git rev-parse HEAD)"
-          scripts/verify-release.sh "$version"
-          find artifacts -name '*.sha256' -print0 | while IFS= read -r -d '' checksum; do
-            (cd "$(dirname "$checksum")" && sha256sum --check "$(basename "$checksum")")
-          done
-          linux_archive="$(find artifacts -type f -name '*-linux-x86_64.tar.gz' -print -quit)"
-          windows_archive="$(find artifacts -type f -name '*-windows-x86_64.zip' -print -quit)"
-          test -n "$linux_archive" -a -n "$windows_archive"
-          linux_root="tz-combinator-${version}-linux-x86_64"
-          windows_root="tz-combinator-${version}-windows-x86_64"
-          linux_listing="$(tar -tzf "$linux_archive")"
-          windows_listing="$(unzip -Z1 "$windows_archive")"
-          for file in combinator combinator-gui combinator-tui LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md; do
-            grep -Fxq "$linux_root/$file" <<<"$linux_listing"
-          done
-          for file in combinator.exe combinator-gui.exe combinator-tui.exe LICENSE README.md CHANGELOG.md THIRD_PARTY_LICENSES.md; do
-            grep -Fxq "$windows_root/$file" <<<"$windows_listing"
-          done
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: python scripts/release.py verify-artifacts "${RELEASE_TAG#v}" --artifacts artifacts
 
-      - name: Generate build provenance
+      - name: Generate GitHub build provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           create-storage-record: false
@@ -174,70 +321,8 @@ jobs:
             ${{ github.workspace }}/artifacts/**/*.tar.gz
             ${{ github.workspace }}/artifacts/**/*.zip
 
-      - name: Create GitHub release
+      - name: Create GitHub release from reviewed notes
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t files < <(find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' -o -name '*.zip' -o -name '*.zip.sha256' \) -print)
-          gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag --generate-notes
-
-  coverage:
-    name: Coverage threshold
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.94.1 --profile minimal
-
-      - name: Restore coverage build and tool cache
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          key: cargo-llvm-cov-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-tool-0.8.7-${{ hashFiles('Cargo.lock') }}
-
-      - name: Install pinned coverage tool
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! cargo llvm-cov --version 2>/dev/null | grep -Fq "0.8.7"; then
-            cargo install cargo-llvm-cov --version 0.8.7 --locked
-          fi
-          cargo llvm-cov --version | grep -Fq "0.8.7"
-
-      - name: Enforce line coverage
-        run: cargo llvm-cov --workspace --all-features --exclude combinator-gui --exclude combinator-tui --summary-only --fail-under-lines 80
-
-  install:
-    name: Package and install validation
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.94.1 --profile minimal
-
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          key: release-install-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
-          cache-bin: "false"
-
-      - name: Package workspace crates
-        run: cargo package --workspace --locked --no-verify
-      - name: Validate cargo install
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_root="$RUNNER_TEMP/combinator-install"
-          cargo install --path crates/combinator-cli --locked --root "$install_root"
-          "$install_root/bin/combinator" --version
-          actual="$("$install_root/bin/combinator" --list 'red,blue' --list 'car,bike' --sep '-')"
-          expected=$'red-car\nred-bike\nblue-car\nblue-bike'
-          [[ "$actual" == "$expected" ]]
-
-  dependencies:
-    name: Dependency review
-    uses: ./.github/workflows/dependency-review.yml
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: python scripts/release.py publish "${RELEASE_TAG#v}" --artifacts artifacts

@@ -65,7 +65,8 @@ public compatibility contract is in
 
 Clear, ordinary commit messages are sufficient; a signed commit or contributor
 agreement is not required. When practical, use a Conventional Commit prefix
-for a user-visible change so automated release preparation can categorize it:
+for a user-visible change so the release driver's `prepare` operation can
+categorize it:
 
 ```text
 feat: add a new user-visible capability

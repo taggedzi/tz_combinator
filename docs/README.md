@@ -31,7 +31,8 @@ before a concrete external consumer and supported API surface are identified.
 
 ## I maintain or release the project
 
-- [Release procedure](release.md)
+- [Release procedure](release.md) — one cross-platform driver and one GitHub
+  workflow
 - [Dependency licenses](dependency-licenses.md)
 - [Benchmarking guide](benchmarking.md)
 - [Fuzzing guide](../fuzz/README.md)

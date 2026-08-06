@@ -55,8 +55,10 @@ Within a major release:
 The supported distribution surface is deliberately narrow:
 
 - **Supported now:** GitHub release archives for Linux x86_64 and Windows
-  x86_64, with SHA-256 checksums and provenance metadata. Release CI verifies
-  the archives, pinned toolchain, and locked dependencies.
+  x86_64, with SHA-256 checksums and provenance metadata. The cross-platform
+  release driver verifies metadata and archive contents; the single Release
+  workflow supplies the native runners, pinned toolchain, locked dependencies,
+  and GitHub OIDC provenance.
 - **Not supported:** macOS binaries, crates.io publication, Homebrew, Scoop,
   winget, and native Linux package repositories. No support promise should be
   inferred for these targets.
@@ -66,7 +68,7 @@ The supported distribution surface is deliberately narrow:
   builds, signing/provenance, install and upgrade behavior, and target-specific
   smoke tests before the target is advertised.
 
-The release workflow and this policy intentionally agree: a target is not
-supported merely because Rust can compile it. Expansion requires operational
-ownership, reproducible artifacts, verification coverage, and a documented
-support policy.
+The release driver, Release workflow, and this policy intentionally agree: a
+target is not supported merely because Rust can compile it. Expansion requires
+operational ownership, reproducible artifacts, verification coverage, and a
+documented support policy. See the [current release procedure](release.md).

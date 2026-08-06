@@ -1,3 +1,5 @@
 /target
 /fuzz/target
+__pycache__/
+*.py[cod]
 output.txt

@@ -1,7 +1,8 @@
 # Pre-release Checklist Completion Plan
 
 > Archived planning record. This document preserves historical release work
-> and is not the current release procedure.
+> and is not the current release procedure. Use the [unified release
+> procedure](../../release.md) for current local and GitHub instructions.
 
 The repository now contains the CI and release workflows, dependency policy,
 fuzz smoke job, release profile, packaging, checksum verification, and release
