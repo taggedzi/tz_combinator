@@ -9,6 +9,7 @@
 //! API. See the repository compatibility policy before depending on it.
 
 pub mod estimate;
+pub mod formula;
 pub mod input;
 pub mod output;
 pub mod template;
@@ -56,6 +57,7 @@ impl From<std::io::Error> for CodecError {
     }
 }
 pub use estimate::{estimate_jsonl_size, estimate_text_size, SizeEstimate, SizeInput};
+pub use formula::{is_formula_like_field, FORMULA_PREFIX_POLICY_VERSION};
 pub use input::{InputBudget, InputFormat, InputLimits};
 pub use output::{format_record, format_record_with, Format};
 pub use template::{validate_name, Template, TemplateError};

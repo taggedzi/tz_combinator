@@ -53,6 +53,11 @@ Within a major release:
   byte-identical. Interactive terminals additionally enforce the documented
   control-character policy; trusted callers can restore intentional raw
   terminal behavior with `--allow-unsafe-terminal-output`.
+- For recognized formula-like CSV/TSV fields, `--formula-policy allow` and
+  `warn` produce byte-identical data. The default `warn` policy may add one
+  stderr diagnostic; `allow` restores the same data without that diagnostic.
+  `reject` intentionally exits before writing data or changing a destination.
+  Changes to the documented classifier require a policy-version review.
 
 ## Distribution roadmap
 

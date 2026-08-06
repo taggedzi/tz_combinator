@@ -2,10 +2,10 @@
 
 use combinator_app::{
     join_plan, join_preview, join_stream, plan, preview, read_input_source, stream, AppOperation,
-    CancellationToken, ExecutionPlan, FileSink, Format, InputFormat, InputLimits, InputSource,
-    JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink, ProductRequest,
-    ProgressEvent, UnequalPolicy, PROJECT_DESCRIPTION, PROJECT_ISSUES, PROJECT_LICENSE,
-    PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
+    CancellationToken, ExecutionPlan, FileSink, Format, FormulaPolicy, InputFormat, InputLimits,
+    InputSource, JoinFormat, JoinKind, JoinPlan, JoinRequest, OutputRecord, OutputSink,
+    ProductRequest, ProgressEvent, UnequalPolicy, PROJECT_DESCRIPTION, PROJECT_ISSUES,
+    PROJECT_LICENSE, PROJECT_NAME, PROJECT_REPOSITORY, PROJECT_VERSION,
 };
 use iced::widget::{
     button, checkbox, column, container, image, pick_list, row, scrollable, text, text_editor,
@@ -232,6 +232,7 @@ enum Message {
     JoinOffsetChanged(String),
     JoinLimitChanged(String),
     FormatChanged(Format),
+    FormulaPolicyChanged(FormulaPolicy),
     ZipPolicyChanged(UnequalPolicy),
     ReverseChanged(bool),
     ReverseFieldsChanged(bool),
@@ -561,6 +562,11 @@ fn update(state: &mut CombinatorGui, message: Message) -> Task<Message> {
             if state.request.format != Format::Jsonl {
                 state.request.lean_jsonl = false;
             }
+            state.refresh_plan();
+            Task::none()
+        }
+        Message::FormulaPolicyChanged(policy) => {
+            state.request.formula_policy = policy;
             state.refresh_plan();
             Task::none()
         }
@@ -1184,6 +1190,29 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
     } else {
         text("").into()
     };
+    let formula_policy_control: Element<'_, Message> = if matches!(
+        state.request.format,
+        Format::Csv | Format::Tsv
+    ) {
+        column![
+                text("Formula-like field policy").size(13),
+                pick_list(
+                    FORMULA_POLICY_OPTIONS,
+                    Some(formula_policy_label(state.request.formula_policy)),
+                    |label| Message::FormulaPolicyChanged(parse_formula_policy(label)),
+                )
+                .width(Length::Fill),
+                text(
+                    "CSV/TSV preserves field content. Downstream consumers may reinterpret formula-like fields as active expressions.",
+                )
+                .size(12),
+            ]
+            .spacing(4)
+            .width(Length::Fill)
+            .into()
+    } else {
+        text("").into()
+    };
     let names_control: Element<'_, Message> = if state.request.format == Format::Jsonl {
         labeled_text_editor(
             "Field names, one per line",
@@ -1244,6 +1273,7 @@ fn combine_view(state: &CombinatorGui) -> Element<'_, Message> {
         ),
         template_control,
         row![format_control].width(Length::Fill),
+        formula_policy_control,
         field_separator_control,
         lean_jsonl_control,
         names_control,
@@ -1442,28 +1472,44 @@ fn list_card_style(_theme: &iced::Theme) -> iced::widget::container::Style {
 
 fn plan_view(plan: Option<&ExecutionPlan>) -> Element<'static, Message> {
     let content: Element<'static, Message> = match plan {
-        Some(plan) => column![
-            row![
-                plan_metric("Lists", plan.list_lengths.len().to_string()),
-                plan_metric("Items", format!("{:?}", plan.list_lengths)),
-                plan_metric("Combinations", format!("{:?}", plan.total_combinations)),
+        Some(plan) => {
+            let warning_details: Element<'static, Message> = if plan.warnings.is_empty() {
+                text("").into()
+            } else {
+                text(
+                    plan.warnings
+                        .iter()
+                        .map(|warning| format!("{}: {}", warning.code, warning.message))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+                .size(12)
+                .into()
+            };
+            column![
+                row![
+                    plan_metric("Lists", plan.list_lengths.len().to_string()),
+                    plan_metric("Items", format!("{:?}", plan.list_lengths)),
+                    plan_metric("Combinations", format!("{:?}", plan.total_combinations)),
+                ]
+                .spacing(12)
+                .width(Length::Fill),
+                row![
+                    plan_metric("Selected", plan.records_to_emit.to_string()),
+                    plan_metric(
+                        "Estimated bytes",
+                        format!("{:?}", plan.estimated_output_bytes)
+                    ),
+                    plan_metric("Warnings", plan.warnings.len().to_string()),
+                ]
+                .spacing(12)
+                .width(Length::Fill),
+                warning_details,
             ]
-            .spacing(12)
-            .width(Length::Fill),
-            row![
-                plan_metric("Selected", plan.records_to_emit.to_string()),
-                plan_metric(
-                    "Estimated bytes",
-                    format!("{:?}", plan.estimated_output_bytes)
-                ),
-                plan_metric("Warnings", plan.warnings.len().to_string()),
-            ]
-            .spacing(12)
-            .width(Length::Fill),
-        ]
-        .spacing(6)
-        .width(Length::Fill)
-        .into(),
+            .spacing(6)
+            .width(Length::Fill)
+            .into()
+        }
         None => text("No valid plan yet").into(),
     };
     container(content)
@@ -1734,6 +1780,7 @@ impl CombinatorGui {
                 length: self.length.clone(),
                 operation: operation_label(self.request.operation).to_string(),
                 format: format_label(self.request.format).to_string(),
+                formula_policy: formula_policy_label(self.request.formula_policy).to_string(),
                 zip_policy,
                 reverse: self.request.options.reverse,
                 reverse_fields,
@@ -1800,6 +1847,7 @@ impl CombinatorGui {
         self.choose = combine.choose;
         self.length = combine.length;
         self.request.format = parse_format(&combine.format);
+        self.request.formula_policy = parse_formula_policy(&combine.formula_policy);
         self.lean_jsonl = combine.lean_jsonl;
         self.request.lean_jsonl = combine.lean_jsonl;
         self.request.options.reverse = combine.reverse;
@@ -2164,6 +2212,7 @@ fn parse_operation(label: &str, choose: usize, length: usize) -> AppOperation {
 }
 
 const FORMAT_OPTIONS: &[&str] = &["Text", "JSONL", "CSV", "TSV", "NUL"];
+const FORMULA_POLICY_OPTIONS: &[&str] = &["Warn", "Reject", "Allow"];
 
 fn format_label(format: Format) -> &'static str {
     match format {
@@ -2186,6 +2235,22 @@ fn parse_format(label: &str) -> Format {
         "TSV" => Format::Tsv,
         "NUL" => Format::Nul,
         _ => Format::Text,
+    }
+}
+
+fn formula_policy_label(policy: FormulaPolicy) -> &'static str {
+    match policy {
+        FormulaPolicy::Allow => "Allow",
+        FormulaPolicy::Warn => "Warn",
+        FormulaPolicy::Reject => "Reject",
+    }
+}
+
+fn parse_formula_policy(label: &str) -> FormulaPolicy {
+    match label {
+        "Allow" => FormulaPolicy::Allow,
+        "Reject" => FormulaPolicy::Reject,
+        _ => FormulaPolicy::Warn,
     }
 }
 
@@ -2387,6 +2452,15 @@ mod tests {
         dispatch(&mut state, Message::FormatChanged(Format::Text));
         assert!(!state.request.lean_jsonl);
 
+        dispatch(&mut state, Message::FormatChanged(Format::Csv));
+        dispatch(
+            &mut state,
+            Message::FormulaPolicyChanged(FormulaPolicy::Reject),
+        );
+        assert_eq!(state.request.formula_policy, FormulaPolicy::Reject);
+        dispatch(&mut state, Message::FormatChanged(Format::Tsv));
+        assert_eq!(state.request.formula_policy, FormulaPolicy::Reject);
+
         dispatch(
             &mut state,
             Message::OperationChanged(AppOperation::Combinations { choose: 2 }),
@@ -2396,6 +2470,32 @@ mod tests {
             state.request.operation,
             AppOperation::Combinations { choose: 3 }
         );
+    }
+
+    #[test]
+    fn reject_policy_does_not_open_generation_destination() {
+        let path = std::env::temp_dir().join(format!(
+            "combinator-gui-formula-reject-{}.csv",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut state = CombinatorGui::default();
+        dispatch(&mut state, Message::SourceChanged(0, "=hostile".into()));
+        dispatch(&mut state, Message::FormatChanged(Format::Csv));
+        dispatch(
+            &mut state,
+            Message::FormulaPolicyChanged(FormulaPolicy::Reject),
+        );
+        dispatch(
+            &mut state,
+            Message::OutputPathChanged(path.to_string_lossy().into_owned()),
+        );
+        dispatch(&mut state, Message::Generate);
+        assert!(!path.exists());
+        assert!(state
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("DOWNSTREAM_INTERPRETATION_RISK")));
     }
 
     #[test]
@@ -2527,6 +2627,13 @@ mod tests {
             Format::Nul,
         ] {
             assert_eq!(parse_format(format_label(format)), format);
+        }
+        for policy in [
+            FormulaPolicy::Allow,
+            FormulaPolicy::Warn,
+            FormulaPolicy::Reject,
+        ] {
+            assert_eq!(parse_formula_policy(formula_policy_label(policy)), policy);
         }
         for kind in [
             JoinKind::Inner,

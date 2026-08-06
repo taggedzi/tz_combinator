@@ -29,6 +29,24 @@ pub enum OutFormat {
     Nul,
 }
 
+/// CLI-facing mirror of `combinator_app::FormulaPolicy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FormulaPolicyArg {
+    Allow,
+    Warn,
+    Reject,
+}
+
+impl From<FormulaPolicyArg> for combinator_app::FormulaPolicy {
+    fn from(value: FormulaPolicyArg) -> Self {
+        match value {
+            FormulaPolicyArg::Allow => Self::Allow,
+            FormulaPolicyArg::Warn => Self::Warn,
+            FormulaPolicyArg::Reject => Self::Reject,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum LogLevel {
     Off,
@@ -189,6 +207,10 @@ pub struct CommonArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutFormat::Text)]
     pub format: OutFormat,
+
+    /// Handle recognized formula-like fields in CSV/TSV output.
+    #[arg(long = "formula-policy", value_enum)]
+    pub formula_policy: Option<FormulaPolicyArg>,
 
     /// In JSONL mode, emit only the value (as a JSON string) per line.
     #[arg(long = "lean-output")]
@@ -417,8 +439,26 @@ mod tests {
         assert_eq!(cli.product.common.offset, 0);
         assert!(cli.product.common.limit.is_none());
         assert!(matches!(cli.product.common.format, OutFormat::Text));
+        assert!(cli.product.common.formula_policy.is_none());
         assert!(!cli.product.common.allow_unsafe_terminal_output);
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parses_formula_policy_without_assigning_it_to_other_formats() {
+        let cli = Cli::parse_from([
+            "combinator",
+            "--list",
+            "=2+3",
+            "--format",
+            "csv",
+            "--formula-policy",
+            "reject",
+        ]);
+        assert_eq!(
+            cli.product.common.formula_policy,
+            Some(FormulaPolicyArg::Reject)
+        );
     }
 
     #[test]

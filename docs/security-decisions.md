@@ -93,7 +93,7 @@ output destination and input provenance.
 
 ## Content-preserving CSV/TSV and downstream interpretation
 
-**Status:** accepted; implementation planned
+**Status:** accepted and implemented
 
 **Decision date:** 2026-08-06
 

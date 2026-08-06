@@ -1,9 +1,14 @@
 # Downstream Interpretation Risk Controls Plan
 
-**Status:** approved for implementation
+**Status:** completed on 2026-08-06; retained as a historical implementation record
+
+The version 1 classifier, shared policy, CLI/GUI/TUI controls, profile
+persistence, regression tests, and current documentation described below have
+landed. GitHub issue #43 separately tracks the pre-existing plain-text warning
+label discrepancy and was intentionally not resolved as part of this work.
 
 **Decision:**
-[Content-preserving CSV/TSV and downstream interpretation](../security-decisions.md#content-preserving-csvtsv-and-downstream-interpretation)
+[Content-preserving CSV/TSV and downstream interpretation](../../security-decisions.md#content-preserving-csvtsv-and-downstream-interpretation)
 
 ## Objective
 

@@ -793,6 +793,190 @@ fn warnings_as_errors_prevents_output_and_preserves_context() {
 }
 
 #[test]
+fn formula_policy_warns_on_stderr_without_changing_csv_or_tsv_data() {
+    for format in ["csv", "tsv"] {
+        let warned = bin()
+            .args(["--list", "=2+3", "--format", format])
+            .output()
+            .unwrap();
+        assert!(warned.status.success());
+        assert_eq!(warned.stdout, b"=2+3\n");
+        let warning = String::from_utf8_lossy(&warned.stderr);
+        assert!(warning.contains("DOWNSTREAM_INTERPRETATION_RISK"));
+        assert_eq!(warning.matches("DOWNSTREAM_INTERPRETATION_RISK").count(), 1);
+        assert!(warning.contains("matching_fields=1"));
+        assert!(!warning.contains("=2+3"));
+
+        let allowed = bin()
+            .args([
+                "--list",
+                "=2+3",
+                "--format",
+                format,
+                "--formula-policy",
+                "allow",
+            ])
+            .output()
+            .unwrap();
+        assert!(allowed.status.success());
+        assert_eq!(allowed.stdout, warned.stdout);
+        assert!(allowed.stderr.is_empty());
+    }
+}
+
+#[test]
+fn formula_policy_reject_and_warning_promotion_fail_before_file_mutation() {
+    let directory =
+        std::env::temp_dir().join(format!("combinator_formula_policy_{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let new_path = directory.join("new.csv");
+    let existing_path = directory.join("existing.csv");
+    std::fs::write(&existing_path, b"preserve-me").unwrap();
+
+    let rejected = bin()
+        .args([
+            "--list",
+            "=synthetic-secret-marker",
+            "--format",
+            "csv",
+            "--formula-policy",
+            "reject",
+            "--output",
+            new_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(rejected.stdout.is_empty());
+    assert!(!new_path.exists());
+    let rejected_stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(rejected_stderr.contains("DOWNSTREAM_INTERPRETATION_RISK"));
+    assert!(!rejected_stderr.contains("synthetic-secret-marker"));
+
+    let promoted = bin()
+        .args([
+            "--list",
+            "=2+3",
+            "--format",
+            "csv",
+            "--warnings-as-errors",
+            "--overwrite",
+            "--output",
+            existing_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(promoted.status.code(), Some(1));
+    assert!(promoted.stdout.is_empty());
+    assert_eq!(std::fs::read(&existing_path).unwrap(), b"preserve-me");
+
+    std::fs::remove_file(existing_path).ok();
+    std::fs::remove_dir(directory).ok();
+}
+
+#[test]
+fn formula_policy_handles_quiet_count_only_transforms_and_format_conflicts() {
+    let quiet = bin()
+        .args(["--list", "@example", "--format", "csv", "--quiet"])
+        .output()
+        .unwrap();
+    assert!(quiet.status.success());
+    assert_eq!(quiet.stdout, b"@example\n");
+    assert!(quiet.stderr.is_empty());
+
+    let count = bin()
+        .args([
+            "--list",
+            "=2+3",
+            "--format",
+            "csv",
+            "--formula-policy",
+            "reject",
+            "--count-only",
+        ])
+        .output()
+        .unwrap();
+    assert!(count.status.success());
+    assert_eq!(count.stdout, b"1\n");
+    assert!(count.stderr.is_empty());
+
+    let transformed = bin()
+        .args(["--list", " =2+3", "--transform", "trim", "--format", "csv"])
+        .output()
+        .unwrap();
+    assert!(transformed.status.success());
+    assert_eq!(transformed.stdout, b"=2+3\n");
+    assert!(String::from_utf8_lossy(&transformed.stderr).contains("DOWNSTREAM_INTERPRETATION_RISK"));
+
+    let conflict = bin()
+        .args([
+            "--list",
+            "=2+3",
+            "--format",
+            "jsonl",
+            "--formula-policy",
+            "allow",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(conflict.status.code(), Some(2));
+    assert!(conflict.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("FORMULA_POLICY_UNSUPPORTED"));
+
+    let join_conflict = bin()
+        .args([
+            "join",
+            "--left",
+            "left.csv",
+            "--right",
+            "right.csv",
+            "--left-key",
+            "id",
+            "--right-key",
+            "id",
+            "--format",
+            "jsonl",
+            "--formula-policy",
+            "warn",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(join_conflict.status.code(), Some(2));
+    assert!(join_conflict.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&join_conflict.stderr).contains("FORMULA_POLICY_UNSUPPORTED"));
+}
+
+#[test]
+fn formula_policy_applies_prospectively_to_explain_and_dry_run() {
+    for mode in ["--explain", "--dry-run"] {
+        let warned = bin()
+            .args(["--list", "=2+3", "--format", "csv", mode])
+            .output()
+            .unwrap();
+        assert!(warned.status.success());
+        let stderr = String::from_utf8_lossy(&warned.stderr);
+        assert_eq!(stderr.matches("DOWNSTREAM_INTERPRETATION_RISK").count(), 1);
+
+        let promoted = bin()
+            .args([
+                "--list",
+                "=2+3",
+                "--format",
+                "csv",
+                mode,
+                "--warnings-as-errors",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(promoted.status.code(), Some(1));
+        assert!(promoted.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&promoted.stderr).contains("DOWNSTREAM_INTERPRETATION_RISK")
+        );
+    }
+}
+
+#[test]
 fn escaped_inline_input_preserves_delimiters_and_decodes_escapes() {
     let out = bin()
         .args([

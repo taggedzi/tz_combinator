@@ -107,9 +107,19 @@ For local automation:
 Text and NUL output do not escape values. Their record boundaries are therefore
 ambiguous when an untrusted value contains the selected record separator. CSV
 and TSV quote structural delimiters, but they do not neutralize terminal
-control characters embedded in a field. Do not display any of these raw
-formats from an untrusted producer by piping them through `cat`, `type`, or an
-equivalent terminal-writing command; use JSON Lines and a real parser.
+controls or semantics assigned by a later consumer. A spreadsheet, database
+loader, reporting system, visualization tool, or later export may interpret a
+preserved field as active syntax. Do not display any of these raw formats from
+an untrusted producer by piping them through `cat`, `type`, or an equivalent
+terminal-writing command; use JSON Lines and a real parser.
+
+CSV/TSV generation defaults to `--formula-policy warn` for a documented set of
+formula-like prefixes. `reject` stops recognized fields before generation opens
+or changes a destination; `allow` explicitly accepts byte-identical output
+without that warning. The detector is defense in depth only. It neither
+sanitizes values nor recognizes every grammar, locale, consumer, or later
+interpretation boundary. Select and validate for the actual destination, and
+continue to treat reports derived from untrusted data as untrusted.
 
 When the CLI itself owns an interactive stdout terminal, it scans normalized
 values and other data-bearing formatting inputs before generation. It rejects

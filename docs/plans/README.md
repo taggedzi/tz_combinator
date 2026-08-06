@@ -11,4 +11,4 @@ unchecked historical tasks are not mistaken for active assignments.
 
 ## Current plans
 
-- [Downstream interpretation risk controls](2026-08-06-downstream-interpretation-risk-plan.md)
+No implementation plans are currently active.

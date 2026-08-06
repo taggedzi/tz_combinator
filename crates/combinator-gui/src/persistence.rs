@@ -36,6 +36,8 @@ pub struct CombineProfile {
     pub length: String,
     pub operation: String,
     pub format: String,
+    #[serde(default)]
+    pub formula_policy: String,
     pub zip_policy: String,
     pub reverse: bool,
     pub reverse_fields: bool,
@@ -210,6 +212,7 @@ mod tests {
             combine: CombineProfile {
                 file_sources: vec![Some("input.csv".into())],
                 field_separator: "|".into(),
+                formula_policy: "Reject".into(),
                 ..Default::default()
             },
             join: JoinProfile {
@@ -232,6 +235,7 @@ mod tests {
         save_profile(&path, sample()).expect("save profile");
         let loaded = load_profile(&path).expect("load profile");
         assert_eq!(loaded.active_mode, "join");
+        assert_eq!(loaded.combine.formula_policy, "Reject");
         assert_eq!(
             loaded.combine.file_sources,
             vec![Some(
@@ -244,6 +248,17 @@ mod tests {
             folder.join("left.csv").to_string_lossy()
         );
         let _ = fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn older_profile_without_formula_policy_still_loads() {
+        let mut value = serde_json::to_value(sample()).expect("encode profile");
+        value["combine"]
+            .as_object_mut()
+            .expect("combine object")
+            .remove("formula_policy");
+        let loaded: Profile = serde_json::from_value(value).expect("load older profile");
+        assert!(loaded.combine.formula_policy.is_empty());
     }
 
     #[cfg(unix)]
