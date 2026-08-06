@@ -15,11 +15,22 @@ Standard output contains generated data only. Standard error contains errors,
 warnings, and the optional `--summary`. Always drain both streams and check
 the final process status.
 
-Plain-text diagnostics have this form:
+Plain-text fatal diagnostics have this form:
 
 ```text
 error[NO_LISTS]: no input lists were provided
 ```
+
+Non-fatal warnings use a severity-accurate label:
+
+```text
+warning[EMPTY_LIST]: a list is empty; zero combinations will be produced (list_index=0)
+```
+
+The stable automation contract is the diagnostic code, exit status, output
+channel, and documented JSON fields. The plain-text `error` or `warning` label
+communicates severity but is not a separate machine-readable compatibility
+key; automation should use the exit status and code or consume JSON diagnostics.
 
 With `--format jsonl`, diagnostics are JSON:
 
@@ -29,7 +40,10 @@ With `--format jsonl`, diagnostics are JSON:
 
 Parse JSON diagnostics by field name; key order is not part of the contract.
 Context fields may be added when they help identify the failing value or
-limit.
+limit. For compatibility, a standalone JSON warning keeps this legacy `error`
+envelope. When JSON operational logging enables a framed stderr event stream,
+warnings instead use `kind: "warning"` with a `warning` object, while fatal
+diagnostics use `kind: "diagnostic"` with an `error` object.
 
 ## Warnings
 
@@ -46,7 +60,8 @@ before output is written or a destination is changed.
 
 Use `--quiet` to suppress the warning or `--warnings-as-errors` to turn it into
 a runtime error. `--warnings-as-errors` takes precedence if both options are
-present.
+present. A promoted warning exits with status 1 and uses the plain-text
+`error[CODE]` label or the JSON fatal-diagnostic framing.
 
 ## Usage and input codes
 
@@ -147,7 +162,7 @@ An empty input warns but succeeds:
 
 ```console
 $ combinator --file empty.txt
-error[EMPTY_LIST]: a list is empty; zero combinations will be produced (list_index=0)
+warning[EMPTY_LIST]: a list is empty; zero combinations will be produced (list_index=0)
 $ echo $?
 0
 ```
