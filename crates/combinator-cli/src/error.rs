@@ -29,7 +29,7 @@ pub fn render(err: &AppError, json: bool) -> String {
         &err.context,
         json,
         false,
-        "diagnostic",
+        RenderKind::Diagnostic,
     )
 }
 
@@ -40,7 +40,7 @@ pub fn render_streamed(err: &AppError, json: bool, event_stream: bool) -> String
         &err.context,
         json,
         event_stream,
-        "diagnostic",
+        RenderKind::Diagnostic,
     )
 }
 
@@ -50,7 +50,7 @@ pub fn render_warning(
     context: &[(String, String)],
     json: bool,
 ) -> String {
-    render_line(code, message, context, json, false, "warning")
+    render_line(code, message, context, json, false, RenderKind::Warning)
 }
 
 pub fn render_warning_streamed(
@@ -60,7 +60,29 @@ pub fn render_warning_streamed(
     json: bool,
     event_stream: bool,
 ) -> String {
-    render_line(code, message, context, json, event_stream, "warning")
+    render_line(
+        code,
+        message,
+        context,
+        json,
+        event_stream,
+        RenderKind::Warning,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RenderKind {
+    Diagnostic,
+    Warning,
+}
+
+impl RenderKind {
+    fn plain_label(self) -> &'static str {
+        match self {
+            Self::Diagnostic => "error",
+            Self::Warning => "warning",
+        }
+    }
 }
 
 fn render_line(
@@ -69,7 +91,7 @@ fn render_line(
     context: &[(String, String)],
     json: bool,
     event_stream: bool,
-    kind: &str,
+    kind: RenderKind,
 ) -> String {
     if json {
         let ctx: serde_json::Map<String, serde_json::Value> = context
@@ -77,7 +99,7 @@ fn render_line(
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
         if event_stream {
-            if kind == "diagnostic" {
+            if kind == RenderKind::Diagnostic {
                 serde_json::json!({"kind":"diagnostic","error":{"code":code,"message":message,"context":ctx}}).to_string()
             } else {
                 serde_json::json!({"kind":"warning","warning":{"code":code,"message":message,"context":ctx}}).to_string()
@@ -86,7 +108,12 @@ fn render_line(
             serde_json::json!({"error":{"code":code,"message":message,"context":ctx}}).to_string()
         }
     } else if context.is_empty() {
-        format!("error[{}]: {}", escape_text(code), escape_text(message))
+        format!(
+            "{}[{}]: {}",
+            kind.plain_label(),
+            escape_text(code),
+            escape_text(message)
+        )
     } else {
         let ctx = context
             .iter()
@@ -94,7 +121,8 @@ fn render_line(
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "error[{}]: {} ({ctx})",
+            "{}[{}]: {} ({ctx})",
+            kind.plain_label(),
             escape_text(code),
             escape_text(message)
         )
@@ -137,7 +165,37 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&render(&error, true)).unwrap();
         assert_eq!(json["error"]["code"], "FAILED");
         assert_eq!(json["error"]["context"]["item"], "x");
-        assert!(render_warning("WARN", "careful", &[], false).starts_with("error[WARN]"));
+    }
+
+    #[test]
+    fn renders_warning_text_with_escaped_values() {
+        assert_eq!(
+            render_warning("WARN", "careful", &[], false),
+            "warning[WARN]: careful"
+        );
+
+        let context = [("path\r".into(), "a\\b\n\u{0007}".into())];
+        assert_eq!(
+            render_warning("WARN\nCODE", "careful\tmessage", &context, false),
+            "warning[WARN\\nCODE]: careful\\tmessage (path\\r=a\\\\b\\n\\u{0007})"
+        );
+    }
+
+    #[test]
+    fn warning_json_preserves_standalone_and_event_stream_schemas() {
+        let context = [("item".into(), "x\n\"".into())];
+        let standalone: serde_json::Value =
+            serde_json::from_str(&render_warning("WARN", "careful", &context, true)).unwrap();
+        assert_eq!(standalone["error"]["code"], "WARN");
+        assert_eq!(standalone["error"]["context"]["item"], "x\n\"");
+        assert!(standalone.get("kind").is_none());
+
+        let streamed = render_warning_streamed("WARN", "careful", &context, true, true);
+        let event: serde_json::Value = serde_json::from_str(&streamed).unwrap();
+        assert_eq!(event["kind"], "warning");
+        assert_eq!(event["warning"]["code"], "WARN");
+        assert_eq!(event["warning"]["context"]["item"], "x\n\"");
+        assert!(!streamed.contains('\n'));
     }
 
     #[test]

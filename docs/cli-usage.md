@@ -212,6 +212,12 @@ does not inspect record content; `--explain` and `--dry-run` report the warning
 prospectively. `--quiet` suppresses it, while `--warnings-as-errors` fails before
 output and takes precedence over `--quiet`.
 
+In plain-text stderr, the default policy reports
+`warning[DOWNSTREAM_INTERPRETATION_RISK]`. Promotion with
+`--warnings-as-errors` reports the same stable code as
+`error[DOWNSTREAM_INTERPRETATION_RISK]` and exits with status 1. The warning
+never contains the matching field value.
+
 ```text
 combinator --list red,blue --list car,bike --sep - --format jsonl
 {"i":0,"value":"red-car","fields":["red","car"]}
@@ -356,6 +362,10 @@ preflight, and service-hardening details.
 Use JSONL for subprocess integration. Stdout contains only data; stderr
 contains diagnostics. If operational logs are enabled for a machine-readable
 invocation, consume stderr as the documented JSON Lines event stream.
+Non-fatal plain-text warnings begin with `warning[CODE]`; fatal diagnostics,
+including warnings promoted by `--warnings-as-errors`, begin with
+`error[CODE]`. For automation, classify results using the exit status and
+stable code or the JSON fields rather than the human-facing severity label.
 
 With no arguments, `combinator` prints help and exits successfully. An
 explicit operation without an input source reports a usage error:

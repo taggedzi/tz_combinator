@@ -478,16 +478,33 @@ fn reads_list_from_stdin_dash() {
 fn empty_list_warns_and_exits_zero() {
     // An inline empty value produces a single empty item, not an empty list, so
     // use a file with no lines to get a truly empty list.
-    let path = std::env::temp_dir().join("combinator_e2e_empty.txt");
+    let path =
+        std::env::temp_dir().join(format!("combinator_e2e_empty_{}.txt", std::process::id()));
+    let output_path = std::env::temp_dir().join(format!(
+        "combinator_e2e_empty_output_{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&output_path);
     std::fs::write(&path, "").unwrap();
     let out = bin()
-        .args(["--file", path.to_str().unwrap()])
+        .args([
+            "--file",
+            path.to_str().unwrap(),
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
+    let output_contents = std::fs::read(&output_path).unwrap();
     std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&output_path).ok();
     assert!(out.status.success());
     assert!(out.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("EMPTY_LIST"));
+    assert!(output_contents.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "warning[EMPTY_LIST]: a list is empty; zero combinations will be produced (list_index=0)\n"
+    );
 }
 
 #[test]
@@ -795,19 +812,33 @@ fn json_format_requires_explain_or_dry_run() {
 #[test]
 fn quiet_suppresses_non_fatal_warnings() {
     let path = std::env::temp_dir().join(format!("combinator_quiet_{}.txt", std::process::id()));
+    let output_path = std::env::temp_dir().join(format!(
+        "combinator_quiet_output_{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&output_path);
     std::fs::write(&path, "").unwrap();
     let output = bin()
-        .args(["--file", path.to_str().unwrap(), "--quiet"])
+        .args([
+            "--file",
+            path.to_str().unwrap(),
+            "--quiet",
+            "--output",
+            output_path.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
+    let output_contents = std::fs::read(&output_path).unwrap();
     std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&output_path).ok();
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+    assert!(output_contents.is_empty());
 }
 
 #[test]
-fn warnings_as_errors_prevents_output_and_preserves_context() {
+fn warnings_as_errors_precedes_quiet_and_prevents_output() {
     let path = std::env::temp_dir().join(format!(
         "combinator_warning_error_{}.txt",
         std::process::id()
@@ -816,24 +847,100 @@ fn warnings_as_errors_prevents_output_and_preserves_context() {
         "combinator_warning_output_{}.txt",
         std::process::id()
     ));
+    let _ = std::fs::remove_file(&output_path);
     std::fs::write(&path, "").unwrap();
     let output = bin()
         .args([
             "--file",
             path.to_str().unwrap(),
             "--warnings-as-errors",
+            "--quiet",
             "--output",
             output_path.to_str().unwrap(),
         ])
         .output()
         .unwrap();
     std::fs::remove_file(&path).ok();
-    std::fs::remove_file(&output_path).ok();
     assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("EMPTY_LIST"));
-    assert!(stderr.contains("list_index=0"));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "error[EMPTY_LIST]: a list is empty; zero combinations will be produced (list_index=0)\n"
+    );
     assert!(!output_path.exists());
+}
+
+#[test]
+fn json_warning_modes_preserve_event_framing_and_output_files() {
+    let directory =
+        std::env::temp_dir().join(format!("combinator_json_warning_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let input_path = directory.join("empty.txt");
+    let warning_path = directory.join("warning.jsonl");
+    let quiet_path = directory.join("quiet.jsonl");
+    let promoted_path = directory.join("promoted.jsonl");
+    std::fs::write(&input_path, "").unwrap();
+
+    let run = |output_path: &std::path::Path, mode: Option<&str>| {
+        let mut command = bin();
+        command.args([
+            "--file",
+            input_path.to_str().unwrap(),
+            "--format",
+            "jsonl",
+            "--output",
+            output_path.to_str().unwrap(),
+            "--log-level",
+            "error",
+            "--log-format",
+            "json",
+        ]);
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        command.output().unwrap()
+    };
+
+    let warned = run(&warning_path, None);
+    assert!(warned.status.success());
+    assert!(warned.stdout.is_empty());
+    assert!(std::fs::read(&warning_path).unwrap().is_empty());
+    let warning_events: Vec<serde_json::Value> = String::from_utf8(warned.stderr)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(warning_events
+        .iter()
+        .any(|event| { event["kind"] == "warning" && event["warning"]["code"] == "EMPTY_LIST" }));
+    assert!(warning_events
+        .iter()
+        .all(|event| event.get("kind").is_some()));
+
+    let quiet = run(&quiet_path, Some("--quiet"));
+    assert!(quiet.status.success());
+    assert!(quiet.stdout.is_empty());
+    assert!(quiet.stderr.is_empty());
+    assert!(std::fs::read(&quiet_path).unwrap().is_empty());
+
+    let promoted = run(&promoted_path, Some("--warnings-as-errors"));
+    assert_eq!(promoted.status.code(), Some(1));
+    assert!(promoted.stdout.is_empty());
+    assert!(!promoted_path.exists());
+    let promoted_events: Vec<serde_json::Value> = String::from_utf8(promoted.stderr)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(promoted_events
+        .iter()
+        .any(|event| { event["kind"] == "diagnostic" && event["error"]["code"] == "EMPTY_LIST" }));
+    assert!(promoted_events
+        .iter()
+        .all(|event| event.get("kind").is_some()));
+
+    std::fs::remove_dir_all(directory).ok();
 }
 
 #[test]
@@ -846,6 +953,7 @@ fn formula_policy_warns_on_stderr_without_changing_csv_or_tsv_data() {
         assert!(warned.status.success());
         assert_eq!(warned.stdout, b"=2+3\n");
         let warning = String::from_utf8_lossy(&warned.stderr);
+        assert!(warning.starts_with("warning[DOWNSTREAM_INTERPRETATION_RISK]:"));
         assert!(warning.contains("DOWNSTREAM_INTERPRETATION_RISK"));
         assert_eq!(warning.matches("DOWNSTREAM_INTERPRETATION_RISK").count(), 1);
         assert!(warning.contains("matching_fields=1"));
@@ -913,6 +1021,9 @@ fn formula_policy_reject_and_warning_promotion_fail_before_file_mutation() {
     assert_eq!(promoted.status.code(), Some(1));
     assert!(promoted.stdout.is_empty());
     assert_eq!(std::fs::read(&existing_path).unwrap(), b"preserve-me");
+    let promoted_stderr = String::from_utf8_lossy(&promoted.stderr);
+    assert!(promoted_stderr.starts_with("error[DOWNSTREAM_INTERPRETATION_RISK]:"));
+    assert!(!promoted_stderr.contains("=2+3"));
 
     std::fs::remove_file(existing_path).ok();
     std::fs::remove_dir(directory).ok();
