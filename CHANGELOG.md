@@ -7,6 +7,20 @@ release notes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-06
+
+### Added
+
+- Unify release process
+- Confirm python in security.yml workflow
+- Add downstream formula risk policy
+
+### Fixed
+
+- Guard raw terminal output
+- Enforce shared safety ceilings
+- Error/warning output flow control
+
 ## [0.2.2] - 2026-08-05
 
 ### Security
