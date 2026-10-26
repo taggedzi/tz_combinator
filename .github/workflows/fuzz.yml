@@ -1,6 +1,15 @@
 name: Fuzz smoke
 
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/fuzz.yml"
+      - "fuzz/**"
+      - "crates/combinator-codecs/**"
+      - "crates/combinator-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * 6"
@@ -15,12 +24,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
-          toolchain: nightly-2026-10-01
+          # Build cargo-fuzz's locked dependencies on stable; fuzz targets need nightly.
+          toolchain: 1.94.1, nightly-2026-10-01
 
       - name: Restore fuzz build and tool cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          key: cargo-fuzz-${{ runner.os }}-rust-nightly-2026-10-01-tool-0.12.0-${{ hashFiles('fuzz/Cargo.lock') }}
+          key: cargo-fuzz-${{ runner.os }}-install-1.94.1-rust-nightly-2026-10-01-tool-0.12.0-${{ hashFiles('fuzz/Cargo.lock') }}
           workspaces: "fuzz -> target"
 
       - name: Install pinned cargo-fuzz
@@ -28,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           if ! cargo fuzz --version 2>/dev/null | grep -Fq "0.12.0"; then
-            cargo install cargo-fuzz --version 0.12.0 --locked
+            cargo +1.94.1 install cargo-fuzz --version 0.12.0 --locked
           fi
           cargo fuzz --version | grep -Fq "0.12.0"
 
@@ -37,8 +47,9 @@ jobs:
         run: |
           set -uo pipefail
           status=0
+          # ASan's default quarantine alone can retain 256 MiB of freed memory.
           for target in inline template join_jsonl output; do
-            if ! cargo +nightly-2026-10-01 fuzz run "$target" -- -max_total_time=15 -rss_limit_mb=256; then
+            if ! cargo +nightly-2026-10-01 fuzz run "$target" -- -max_total_time=15 -rss_limit_mb=512; then
               status=1
             fi
           done
